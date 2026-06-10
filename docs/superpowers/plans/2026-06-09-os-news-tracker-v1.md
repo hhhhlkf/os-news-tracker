@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the V1/MVP of a technical-news tracking agent: ingest from RSS + fixed pages + keyword search, enrich each item with an LLM (categorize, sub-tags, structured entities, structured summary), store in Postgres, and serve a queryable React frontend with faceted search.
+**Goal:** Build the V1/MVP of a technical-news tracking agent with **two streams**: (1) a *news stream* ingesting RSS + structured APIs + fixed pages + keyword search, enriching each item with an LLM (categorize, sub-tags, structured entities, structured summary); (2) a *structured-data stream* parsing security advisories / lifecycle / images / compatibility straight into typed tables (no LLM). Both stored in Postgres and served to a queryable React frontend with faceted search.
 
-**Architecture:** A deterministic pipeline (`fetch → normalize → dedup → enrich → store`) driven by APScheduler. Fetchers, content extraction, and search are pluggable behind protocols (`Fetcher`, `ContentExtractor`, `SearchProvider`). The only LLM step is the `Enricher`, which calls a configurable OpenAI-compatible gateway. FastAPI serves query/facet/detail endpoints to a React (Vite + TypeScript) frontend.
+**Architecture:** A deterministic pipeline (`fetch → normalize → [relevance-filter] → dedup → enrich → store`) for the news stream, plus a parallel `fetch → adapter.parse → upsert` path for the structured stream, both driven by APScheduler and routed by `source.stream`. Fetchers, content extraction, search, and per-source API adapters are pluggable behind protocols (`Fetcher`, `ContentExtractor`, `SearchProvider`, `SourceAdapter`). The only LLM steps are the `Enricher` and an optional relevance gate. FastAPI serves news + structured endpoints to a React (Vite + TypeScript) frontend. **No agent / autonomous loop** — see spec §14.
 
 **Tech Stack:** Python 3.11, FastAPI, SQLAlchemy 2.0 + Alembic, Postgres, APScheduler, feedparser, Scrapling, httpx, pydantic v2, pytest; React 18 + Vite + TypeScript + TanStack Query; Docker Compose.
 
@@ -35,6 +35,14 @@ os-news-tracker/
         rss.py                    # RssFetcher
         page_monitor.py           # PageMonitorFetcher
         search.py                 # SearchFetcher
+        api.py                    # ApiFetcher (structured stream)
+      structured/                 # structured-data stream
+        schemas.py                # AdvisoryRecord / LifecycleRecord / ImageRecord / CompatibilityRecord / StructuredBatch
+        repository.py             # idempotent upsert
+        pipeline.py               # structured run path
+        adapters/
+          base.py                 # SourceAdapter protocol + registry
+          ubuntu_security.py      # worked example adapter
       extract/
         base.py                   # ContentExtractor protocol + ExtractedDoc
         scrapling_extractor.py    # default engine
@@ -92,6 +100,7 @@ os-news-tracker/
 ### Task 0: Backend project skeleton + tooling
 
 **Files:**
+
 - Create: `backend/pyproject.toml`
 - Create: `backend/app/__init__.py`
 - Create: `backend/tests/conftest.py`
@@ -177,6 +186,7 @@ git commit -m "chore: scaffold backend project and tooling"
 ### Task 1: Config + enums
 
 **Files:**
+
 - Create: `backend/app/config.py`
 - Create: `backend/app/enums.py`
 - Test: `backend/tests/unit/test_config.py`
@@ -210,8 +220,14 @@ from enum import StrEnum
 
 class SourceType(StrEnum):
     RSS = "rss"
+    API = "api"
     PAGE_MONITOR = "page_monitor"
     SEARCH = "search"
+
+
+class Stream(StrEnum):
+    NEWS = "news"
+    STRUCTURED = "structured"
 
 
 class ItemStatus(StrEnum):
@@ -226,8 +242,25 @@ class InfoType(StrEnum):
     UPDATE = "更新"
     PERFORMANCE = "性能数据"
     ADAPTATION = "适配"
+    PAPER = "论文/研究"
     ANALYSIS = "观点/分析"
     OTHER = "其他"
+
+
+class AdvisorySeverity(StrEnum):
+    CRITICAL = "critical"
+    IMPORTANT = "important"
+    MODERATE = "moderate"
+    LOW = "low"
+    UNKNOWN = "unknown"
+
+
+class CompatibilityKind(StrEnum):
+    HARDWARE = "hardware"
+    SOFTWARE = "software"
+    PACKAGE = "package"
+    IMAGE = "image"
+    OSV = "osv"
 
 
 class Importance(StrEnum):
@@ -303,6 +336,7 @@ git commit -m "feat: add settings and domain enums"
 ### Task 2: SQLAlchemy models
 
 **Files:**
+
 - Create: `backend/app/db.py`
 - Create: `backend/app/models.py`
 - Test: `backend/tests/unit/test_models.py`
@@ -377,11 +411,16 @@ class Source(Base):
     __tablename__ = "sources"
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(200))
-    type: Mapped[str] = mapped_column(String(20))
+    type: Mapped[str] = mapped_column(String(20))           # rss | api | page_monitor | search
     url: Mapped[str] = mapped_column(String(1000))
     keywords: Mapped[str | None] = mapped_column(Text, nullable=True)
+    adapter: Mapped[str | None] = mapped_column(String(100), nullable=True)   # api adapter name
+    stream: Mapped[str] = mapped_column(String(20), default="news")           # news | structured
+    vendor: Mapped[str | None] = mapped_column(String(50), nullable=True)
     fetch_cron: Mapped[str | None] = mapped_column(String(100), nullable=True)
     main_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    relevance_filter: Mapped[bool] = mapped_column(default=False)
+    relevance_keywords: Mapped[str | None] = mapped_column(Text, nullable=True)
     enabled: Mapped[bool] = mapped_column(default=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     health_status: Mapped[str] = mapped_column(String(20), default="ok")
@@ -455,6 +494,77 @@ class Item(Base):
     source: Mapped["Source"] = relationship(back_populates="items")
     tags: Mapped[list["Tag"]] = relationship(secondary="item_tags")
     entities: Mapped[list["Entity"]] = relationship(secondary="item_entities")
+
+
+# --- Structured-data stream tables (no LLM; parsed straight from APIs) ---
+
+class SecurityAdvisory(Base):
+    __tablename__ = "security_advisories"
+    __table_args__ = (UniqueConstraint("vendor", "advisory_id", name="uq_adv_vendor_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"))
+    vendor: Mapped[str] = mapped_column(String(50), index=True)
+    advisory_id: Mapped[str] = mapped_column(String(100))
+    cve_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    severity: Mapped[str] = mapped_column(String(20), default="unknown", index=True)
+    title: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    affected_products: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    fixed_versions: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+
+class ProductLifecycle(Base):
+    __tablename__ = "product_lifecycles"
+    __table_args__ = (UniqueConstraint("vendor", "product", "version", name="uq_lc_vpv"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"))
+    vendor: Mapped[str] = mapped_column(String(50), index=True)
+    product: Mapped[str] = mapped_column(String(200))
+    version: Mapped[str] = mapped_column(String(100))
+    release_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    ga_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    eol_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    eus_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    phase: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+
+class ImageRelease(Base):
+    __tablename__ = "image_releases"
+    __table_args__ = (
+        UniqueConstraint("vendor", "product", "image_tag", "arch", "cloud", name="uq_img"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"))
+    vendor: Mapped[str] = mapped_column(String(50), index=True)
+    product: Mapped[str] = mapped_column(String(200))
+    image_tag: Mapped[str] = mapped_column(String(200))
+    arch: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    cloud: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    image_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    checksum: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class CompatibilityEntry(Base):
+    __tablename__ = "compatibility_entries"
+    __table_args__ = (
+        UniqueConstraint("vendor", "kind", "name", "product", "version", "arch", name="uq_compat"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"))
+    vendor: Mapped[str] = mapped_column(String(50), index=True)
+    kind: Mapped[str] = mapped_column(String(20), index=True)   # hardware|software|package|image|osv
+    name: Mapped[str] = mapped_column(String(300))
+    product: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    arch: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    snapshot_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 ```
 
 - [ ] **Step 5: Run test to verify it passes**
@@ -474,6 +584,7 @@ git commit -m "feat: add SQLAlchemy models and session factory"
 ### Task 3: Alembic migration (initial schema)
 
 **Files:**
+
 - Create: `backend/alembic.ini`
 - Create: `backend/alembic/env.py`
 - Create: `backend/alembic/versions/0001_initial.py` (autogenerated, then reviewed)
@@ -515,6 +626,7 @@ git commit -m "feat: add initial alembic migration"
 ### Task 4: Pipeline data contracts
 
 **Files:**
+
 - Create: `backend/app/schemas.py`
 - Test: `backend/tests/unit/test_schemas.py`
 
@@ -623,6 +735,7 @@ git commit -m "feat: add pydantic pipeline contracts"
 ### Task 5: URL canonicalization + normalizer
 
 **Files:**
+
 - Create: `backend/app/processing/normalizer.py`
 - Test: `backend/tests/unit/test_normalizer.py`
 
@@ -708,6 +821,7 @@ git commit -m "feat: add URL canonicalization and normalizer"
 ### Task 6: Hashing + simhash near-duplicate detection
 
 **Files:**
+
 - Create: `backend/app/processing/dedup.py`
 - Test: `backend/tests/unit/test_dedup.py`
 
@@ -802,6 +916,7 @@ git commit -m "feat: add url/content hashing and simhash near-dup detection"
 ### Task 7: ContentExtractor protocol + Scrapling extractor
 
 **Files:**
+
 - Create: `backend/app/extract/base.py`
 - Create: `backend/app/extract/scrapling_extractor.py`
 - Test: `backend/tests/unit/test_extract.py`
@@ -930,6 +1045,7 @@ git commit -m "feat: add ContentExtractor protocol and Scrapling extractor"
 ### Task 8: SearchProvider protocol + config-gated impl
 
 **Files:**
+
 - Create: `backend/app/search/base.py`
 - Create: `backend/app/search/internal_gateway.py`
 - Test: `backend/tests/unit/test_search_provider.py`
@@ -1040,6 +1156,7 @@ git commit -m "feat: add SearchProvider protocol with null + internal-gateway im
 ### Task 9: Fetcher protocol + RssFetcher
 
 **Files:**
+
 - Create: `backend/app/fetchers/base.py`
 - Create: `backend/app/fetchers/rss.py`
 - Create: `backend/tests/fixtures/sample_feed.xml`
@@ -1157,6 +1274,7 @@ git commit -m "feat: add Fetcher protocol and RSS fetcher"
 ### Task 10: PageMonitorFetcher (fixed page + change detection)
 
 **Files:**
+
 - Create: `backend/app/fetchers/page_monitor.py`
 - Test: `backend/tests/unit/test_page_monitor.py`
 
@@ -1246,6 +1364,7 @@ git commit -m "feat: add page-monitor fetcher with change detection"
 ### Task 11: SearchFetcher (search → extract → relevance gate)
 
 **Files:**
+
 - Create: `backend/app/processing/relevance.py`
 - Create: `backend/app/fetchers/search.py`
 - Test: `backend/tests/unit/test_search_fetcher.py`
@@ -1360,6 +1479,7 @@ git commit -m "feat: add search fetcher with LLM relevance gate"
 ### Task 12: Configurable LLM client with cache
 
 **Files:**
+
 - Create: `backend/app/llm/client.py`
 - Test: `backend/tests/unit/test_llm_client.py`
 
@@ -1459,6 +1579,7 @@ git commit -m "feat: add configurable OpenAI-compatible LLM client with cache"
 ### Task 13: Enricher (structured summary output)
 
 **Files:**
+
 - Create: `backend/app/processing/enricher.py`
 - Test: `backend/tests/unit/test_enricher.py`
 
@@ -1596,6 +1717,7 @@ git commit -m "feat: add LLM enricher producing structured summary schema"
 ### Task 14: Repository (idempotent upsert + cross-source merge)
 
 **Files:**
+
 - Create: `backend/app/repository.py`
 - Test: `backend/tests/integration/test_repository.py`
 
@@ -1751,6 +1873,7 @@ git commit -m "feat: add repository with idempotent save and cross-source merge"
 ### Task 15: Pipeline orchestration
 
 **Files:**
+
 - Create: `backend/app/pipeline.py`
 - Test: `backend/tests/integration/test_pipeline.py`
 
@@ -1893,6 +2016,7 @@ git commit -m "feat: add pipeline orchestration with per-source isolation"
 ### Task 16: FastAPI query/facet/detail endpoints
 
 **Files:**
+
 - Create: `backend/app/api/__init__.py`
 - Create: `backend/app/api/deps.py`
 - Create: `backend/app/api/routes.py`
@@ -2115,6 +2239,7 @@ git commit -m "feat: add FastAPI query/facet/detail endpoints"
 ### Task 17: Source registry + seed loader
 
 **Files:**
+
 - Create: `backend/app/sources/seed_sources.yaml`
 - Create: `backend/app/sources/registry.py`
 - Test: `backend/tests/integration/test_registry.py`
@@ -2122,28 +2247,79 @@ git commit -m "feat: add FastAPI query/facet/detail endpoints"
 - [ ] **Step 1: Create `backend/app/sources/seed_sources.yaml`**
 
 ```yaml
-- name: Phoronix
+# --- 新闻流：RSS ---
+- name: Red Hat Blog
   type: rss
-  url: https://www.phoronix.com/rss.php
-  main_category: OS性能发展
-  fetch_cron: "0 */12 * * *"
-- name: Linux Kernel News
-  type: rss
-  url: https://lwn.net/headlines/rss
+  url: https://www.redhat.com/en/rss/blog
+  vendor: redhat
+  stream: news
   main_category: OS跟踪来源
   fetch_cron: "0 8 * * *"
-- name: Example Vendor Releases
+- name: Ubuntu Blog
+  type: rss
+  url: https://ubuntu.com/blog/feed
+  vendor: ubuntu
+  stream: news
+  main_category: OS跟踪来源
+  fetch_cron: "0 8 * * *"
+- name: Phoronix (news)
+  type: rss
+  url: https://www.phoronix.com/rss.php
+  vendor: phoronix
+  stream: news
+  main_category: OS性能发展
+  fetch_cron: "0 */12 * * *"
+- name: LWN headlines
+  type: rss
+  url: https://lwn.net/headlines/rss
+  stream: news
+  main_category: OS性能发展
+  fetch_cron: "0 8 * * *"
+# 高量论文源：开启相关性预过滤
+- name: arXiv OS/PF/DC/AR
+  type: rss
+  url: https://rss.arxiv.org/rss/cs.OS+cs.PF+cs.DC+cs.AR
+  stream: news
+  main_category: OS性能发展
+  relevance_filter: true
+  relevance_keywords: "operating system, scheduler, kernel, IO, performance, benchmark, virtualization"
+  fetch_cron: "0 1 * * *"
+# --- 新闻流：固定页监控 ---
+- name: RHEL Release Notes
   type: page_monitor
-  url: https://vendor.example.com/releases
-  main_category: 友商产品信息
+  url: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/
+  vendor: redhat
+  stream: news
+  main_category: OS跟踪来源
   fetch_cron: "0 9 * * *"
-- name: Package Adaptation Search
-  type: search
-  url: ""
-  keywords: "新兴软件包 适配 移植"
-  main_category: 软件包适配
-  fetch_cron: "0 10 * * 1"
+# --- 结构化流：API ---
+- name: Red Hat Security Data
+  type: api
+  url: https://access.redhat.com/hydra/rest/securitydata
+  adapter: redhat_securitydata
+  vendor: redhat
+  stream: structured
+  main_category: OS跟踪来源
+  fetch_cron: "0 7 * * *"
+- name: Ubuntu Security Notices
+  type: api
+  url: https://ubuntu.com/security/notices.json
+  adapter: ubuntu_security
+  vendor: ubuntu
+  stream: structured
+  main_category: OS跟踪来源
+  fetch_cron: "0 7 * * *"
+- name: Red Hat Product Life Cycle
+  type: api
+  url: https://access.redhat.com/product-life-cycles/api/v1/
+  adapter: redhat_lifecycle
+  vendor: redhat
+  stream: structured
+  main_category: OS跟踪来源
+  fetch_cron: "0 6 * * 1"
 ```
+
+> 说明：这是初始 seed，覆盖各 `type`/`stream` 各一例；完整源清单见设计文档附录 A/B/C，落地时按需补全。`api` 源的 `adapter` 名要与 Task S2 注册的适配器一致。
 
 - [ ] **Step 2: Write the failing test** — `backend/tests/integration/test_registry.py`
 
@@ -2205,6 +2381,10 @@ def seed_sources_from_yaml(session: Session, path: str) -> int:
             name=e["name"], type=e["type"], url=e.get("url", ""),
             keywords=e.get("keywords"), fetch_cron=e.get("fetch_cron"),
             main_category=e.get("main_category"),
+            adapter=e.get("adapter"), stream=e.get("stream", "news"),
+            vendor=e.get("vendor"),
+            relevance_filter=e.get("relevance_filter", False),
+            relevance_keywords=e.get("relevance_keywords"),
         ))
         added += 1
     session.commit()
@@ -2228,6 +2408,7 @@ git commit -m "feat: add source registry with idempotent yaml seeding"
 ### Task 18: Scheduler wiring + fetcher factory
 
 **Files:**
+
 - Create: `backend/app/scheduler.py`
 - Test: `backend/tests/unit/test_scheduler.py`
 
@@ -2350,6 +2531,7 @@ git commit -m "feat: add scheduler wiring and fetcher factory"
 ### Task 19: Frontend scaffold + API client + types
 
 **Files:**
+
 - Create: `frontend/package.json`
 - Create: `frontend/vite.config.ts`
 - Create: `frontend/index.html`
@@ -2459,6 +2641,7 @@ git commit -m "feat: scaffold frontend with API client and types"
 ### Task 20: Badges with visual distinction
 
 **Files:**
+
 - Create: `frontend/src/components/ImportanceBadge.tsx`
 - Create: `frontend/src/components/InfoTypeBadge.tsx`
 
@@ -2516,6 +2699,7 @@ git commit -m "feat: add importance and info-type badges"
 ### Task 21: List, card, detail, facet sidebar, page wiring
 
 **Files:**
+
 - Create: `frontend/src/components/ItemCard.tsx`
 - Create: `frontend/src/components/ItemList.tsx`
 - Create: `frontend/src/components/ItemDetail.tsx`
@@ -2780,6 +2964,7 @@ git commit -m "feat: add list, card, detail, facet sidebar and home page"
 ### Task 22: App entrypoint (API + scheduler + seeding)
 
 **Files:**
+
 - Create: `backend/app/entry.py`
 - Test: `backend/tests/unit/test_entry_import.py`
 
@@ -2841,6 +3026,7 @@ git commit -m "feat: add app entrypoint with seeding and scheduler bootstrap"
 ### Task 23: Docker Compose + Dockerfiles
 
 **Files:**
+
 - Create: `backend/Dockerfile`
 - Create: `frontend/Dockerfile`
 - Create: `frontend/nginx.conf`
@@ -2941,10 +3127,10 @@ git commit -m "feat: add Docker Compose deployment for db, backend, frontend"
 ### Task 24: Project README + final full-suite verification
 
 **Files:**
+
 - Create: `README.md`
 
 - [ ] **Step 1: Create `README.md`** with: project overview, V1 scope, architecture diagram reference to the spec, local dev setup (`pip install -e ".[dev]"`, `pytest`, `npm run dev`), Docker Compose run (`docker compose up --build`), env vars table (mirror `.env.example`), and the open follow-ups (internal LLM gateway endpoint, search provider, Firecrawl AGPL note).
-
 - [ ] **Step 2: Run the full backend suite**
 
 Run: `cd backend && ENABLE_SCHEDULER=0 pytest -v`
@@ -2964,9 +3150,993 @@ git commit -m "docs: add project README and finalize V1"
 
 ---
 
+## Phase 13 — Structured Data Stream & ApiFetcher (design v2 additions)
+
+> These tasks add the second (structured) stream from the updated design (spec §5.9, §6). Foundations (`enums.py`, `models.py`, seed yaml, registry) were already updated in Tasks 1, 2, 17. Implement this phase after Task 18 (scheduler) and before Task 24's final full-suite run. The frontend task (S6) belongs with the frontend phase.
+
+### Task 25 (S1): Structured contracts + ApiFetcher + adapter registry
+
+**Files:**
+
+- Create: `backend/app/structured/__init__.py`
+- Create: `backend/app/structured/schemas.py`
+- Create: `backend/app/structured/adapters/__init__.py`
+- Create: `backend/app/structured/adapters/base.py`
+- Create: `backend/app/fetchers/api.py`
+- Test: `backend/tests/unit/test_api_fetcher.py`
+
+- [ ] **Step 1: Write the failing test** — `backend/tests/unit/test_api_fetcher.py`
+
+```python
+from app.fetchers.api import ApiFetcher
+from app.structured.schemas import StructuredBatch, AdvisoryRecord
+from app.models import Source
+from app.enums import SourceType
+
+
+class _StubAdapter:
+    def parse(self, payload) -> StructuredBatch:
+        return StructuredBatch(advisories=[AdvisoryRecord(
+            advisory_id=payload["id"], vendor="ubuntu", severity="low")])
+
+
+class _StubHttp:
+    def get(self, url, headers=None):
+        class _R:
+            def raise_for_status(self): pass
+            def json(self): return {"id": "USN-1-1"}
+        return _R()
+
+
+def test_api_fetcher_uses_adapter_and_returns_batch():
+    src = Source(id=9, name="u", type=SourceType.API,
+                 url="https://x/notices.json", adapter="stub")
+    fetcher = ApiFetcher(http=_StubHttp(), adapters={"stub": _StubAdapter()})
+    batch = fetcher.fetch_structured(src)
+    assert len(batch.advisories) == 1
+    assert batch.advisories[0].advisory_id == "USN-1-1"
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd backend && pytest tests/unit/test_api_fetcher.py -v`
+Expected: FAIL with `ModuleNotFoundError`
+
+- [ ] **Step 3: Create `backend/app/structured/__init__.py`** and `backend/app/structured/adapters/__init__.py` (both empty files).
+
+- [ ] **Step 4: Create `backend/app/structured/schemas.py`**
+
+```python
+from datetime import datetime
+from pydantic import BaseModel, Field
+
+
+class AdvisoryRecord(BaseModel):
+    vendor: str
+    advisory_id: str
+    cve_ids: list[str] = Field(default_factory=list)
+    severity: str = "unknown"
+    title: str | None = None
+    summary_text: str | None = None
+    affected_products: list = Field(default_factory=list)
+    fixed_versions: list = Field(default_factory=list)
+    published_at: datetime | None = None
+    updated_at: datetime | None = None
+    url: str | None = None
+
+
+class LifecycleRecord(BaseModel):
+    vendor: str
+    product: str
+    version: str
+    release_date: datetime | None = None
+    ga_date: datetime | None = None
+    eol_date: datetime | None = None
+    eus_date: datetime | None = None
+    phase: str | None = None
+    url: str | None = None
+
+
+class ImageRecord(BaseModel):
+    vendor: str
+    product: str
+    image_tag: str
+    arch: str | None = None
+    cloud: str | None = None
+    image_id: str | None = None
+    checksum: str | None = None
+    released_at: datetime | None = None
+
+
+class CompatibilityRecord(BaseModel):
+    vendor: str
+    kind: str
+    name: str
+    product: str | None = None
+    version: str | None = None
+    arch: str | None = None
+    status: str | None = None
+    url: str | None = None
+
+
+class StructuredBatch(BaseModel):
+    advisories: list[AdvisoryRecord] = Field(default_factory=list)
+    lifecycles: list[LifecycleRecord] = Field(default_factory=list)
+    images: list[ImageRecord] = Field(default_factory=list)
+    compatibilities: list[CompatibilityRecord] = Field(default_factory=list)
+```
+
+- [ ] **Step 5: Create `backend/app/structured/adapters/base.py`**
+
+```python
+from typing import Protocol, runtime_checkable
+from app.structured.schemas import StructuredBatch
+
+
+@runtime_checkable
+class SourceAdapter(Protocol):
+    def parse(self, payload) -> StructuredBatch: ...
+
+
+def get_adapters() -> dict[str, SourceAdapter]:
+    """Registry of adapter-name -> instance. Extend as sources are confirmed."""
+    from app.structured.adapters.ubuntu_security import UbuntuSecurityAdapter
+    return {
+        "ubuntu_security": UbuntuSecurityAdapter(),
+    }
+```
+
+- [ ] **Step 6: Create `backend/app/fetchers/api.py`**
+
+```python
+import httpx
+from app.config import get_settings
+from app.models import Source
+from app.structured.schemas import StructuredBatch
+from app.structured.adapters.base import get_adapters
+
+
+class ApiFetcher:
+    def __init__(self, http=None, adapters=None):
+        self._http = http or httpx.Client(timeout=30.0,
+                                          headers={"User-Agent": get_settings().fetch_user_agent})
+        self._adapters = adapters if adapters is not None else get_adapters()
+
+    def fetch_structured(self, source: Source) -> StructuredBatch:
+        adapter = self._adapters[source.adapter]
+        resp = self._http.get(source.url)
+        resp.raise_for_status()
+        return adapter.parse(resp.json())
+```
+
+- [ ] **Step 7: Run test to verify it passes**
+
+Run: `cd backend && pytest tests/unit/test_api_fetcher.py -v`
+Expected: PASS
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add backend/app/structured/ backend/app/fetchers/api.py backend/tests/unit/test_api_fetcher.py
+git commit -m "feat: add structured contracts, ApiFetcher and adapter registry"
+```
+
+---
+
+### Task 26 (S2): Ubuntu security adapter (worked example)
+
+> Worked, fully-specified adapter for `notices.json` (public, stable schema). Other adapters (`redhat_securitydata`, `redhat_lifecycle`, image, compatibility) follow the same `SourceAdapter` contract and each get their own task once that source's response schema is confirmed (spec §13 follow-up). Register each in `get_adapters()`.
+
+**Files:**
+
+- Create: `backend/app/structured/adapters/ubuntu_security.py`
+- Create: `backend/tests/fixtures/ubuntu_notices.json`
+- Test: `backend/tests/unit/test_ubuntu_security_adapter.py`
+
+- [ ] **Step 1: Create fixture** — `backend/tests/fixtures/ubuntu_notices.json`
+
+```json
+{
+  "notices": [
+    {
+      "id": "USN-6789-1",
+      "title": "Linux kernel vulnerabilities",
+      "summary": "Several security issues were fixed in the Linux kernel.",
+      "published": "2026-05-20T10:00:00Z",
+      "cves": ["CVE-2026-1111", "CVE-2026-2222"],
+      "references": ["https://ubuntu.com/security/notices/USN-6789-1"]
+    }
+  ]
+}
+```
+
+- [ ] **Step 2: Write the failing test** — `backend/tests/unit/test_ubuntu_security_adapter.py`
+
+```python
+import json
+import os
+from app.structured.adapters.ubuntu_security import UbuntuSecurityAdapter
+from app.structured.adapters.base import SourceAdapter
+
+
+def test_ubuntu_adapter_parses_notices(fixtures_dir):
+    with open(os.path.join(fixtures_dir, "ubuntu_notices.json")) as fh:
+        payload = json.load(fh)
+    adapter = UbuntuSecurityAdapter()
+    batch = adapter.parse(payload)
+    assert isinstance(adapter, SourceAdapter)
+    assert len(batch.advisories) == 1
+    adv = batch.advisories[0]
+    assert adv.advisory_id == "USN-6789-1"
+    assert adv.vendor == "ubuntu"
+    assert adv.cve_ids == ["CVE-2026-1111", "CVE-2026-2222"]
+    assert adv.published_at is not None
+    assert adv.url == "https://ubuntu.com/security/notices/USN-6789-1"
+```
+
+- [ ] **Step 3: Run test to verify it fails**
+
+Run: `cd backend && pytest tests/unit/test_ubuntu_security_adapter.py -v`
+Expected: FAIL with `ModuleNotFoundError`
+
+- [ ] **Step 4: Create `backend/app/structured/adapters/ubuntu_security.py`**
+
+```python
+from dateutil import parser as dateparser
+from app.structured.schemas import StructuredBatch, AdvisoryRecord
+from app.structured.adapters.base import SourceAdapter
+
+
+class UbuntuSecurityAdapter(SourceAdapter):
+    def parse(self, payload) -> StructuredBatch:
+        advisories: list[AdvisoryRecord] = []
+        for n in payload.get("notices", []):
+            published = None
+            if n.get("published"):
+                try:
+                    published = dateparser.parse(n["published"]).replace(tzinfo=None)
+                except (ValueError, TypeError):
+                    published = None
+            refs = n.get("references") or []
+            advisories.append(AdvisoryRecord(
+                vendor="ubuntu",
+                advisory_id=n["id"],
+                cve_ids=list(n.get("cves", [])),
+                severity="unknown",
+                title=n.get("title"),
+                summary_text=n.get("summary"),
+                published_at=published,
+                url=refs[0] if refs else None,
+            ))
+        return StructuredBatch(advisories=advisories)
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `cd backend && pytest tests/unit/test_ubuntu_security_adapter.py -v`
+Expected: PASS
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add backend/app/structured/adapters/ubuntu_security.py backend/tests/fixtures/ubuntu_notices.json backend/tests/unit/test_ubuntu_security_adapter.py
+git commit -m "feat: add Ubuntu security source adapter"
+```
+
+---
+
+### Task 27 (S3): StructuredRepository (idempotent upsert)
+
+**Files:**
+
+- Create: `backend/app/structured/repository.py`
+- Test: `backend/tests/integration/test_structured_repository.py`
+
+- [ ] **Step 1: Write the failing test** — `backend/tests/integration/test_structured_repository.py`
+
+```python
+import pytest
+from sqlalchemy import create_engine, select, func
+from sqlalchemy.orm import sessionmaker
+from app.models import Base, Source, SecurityAdvisory
+from app.enums import SourceType, Stream
+from app.structured.schemas import StructuredBatch, AdvisoryRecord
+from app.structured.repository import StructuredRepository
+
+
+@pytest.fixture
+def session():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    s = sessionmaker(bind=engine)()
+    s.add(Source(id=1, name="u", type=SourceType.API, url="x", stream=Stream.STRUCTURED))
+    s.commit()
+    yield s
+    s.close()
+
+
+def _batch(sev="low"):
+    return StructuredBatch(advisories=[AdvisoryRecord(
+        vendor="ubuntu", advisory_id="USN-1-1", cve_ids=["CVE-1"], severity=sev)])
+
+
+def test_upsert_inserts_then_updates_not_duplicates(session):
+    repo = StructuredRepository(session)
+    n1 = repo.upsert_batch(source_id=1, batch=_batch("low"))
+    n2 = repo.upsert_batch(source_id=1, batch=_batch("important"))  # same key, changed field
+    assert n1["advisories"] == 1
+    assert session.scalar(select(func.count(SecurityAdvisory.id))) == 1  # no dup
+    row = session.scalar(select(SecurityAdvisory))
+    assert row.severity == "important"  # updated in place
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd backend && pytest tests/integration/test_structured_repository.py -v`
+Expected: FAIL with `ModuleNotFoundError`
+
+- [ ] **Step 3: Create `backend/app/structured/repository.py`**
+
+```python
+from datetime import datetime
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+from app.models import SecurityAdvisory, ProductLifecycle, ImageRelease, CompatibilityEntry
+from app.structured.schemas import StructuredBatch
+
+
+class StructuredRepository:
+    def __init__(self, session: Session):
+        self._s = session
+
+    def _upsert(self, model, key_filter: dict, values: dict) -> bool:
+        existing = self._s.scalar(select(model).filter_by(**key_filter))
+        if existing is None:
+            self._s.add(model(**key_filter, **values))
+            return True
+        for k, v in values.items():
+            setattr(existing, k, v)
+        return True
+
+    def upsert_batch(self, source_id: int, batch: StructuredBatch) -> dict:
+        counts = {"advisories": 0, "lifecycles": 0, "images": 0, "compatibilities": 0}
+        for a in batch.advisories:
+            self._upsert(SecurityAdvisory,
+                         {"vendor": a.vendor, "advisory_id": a.advisory_id},
+                         {"source_id": source_id, "cve_ids": a.cve_ids, "severity": a.severity,
+                          "title": a.title, "summary_text": a.summary_text,
+                          "affected_products": a.affected_products, "fixed_versions": a.fixed_versions,
+                          "published_at": a.published_at, "updated_at": a.updated_at, "url": a.url})
+            counts["advisories"] += 1
+        for lc in batch.lifecycles:
+            self._upsert(ProductLifecycle,
+                         {"vendor": lc.vendor, "product": lc.product, "version": lc.version},
+                         {"source_id": source_id, "release_date": lc.release_date,
+                          "ga_date": lc.ga_date, "eol_date": lc.eol_date, "eus_date": lc.eus_date,
+                          "phase": lc.phase, "url": lc.url})
+            counts["lifecycles"] += 1
+        for im in batch.images:
+            self._upsert(ImageRelease,
+                         {"vendor": im.vendor, "product": im.product, "image_tag": im.image_tag,
+                          "arch": im.arch, "cloud": im.cloud},
+                         {"source_id": source_id, "image_id": im.image_id,
+                          "checksum": im.checksum, "released_at": im.released_at})
+            counts["images"] += 1
+        for c in batch.compatibilities:
+            self._upsert(CompatibilityEntry,
+                         {"vendor": c.vendor, "kind": c.kind, "name": c.name,
+                          "product": c.product, "version": c.version, "arch": c.arch},
+                         {"source_id": source_id, "status": c.status,
+                          "snapshot_at": datetime.utcnow(), "url": c.url})
+            counts["compatibilities"] += 1
+        self._s.commit()
+        return counts
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `cd backend && pytest tests/integration/test_structured_repository.py -v`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add backend/app/structured/repository.py backend/tests/integration/test_structured_repository.py
+git commit -m "feat: add structured repository with idempotent upsert"
+```
+
+---
+
+### Task 28 (S4): Relevance pre-filter for high-volume news sources
+
+> Modifies the news `Pipeline` from Task 15 so sources with `relevance_filter=true` (e.g. arXiv) drop irrelevant items before the LLM enrich step.
+
+**Files:**
+
+- Modify: `backend/app/pipeline.py`
+- Test: `backend/tests/integration/test_pipeline_relevance.py`
+
+- [ ] **Step 1: Write the failing test** — `backend/tests/integration/test_pipeline_relevance.py`
+
+```python
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from app.models import Base, Source
+from app.enums import SourceType, Importance, InfoType
+from app.schemas import RawItem, ExtractedDoc, EnrichedFields, EntityRef
+from app.pipeline import Pipeline
+
+
+@pytest.fixture
+def session():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    s = sessionmaker(bind=engine)()
+    s.add(Source(id=1, name="arXiv", type=SourceType.RSS, url="u",
+                 relevance_filter=True, relevance_keywords="scheduler, kernel"))
+    s.commit()
+    yield s
+    s.close()
+
+
+class _Fetcher:
+    def fetch(self, source):
+        return [
+            RawItem(source_id=1, title="A new CPU scheduler design", url="https://x/a", raw_content="about kernel scheduler"),
+            RawItem(source_id=1, title="A study of medieval poetry", url="https://x/b", raw_content="poetry"),
+        ]
+
+
+class _Extractor:
+    def extract(self, url):
+        return ExtractedDoc(url=url, title="t", clean_content="body")
+
+
+class _Enricher:
+    def enrich(self, n):
+        return EnrichedFields(title_tldr="x", summary="s", key_points=["a"],
+                              info_type=InfoType.PAPER, importance=Importance.MEDIUM,
+                              why_it_matters="w", main_category="OS性能发展",
+                              sub_tags=[], entities=[EntityRef(type="topic", name="scheduler")],
+                              confidence=0.8)
+
+
+def _relevance(title, content, keywords):
+    return "scheduler" in (title + content).lower()
+
+
+def test_relevance_filter_drops_irrelevant(session):
+    src = session.get(Source, 1)
+    pipeline = Pipeline(session=session, extractor=_Extractor(), enricher=_Enricher(),
+                        relevance_fn=_relevance)
+    n = pipeline.run_source(src, fetcher=_Fetcher())
+    assert n == 1  # only the scheduler item kept
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd backend && pytest tests/integration/test_pipeline_relevance.py -v`
+Expected: FAIL (Pipeline has no `relevance_fn` param)
+
+- [ ] **Step 3: Modify `backend/app/pipeline.py`**
+
+Update the constructor and the per-item loop. Replace the class body with:
+
+```python
+import logging
+from sqlalchemy.orm import Session
+from app.models import Source
+from app.enums import SourceType
+from app.processing.normalizer import normalize
+from app.processing.relevance import llm_relevance
+from app.repository import Repository
+
+logger = logging.getLogger(__name__)
+
+
+class Pipeline:
+    def __init__(self, session: Session, extractor, enricher, relevance_fn=llm_relevance):
+        self._session = session
+        self._extractor = extractor
+        self._enricher = enricher
+        self._relevance_fn = relevance_fn
+        self._repo = Repository(session)
+
+    def run_source(self, source: Source, fetcher) -> int:
+        try:
+            raw_items = fetcher.fetch(source)
+        except Exception:
+            logger.exception("fetch failed for source %s", source.name)
+            source.fail_count += 1
+            source.health_status = "error"
+            self._session.commit()
+            return 0
+
+        new_count = 0
+        for raw in raw_items:
+            doc = self._extract_for(raw, source)
+            n = normalize(raw, doc)
+            if source.relevance_filter and not self._relevance_fn(
+                n.title, n.clean_content, source.relevance_keywords or ""
+            ):
+                continue
+            if self._repo.exists_by_canonical(n.canonical_url):
+                self._repo.merge_source_link(n.canonical_url, source.id, raw.url)
+                continue
+            try:
+                fields = self._enricher.enrich(n)
+            except Exception:
+                logger.exception("enrich failed for %s", n.canonical_url)
+                continue
+            self._repo.save_enriched(n, fields)
+            new_count += 1
+
+        source.health_status = "ok"
+        self._session.commit()
+        return new_count
+
+    def _extract_for(self, raw, source: Source):
+        from app.schemas import ExtractedDoc
+        if source.type == SourceType.RSS:
+            if raw.raw_content and len(raw.raw_content) > 200:
+                return ExtractedDoc(url=raw.url, title=raw.title,
+                                    clean_content=raw.raw_content,
+                                    published_at=raw.published_at)
+            return self._extractor.extract(raw.url)
+        return ExtractedDoc(url=raw.url, title=raw.title,
+                            clean_content=raw.raw_content or "",
+                            published_at=raw.published_at)
+```
+
+- [ ] **Step 4: Run both pipeline tests to verify they pass**
+
+Run: `cd backend && pytest tests/integration/test_pipeline.py tests/integration/test_pipeline_relevance.py -v`
+Expected: PASS (the original dedup test still passes; relevance test passes)
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add backend/app/pipeline.py backend/tests/integration/test_pipeline_relevance.py
+git commit -m "feat: add relevance pre-filter for high-volume news sources"
+```
+
+---
+
+### Task 29 (S5): Structured pipeline + scheduler routing by stream
+
+**Files:**
+
+- Create: `backend/app/structured/pipeline.py`
+- Modify: `backend/app/scheduler.py`
+- Test: `backend/tests/integration/test_structured_pipeline.py`
+
+- [ ] **Step 1: Write the failing test** — `backend/tests/integration/test_structured_pipeline.py`
+
+```python
+import pytest
+from sqlalchemy import create_engine, select, func
+from sqlalchemy.orm import sessionmaker
+from app.models import Base, Source, SecurityAdvisory
+from app.enums import SourceType, Stream
+from app.structured.schemas import StructuredBatch, AdvisoryRecord
+from app.structured.pipeline import StructuredPipeline
+
+
+@pytest.fixture
+def session():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    s = sessionmaker(bind=engine)()
+    s.add(Source(id=1, name="u", type=SourceType.API, url="x",
+                 adapter="stub", stream=Stream.STRUCTURED))
+    s.commit()
+    yield s
+    s.close()
+
+
+class _StubApiFetcher:
+    def fetch_structured(self, source):
+        return StructuredBatch(advisories=[AdvisoryRecord(
+            vendor="ubuntu", advisory_id="USN-9-1", severity="critical")])
+
+
+def test_structured_pipeline_upserts(session):
+    src = session.get(Source, 1)
+    pipeline = StructuredPipeline(session=session)
+    counts = pipeline.run_source(src, fetcher=_StubApiFetcher())
+    assert counts["advisories"] == 1
+    assert session.scalar(select(func.count(SecurityAdvisory.id))) == 1
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd backend && pytest tests/integration/test_structured_pipeline.py -v`
+Expected: FAIL with `ModuleNotFoundError`
+
+- [ ] **Step 3: Create `backend/app/structured/pipeline.py`**
+
+```python
+import logging
+from sqlalchemy.orm import Session
+from app.models import Source
+from app.structured.repository import StructuredRepository
+
+logger = logging.getLogger(__name__)
+
+
+class StructuredPipeline:
+    def __init__(self, session: Session):
+        self._session = session
+        self._repo = StructuredRepository(session)
+
+    def run_source(self, source: Source, fetcher) -> dict:
+        try:
+            batch = fetcher.fetch_structured(source)
+        except Exception:
+            logger.exception("structured fetch failed for %s", source.name)
+            source.fail_count += 1
+            source.health_status = "error"
+            self._session.commit()
+            return {"advisories": 0, "lifecycles": 0, "images": 0, "compatibilities": 0}
+        counts = self._repo.upsert_batch(source.id, batch)
+        source.health_status = "ok"
+        self._session.commit()
+        return counts
+```
+
+- [ ] **Step 4: Modify `backend/app/scheduler.py`** — route by stream and support `api` type. Replace `run_source_job` and `build_fetcher` with:
+
+```python
+def build_fetcher(source: Source, extractor, search):
+    if source.type == SourceType.RSS:
+        return RssFetcher()
+    if source.type == SourceType.PAGE_MONITOR:
+        return PageMonitorFetcher(extractor=extractor)
+    if source.type == SourceType.SEARCH:
+        return SearchFetcher(search=search, extractor=extractor)
+    if source.type == SourceType.API:
+        from app.fetchers.api import ApiFetcher
+        return ApiFetcher()
+    raise ValueError(f"unknown source type {source.type}")
+
+
+def run_source_job(source_id: int):
+    session = SessionLocal()
+    try:
+        source = session.get(Source, source_id)
+        if not source or not source.enabled:
+            return
+        if source.stream == Stream.STRUCTURED:
+            from app.fetchers.api import ApiFetcher
+            from app.structured.pipeline import StructuredPipeline
+            counts = StructuredPipeline(session=session).run_source(source, fetcher=ApiFetcher())
+            logger.info("structured source %s -> %s", source.name, counts)
+            return
+        extractor = ScraplingExtractor()
+        search = get_search_provider()
+        fetcher = build_fetcher(source, extractor, search)
+        pipeline = Pipeline(session=session, extractor=extractor, enricher=Enricher())
+        n = pipeline.run_source(source, fetcher=fetcher)
+        logger.info("source %s produced %d new items", source.name, n)
+    finally:
+        session.close()
+```
+
+Add the import at the top of `scheduler.py`: `from app.enums import SourceType, Stream`.
+
+- [ ] **Step 5: Run tests**
+
+Run: `cd backend && pytest tests/integration/test_structured_pipeline.py tests/unit/test_scheduler.py -v`
+Expected: PASS
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add backend/app/structured/pipeline.py backend/app/scheduler.py backend/tests/integration/test_structured_pipeline.py
+git commit -m "feat: add structured pipeline and route scheduler by stream"
+```
+
+---
+
+### Task 30 (S6): Structured API endpoints
+
+**Files:**
+
+- Create: `backend/app/api/structured_routes.py`
+- Modify: `backend/app/api/main.py` (include the new router)
+- Test: `backend/tests/integration/test_structured_api.py`
+
+- [ ] **Step 1: Write the failing test** — `backend/tests/integration/test_structured_api.py`
+
+```python
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from app.models import Base, Source, SecurityAdvisory, ProductLifecycle
+from app.enums import SourceType, Stream
+from app.api.main import create_app
+from app.api.deps import get_db
+
+
+@pytest.fixture
+def client():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    TestSession = sessionmaker(bind=engine)
+    seed = TestSession()
+    seed.add(Source(id=1, name="u", type=SourceType.API, url="x", stream=Stream.STRUCTURED))
+    seed.add(SecurityAdvisory(source_id=1, vendor="ubuntu", advisory_id="USN-1-1",
+                              severity="critical", title="t"))
+    seed.add(ProductLifecycle(source_id=1, vendor="redhat", product="RHEL", version="9"))
+    seed.commit()
+    seed.close()
+    app = create_app()
+
+    def _override():
+        db = TestSession()
+        try:
+            yield db
+        finally:
+            db.close()
+    app.dependency_overrides[get_db] = _override
+    return TestClient(app)
+
+
+def test_list_advisories_and_filter(client):
+    assert client.get("/advisories").json()["total"] == 1
+    assert client.get("/advisories?vendor=ubuntu&severity=critical").json()["total"] == 1
+    assert client.get("/advisories?severity=low").json()["total"] == 0
+
+
+def test_list_lifecycles(client):
+    data = client.get("/lifecycles?vendor=redhat").json()
+    assert data["total"] == 1
+    assert data["items"][0]["product"] == "RHEL"
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd backend && pytest tests/integration/test_structured_api.py -v`
+Expected: FAIL with `ModuleNotFoundError`
+
+- [ ] **Step 3: Create `backend/app/api/structured_routes.py`**
+
+```python
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select, func
+from sqlalchemy.orm import Session
+from app.api.deps import get_db
+from app.models import SecurityAdvisory, ProductLifecycle, ImageRelease, CompatibilityEntry
+
+router = APIRouter()
+
+
+def _page(db, stmt, limit, offset, to_dict):
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = db.scalars(stmt.limit(limit).offset(offset)).all()
+    return {"total": total, "items": [to_dict(r) for r in rows]}
+
+
+@router.get("/advisories")
+def advisories(db: Session = Depends(get_db), vendor: str | None = None,
+               severity: str | None = None, q: str | None = None,
+               limit: int = Query(50, le=200), offset: int = 0):
+    stmt = select(SecurityAdvisory)
+    if vendor:
+        stmt = stmt.where(SecurityAdvisory.vendor == vendor)
+    if severity:
+        stmt = stmt.where(SecurityAdvisory.severity == severity)
+    if q:
+        stmt = stmt.where(SecurityAdvisory.title.ilike(f"%{q}%"))
+    stmt = stmt.order_by(SecurityAdvisory.published_at.desc().nullslast())
+    return _page(db, stmt, limit, offset, lambda r: {
+        "id": r.id, "vendor": r.vendor, "advisory_id": r.advisory_id,
+        "cve_ids": r.cve_ids or [], "severity": r.severity, "title": r.title,
+        "published_at": r.published_at.isoformat() if r.published_at else None, "url": r.url,
+    })
+
+
+@router.get("/lifecycles")
+def lifecycles(db: Session = Depends(get_db), vendor: str | None = None,
+               product: str | None = None, limit: int = Query(50, le=200), offset: int = 0):
+    stmt = select(ProductLifecycle)
+    if vendor:
+        stmt = stmt.where(ProductLifecycle.vendor == vendor)
+    if product:
+        stmt = stmt.where(ProductLifecycle.product == product)
+    stmt = stmt.order_by(ProductLifecycle.eol_date.asc().nullslast())
+    return _page(db, stmt, limit, offset, lambda r: {
+        "id": r.id, "vendor": r.vendor, "product": r.product, "version": r.version,
+        "eol_date": r.eol_date.isoformat() if r.eol_date else None, "phase": r.phase, "url": r.url,
+    })
+
+
+@router.get("/compatibility")
+def compatibility(db: Session = Depends(get_db), vendor: str | None = None,
+                  kind: str | None = None, q: str | None = None,
+                  limit: int = Query(50, le=200), offset: int = 0):
+    stmt = select(CompatibilityEntry)
+    if vendor:
+        stmt = stmt.where(CompatibilityEntry.vendor == vendor)
+    if kind:
+        stmt = stmt.where(CompatibilityEntry.kind == kind)
+    if q:
+        stmt = stmt.where(CompatibilityEntry.name.ilike(f"%{q}%"))
+    return _page(db, stmt, limit, offset, lambda r: {
+        "id": r.id, "vendor": r.vendor, "kind": r.kind, "name": r.name,
+        "product": r.product, "version": r.version, "arch": r.arch,
+        "status": r.status, "url": r.url,
+    })
+```
+
+- [ ] **Step 4: Modify `backend/app/api/main.py`** — include the structured router. Update `create_app`:
+
+```python
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from app.api.routes import router
+from app.api.structured_routes import router as structured_router
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="OS News Tracker")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.include_router(router)
+    app.include_router(structured_router)
+    return app
+
+
+app = create_app()
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `cd backend && pytest tests/integration/test_structured_api.py -v`
+Expected: PASS
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add backend/app/api/structured_routes.py backend/app/api/main.py backend/tests/integration/test_structured_api.py
+git commit -m "feat: add structured-data API endpoints"
+```
+
+---
+
+### Task 31 (S7): Frontend structured-data table view
+
+> Belongs with the frontend phase (after Task 21). Adds a tab to switch between the news list and a structured data table (advisories / lifecycles / compatibility).
+
+**Files:**
+
+- Create: `frontend/src/api/structured.ts`
+- Create: `frontend/src/components/StructuredTable.tsx`
+- Modify: `frontend/src/pages/HomePage.tsx` (add a simple tab switch)
+
+- [ ] **Step 1: Create `frontend/src/api/structured.ts`**
+
+```typescript
+const BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+
+export interface Paged<T> { total: number; items: T[]; }
+
+export async function fetchStructured<T>(path: string, params: Record<string, string>): Promise<Paged<T>> {
+  const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v))).toString();
+  const r = await fetch(`${BASE}/${path}?${qs}`);
+  if (!r.ok) throw new Error(`failed to load ${path}`);
+  return r.json();
+}
+```
+
+- [ ] **Step 2: Create `frontend/src/components/StructuredTable.tsx`**
+
+```tsx
+import { useQuery } from "@tanstack/react-query";
+import { fetchStructured, type Paged } from "../api/structured";
+
+const COLUMNS: Record<string, { key: string; label: string }[]> = {
+  advisories: [
+    { key: "vendor", label: "厂商" }, { key: "advisory_id", label: "公告号" },
+    { key: "severity", label: "等级" }, { key: "title", label: "标题" },
+    { key: "published_at", label: "发布" },
+  ],
+  lifecycles: [
+    { key: "vendor", label: "厂商" }, { key: "product", label: "产品" },
+    { key: "version", label: "版本" }, { key: "eol_date", label: "EOL" },
+    { key: "phase", label: "阶段" },
+  ],
+  compatibility: [
+    { key: "vendor", label: "厂商" }, { key: "kind", label: "类型" },
+    { key: "name", label: "名称" }, { key: "product", label: "产品" },
+    { key: "status", label: "状态" },
+  ],
+};
+
+export function StructuredTable({ resource }: { resource: "advisories" | "lifecycles" | "compatibility" }) {
+  const cols = COLUMNS[resource];
+  const { data, isLoading } = useQuery({
+    queryKey: ["structured", resource],
+    queryFn: () => fetchStructured<Record<string, unknown>>(resource, {}),
+  });
+  if (isLoading || !data) return <div>加载中…</div>;
+  return (
+    <div>
+      <div style={{ color: "#667085", marginBottom: 10 }}>共 {data.total} 条</div>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <thead>
+          <tr>{cols.map((c) => (
+            <th key={c.key} style={{ textAlign: "left", borderBottom: "2px solid #eaecf0", padding: 8 }}>{c.label}</th>
+          ))}</tr>
+        </thead>
+        <tbody>
+          {data.items.map((row, i) => (
+            <tr key={i}>{cols.map((c) => (
+              <td key={c.key} style={{ borderBottom: "1px solid #f2f4f7", padding: 8 }}>
+                {String((row as Record<string, unknown>)[c.key] ?? "")}
+              </td>
+            ))}</tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+```
+
+- [ ] **Step 3: Modify `frontend/src/pages/HomePage.tsx`** — add a tab switch above the content. Insert near the top of the returned JSX (after the `<h1>`), and render either the existing news view or the structured table based on a `view` state:
+
+```tsx
+// add near other useState hooks:
+const [view, setView] = useState<"news" | "advisories" | "lifecycles" | "compatibility">("news");
+
+// add this tab bar right after <h1>技术新闻追踪</h1>:
+<div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+  {([["news", "新闻动态"], ["advisories", "安全公告"], ["lifecycles", "生命周期"], ["compatibility", "兼容性"]] as const).map(
+    ([v, label]) => (
+      <button key={v} onClick={() => setView(v)} style={{
+        padding: "6px 12px", borderRadius: 8, cursor: "pointer",
+        border: view === v ? "1px solid #2e90fa" : "1px solid #d0d5dd",
+        background: view === v ? "#eff8ff" : "#fff",
+      }}>{label}</button>
+    )
+  )}
+</div>
+
+// wrap the existing search input + facet/list flex container so it only renders when view === "news",
+// and render <StructuredTable resource={view} /> otherwise (import it at top).
+```
+
+- [ ] **Step 4: Verify build**
+
+Run: `cd frontend && npm run build`
+Expected: builds without type errors.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add frontend/src/api/structured.ts frontend/src/components/StructuredTable.tsx frontend/src/pages/HomePage.tsx
+git commit -m "feat: add structured-data table view with tab switch"
+```
+
+---
+
 ## Self-Review Notes (completed by plan author)
 
 - **Spec coverage:** RSS/page-monitor/search fetchers (Tasks 9-11), Scrapling default + pluggable extractor (Task 7), pluggable search provider w/ internal-first (Task 8), normalizer + URL canonicalization (Task 5), dedup + cross-source merge (Tasks 6, 14), LLM enrich with the exact summary schema fields (Task 13), structured-entity faceted query (Tasks 14, 16), visual block distinction + importance colors (Tasks 20-21), per-source error isolation + enrich-failure non-blocking (Task 15), idempotency via url_hash/content_hash (Tasks 6, 14, 15), LLM cache (Task 12), Docker Compose single-host + permanent retention (Task 23, no purge job), 5 initial main categories (`enums.py`, seed yaml). All covered.
 - **Out-of-scope honored:** no email/iWiki/subscription/auth/semantic-search/graph-db tasks.
 - **Type consistency:** `EnrichedFields`, `NormalizedItem`, `ExtractedDoc`, `RawItem`, `SearchResult` reused consistently; `save_enriched`/`merge_source_link`/`exists_by_canonical` names match across repository, pipeline, and API tasks.
 - **Open follow-ups (tracked in spec §13):** confirm internal LLM gateway endpoint + whether it offers web search (then flip `SEARCH_PROVIDER=internal`); Firecrawl AGPL legal check only if adopted; finalize the real seed source list.
+
+### Phase 13 additions (structured stream, design v2)
+
+- **Coverage:** `api` SourceType + `Stream` enum (Task 1); `sources` new fields + 4 structured tables (Task 2); seed yaml + registry pass new fields (Task 17); `ApiFetcher` + `SourceAdapter` registry + structured contracts (Task 25); worked Ubuntu security adapter (Task 26); idempotent `StructuredRepository` upsert (Task 27); relevance pre-filter for high-volume news sources (Task 28); `StructuredPipeline` + scheduler routing by `stream` (Task 29); structured API endpoints (Task 30); frontend structured table + tab switch (Task 31). Maps to spec §5.2/§5.9/§6/§7 (`论文/研究`)/§14.
+- **Deferred (spec):** repo package metadata, mailing-list archives, compatibility *diff* tracking (V1 = snapshot only); remaining adapters (`redhat_securitydata`, `redhat_lifecycle`, image, compatibility) are per-source tasks pending each API's confirmed response schema (spec §13).
+- **Type consistency:** `StructuredBatch`, `AdvisoryRecord`, `LifecycleRecord`, `ImageRecord`, `CompatibilityRecord`, `SourceAdapter` reused across fetcher/adapter/repository/pipeline; `fetch_structured` / `upsert_batch` / `parse` names consistent. `Pipeline` constructor gains `relevance_fn` (default `llm_relevance`).
+
