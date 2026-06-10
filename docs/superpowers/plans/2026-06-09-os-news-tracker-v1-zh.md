@@ -100,12 +100,13 @@ os-news-tracker/
 ### Task 0：后端项目骨架 + 工具链
 
 **文件：**
+
 - 创建：`backend/pyproject.toml`
 - 创建：`backend/app/__init__.py`
 - 创建：`backend/tests/conftest.py`
 - 创建：`.env.example`
 
-- [ ] **步骤 1：创建 `backend/pyproject.toml`**
+- [x] **步骤 1：创建 `backend/pyproject.toml`**
 
 ```toml
 [project]
@@ -136,7 +137,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 ```
 
-- [ ] **步骤 2：创建空的 `backend/app/__init__.py`**（空文件）。
+- [x] **步骤 2：创建空的 `backend/app/__init__.py`**（空文件）。
 
 - [ ] **步骤 3：创建 `backend/tests/conftest.py`**
 
@@ -185,6 +186,7 @@ git commit -m "chore: scaffold backend project and tooling"
 ### Task 1：配置 + 枚举
 
 **文件：**
+
 - 创建：`backend/app/config.py`
 - 创建：`backend/app/enums.py`
 - 测试：`backend/tests/unit/test_config.py`
@@ -334,6 +336,7 @@ git commit -m "feat: add settings and domain enums"
 ### Task 2：SQLAlchemy 模型
 
 **文件：**
+
 - 创建：`backend/app/db.py`
 - 创建：`backend/app/models.py`
 - 测试：`backend/tests/unit/test_models.py`
@@ -578,6 +581,7 @@ git commit -m "feat: add SQLAlchemy models and session factory"
 ### Task 3：Alembic 迁移（初始 schema）
 
 **文件：**
+
 - 创建：`backend/alembic.ini`
 - 创建：`backend/alembic/env.py`
 - 创建：`backend/alembic/versions/0001_initial.py`（自动生成后人工复核）
@@ -619,6 +623,7 @@ git commit -m "feat: add initial alembic migration"
 ### Task 4：流水线数据契约
 
 **文件：**
+
 - 创建：`backend/app/schemas.py`
 - 测试：`backend/tests/unit/test_schemas.py`
 
@@ -727,6 +732,7 @@ git commit -m "feat: add pydantic pipeline contracts"
 ### Task 5：URL 规范化 + 归一化器
 
 **文件：**
+
 - 创建：`backend/app/processing/normalizer.py`
 - 测试：`backend/tests/unit/test_normalizer.py`
 
@@ -812,6 +818,7 @@ git commit -m "feat: add URL canonicalization and normalizer"
 ### Task 6：哈希 + simhash 近似去重检测
 
 **文件：**
+
 - 创建：`backend/app/processing/dedup.py`
 - 测试：`backend/tests/unit/test_dedup.py`
 
@@ -906,6 +913,7 @@ git commit -m "feat: add url/content hashing and simhash near-dup detection"
 ### Task 7：ContentExtractor 协议 + Scrapling 提取器
 
 **文件：**
+
 - 创建：`backend/app/extract/base.py`
 - 创建：`backend/app/extract/scrapling_extractor.py`
 - 测试：`backend/tests/unit/test_extract.py`
@@ -1034,6 +1042,7 @@ git commit -m "feat: add ContentExtractor protocol and Scrapling extractor"
 ### Task 8：SearchProvider 协议 + 受配置控制的实现
 
 **文件：**
+
 - 创建：`backend/app/search/base.py`
 - 创建：`backend/app/search/internal_gateway.py`
 - 测试：`backend/tests/unit/test_search_provider.py`
@@ -1144,6 +1153,7 @@ git commit -m "feat: add SearchProvider protocol with null + internal-gateway im
 ### Task 9：Fetcher 协议 + RssFetcher
 
 **文件：**
+
 - 创建：`backend/app/fetchers/base.py`
 - 创建：`backend/app/fetchers/rss.py`
 - 创建：`backend/tests/fixtures/sample_feed.xml`
@@ -1261,6 +1271,7 @@ git commit -m "feat: add Fetcher protocol and RSS fetcher"
 ### Task 10：PageMonitorFetcher（固定页 + 变更检测）
 
 **文件：**
+
 - 创建：`backend/app/fetchers/page_monitor.py`
 - 测试：`backend/tests/unit/test_page_monitor.py`
 
@@ -1350,6 +1361,7 @@ git commit -m "feat: add page-monitor fetcher with change detection"
 ### Task 11：SearchFetcher（搜索 → 提取 → 相关性过滤）
 
 **文件：**
+
 - 创建：`backend/app/processing/relevance.py`
 - 创建：`backend/app/fetchers/search.py`
 - 测试：`backend/tests/unit/test_search_fetcher.py`
@@ -1464,6 +1476,7 @@ git commit -m "feat: add search fetcher with LLM relevance gate"
 ### Task 12：带缓存的可配置 LLM 客户端
 
 **文件：**
+
 - 创建：`backend/app/llm/client.py`
 - 测试：`backend/tests/unit/test_llm_client.py`
 
@@ -1563,6 +1576,7 @@ git commit -m "feat: add configurable OpenAI-compatible LLM client with cache"
 ### Task 13：Enricher（结构化摘要输出）
 
 **文件：**
+
 - 创建：`backend/app/processing/enricher.py`
 - 测试：`backend/tests/unit/test_enricher.py`
 
@@ -1700,6 +1714,7 @@ git commit -m "feat: add LLM enricher producing structured summary schema"
 ### Task 14：仓储（幂等入库 + 跨源合并）
 
 **文件：**
+
 - 创建：`backend/app/repository.py`
 - 测试：`backend/tests/integration/test_repository.py`
 
@@ -1855,6 +1870,7 @@ git commit -m "feat: add repository with idempotent save and cross-source merge"
 ### Task 15：流水线编排
 
 **文件：**
+
 - 创建：`backend/app/pipeline.py`
 - 测试：`backend/tests/integration/test_pipeline.py`
 
@@ -1997,6 +2013,7 @@ git commit -m "feat: add pipeline orchestration with per-source isolation"
 ### Task 16：FastAPI 查询/分面/详情接口
 
 **文件：**
+
 - 创建：`backend/app/api/__init__.py`
 - 创建：`backend/app/api/deps.py`
 - 创建：`backend/app/api/routes.py`
@@ -2219,6 +2236,7 @@ git commit -m "feat: add FastAPI query/facet/detail endpoints"
 ### Task 17：源注册 + seed 加载器
 
 **文件：**
+
 - 创建：`backend/app/sources/seed_sources.yaml`
 - 创建：`backend/app/sources/registry.py`
 - 测试：`backend/tests/integration/test_registry.py`
@@ -2387,6 +2405,7 @@ git commit -m "feat: add source registry with idempotent yaml seeding"
 ### Task 18：调度器接线 + 采集器工厂
 
 **文件：**
+
 - 创建：`backend/app/scheduler.py`
 - 测试：`backend/tests/unit/test_scheduler.py`
 
@@ -2509,6 +2528,7 @@ git commit -m "feat: add scheduler wiring and fetcher factory"
 ### Task 19：前端脚手架 + API 客户端 + 类型
 
 **文件：**
+
 - 创建：`frontend/package.json`
 - 创建：`frontend/vite.config.ts`
 - 创建：`frontend/index.html`
@@ -2618,6 +2638,7 @@ git commit -m "feat: scaffold frontend with API client and types"
 ### Task 20：带视觉区分的徽标组件
 
 **文件：**
+
 - 创建：`frontend/src/components/ImportanceBadge.tsx`
 - 创建：`frontend/src/components/InfoTypeBadge.tsx`
 
@@ -2675,6 +2696,7 @@ git commit -m "feat: add importance and info-type badges"
 ### Task 21：列表、卡片、详情、分面侧栏、页面接线
 
 **文件：**
+
 - 创建：`frontend/src/components/ItemCard.tsx`
 - 创建：`frontend/src/components/ItemList.tsx`
 - 创建：`frontend/src/components/ItemDetail.tsx`
@@ -2939,6 +2961,7 @@ git commit -m "feat: add list, card, detail, facet sidebar and home page"
 ### Task 22：应用入口（API + 调度 + 初始化 seed）
 
 **文件：**
+
 - 创建：`backend/app/entry.py`
 - 测试：`backend/tests/unit/test_entry_import.py`
 
@@ -3000,6 +3023,7 @@ git commit -m "feat: add app entrypoint with seeding and scheduler bootstrap"
 ### Task 23：Docker Compose + Dockerfile
 
 **文件：**
+
 - 创建：`backend/Dockerfile`
 - 创建：`frontend/Dockerfile`
 - 创建：`frontend/nginx.conf`
@@ -3100,10 +3124,10 @@ git commit -m "feat: add Docker Compose deployment for db, backend, frontend"
 ### Task 24：项目 README + 最终完整套件验证
 
 **文件：**
+
 - 创建：`README.md`
 
 - [ ] **步骤 1：创建 `README.md`**，内容包含：项目概述、V1 范围、引用 spec 的架构图、本地开发步骤（`pip install -e ".[dev]"`、`pytest`、`npm run dev`）、Docker Compose 运行（`docker compose up --build`）、环境变量表（对应 `.env.example`）、以及待办事项（司内 LLM 网关端点、搜索 provider、Firecrawl AGPL 说明）。
-
 - [ ] **步骤 2：运行后端完整测试套件**
 
 运行：`cd backend && ENABLE_SCHEDULER=0 pytest -v`
@@ -4112,3 +4136,4 @@ git commit -m "feat: add structured-data table view with tab switch"
 - **覆盖：** `api` SourceType + `Stream` 枚举（Task 1）；`sources` 新字段 + 4 张结构化表（Task 2）；seed yaml + registry 传新字段（Task 17）；`ApiFetcher` + `SourceAdapter` 注册表 + 结构化契约（Task 25）；Ubuntu 安全适配器示例（Task 26）；幂等 `StructuredRepository`（Task 27）；高量新闻源相关性预过滤（Task 28）；`StructuredPipeline` + 调度按 `stream` 路由（Task 29）；结构化 API 接口（Task 30）；前端结构化表 + tab（Task 31）。对应设计文档 §5.2/§5.9/§6/§7（`论文/研究`）/§14。
 - **推迟（设计文档）：** repo 包元数据、邮件列表归档、兼容性 *diff* 追踪（V1 仅快照）；其余适配器（`redhat_securitydata`、`redhat_lifecycle`、镜像、兼容性）待各源响应 schema 确认后各自成任务（§13）。
 - **类型一致性：** `StructuredBatch`、`AdvisoryRecord`、`LifecycleRecord`、`ImageRecord`、`CompatibilityRecord`、`SourceAdapter` 跨 fetcher/适配器/仓储/流水线复用；`fetch_structured`/`upsert_batch`/`parse` 命名一致。`Pipeline` 构造函数新增 `relevance_fn`（默认 `llm_relevance`）。
+
