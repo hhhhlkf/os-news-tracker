@@ -95,6 +95,61 @@ os-news-tracker/
 
 ---
 
+## Phase P — Prerequisites: Toolchain & Environment Setup
+
+> Do this ONCE before Task 0, on a blank machine. The rest of the plan assumes a working Python 3.11+ virtualenv with deps installed, run via `backend/.venv/bin/...`.
+
+### Task P0: Provision the toolchain
+
+**Goal:** a Python **3.11+** interpreter, a project virtualenv, and (for the frontend phase) Node **20+**.
+
+- [ ] **Step 1: Check what's already available**
+
+```bash
+python3 --version            # need >= 3.11
+command -v uv || echo "no uv"
+node --version || echo "no node"   # need >= 20 for the frontend phase
+```
+
+- [ ] **Step 2: If Python 3.11+ is missing, install `uv` and let it provide Python**
+
+`uv` is a single static binary that can provision a standalone CPython without touching the system Python. Install it one of these ways (pick whichever your environment allows):
+
+```bash
+# Option A: official installer (network: astral.sh)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# Option B: via existing pip (user install)
+python3 -m pip install --user uv
+```
+
+Ensure `uv` is on PATH (user installs commonly land in `~/.local/bin` or `~/Library/Python/<ver>/bin`):
+
+```bash
+export PATH="$HOME/.local/bin:$HOME/Library/Python/3.9/bin:$PATH"
+uv --version
+```
+
+- [ ] **Step 3: Note the env for the rest of the plan**
+
+The virtualenv itself is created in **Task 0 Step 5** (it needs `backend/pyproject.toml` to exist first). After that, EVERY backend command in this plan runs through the venv:
+
+```bash
+cd backend && .venv/bin/pytest ...      # tests
+cd backend && .venv/bin/python ...       # scripts
+cd backend && .venv/bin/alembic ...      # migrations
+```
+
+Do **not** use the system `python3` for project work if it is < 3.11.
+
+- [ ] **Step 4: Optional services (only needed for deploy/integration, NOT for the TDD unit/integration tests)**
+
+- **Node 20+**: required for the frontend phase (Tasks 19-21, 31). Install via your platform (e.g. `brew install node`, `nvm install 20`, or distro package).
+- **Postgres / Docker**: NOT required to run the test suite (tests use in-memory SQLite). Only needed for Task 3's Postgres re-verification and Task 23's `docker compose`. If unavailable, those steps fall back to SQLite / are deferred — see the notes in those tasks.
+
+> No commit in this task — it only provisions tooling. Versions used during initial build: `uv` 0.11.x provisioning CPython 3.12.
+
+---
+
 ## Phase 0 — Project Scaffolding
 
 ### Task 0: Backend project skeleton + tooling
@@ -169,10 +224,26 @@ FETCH_USER_AGENT=os-news-tracker/0.1 (+internal)
 FETCH_PER_HOST_DELAY_SECONDS=2
 ```
 
-- [ ] **Step 5: Install and verify**
+- [ ] **Step 5: Create the virtualenv and install (uv, Python 3.11+)**
 
-Run: `cd backend && pip install -e ".[dev]"`
-Expected: installs without error.
+Requires the toolchain from Phase P. Create the venv with a 3.11+ interpreter and install the project editable with dev extras:
+
+```bash
+cd backend
+uv venv --python 3.12          # creates backend/.venv with a standalone CPython 3.12
+uv pip install -e ".[dev]"     # installs fastapi, sqlalchemy, scrapling, pytest, etc.
+```
+
+Verify the interpreter and that pytest runs (no tests yet → exit code 5 / "no tests ran" is expected):
+
+```bash
+.venv/bin/python --version     # Python 3.12.x
+.venv/bin/pytest -q            # "no tests ran" at this stage is fine
+```
+
+Expected: install completes without error; `.venv` exists. (`backend/.venv/` is gitignored.)
+
+> Fallback if you must use system pip instead of uv: only works if `python3` is >= 3.11 with pip >= 21.3 — `cd backend && python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"`.
 
 - [ ] **Step 6: Commit**
 
@@ -180,6 +251,8 @@ Expected: installs without error.
 git add backend/pyproject.toml backend/app/__init__.py backend/tests/conftest.py .env.example
 git commit -m "chore: scaffold backend project and tooling"
 ```
+
+(Ensure `backend/.venv/` is ignored — add it to `.gitignore` if not already.)
 
 ---
 

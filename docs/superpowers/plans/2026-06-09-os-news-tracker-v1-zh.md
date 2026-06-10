@@ -95,6 +95,61 @@ os-news-tracker/
 
 ---
 
+## 阶段 P —— 前置：工具链与环境准备
+
+> 在 Task 0 之前**一次性**完成（空白机器尤其需要）。后续所有步骤都假设已有可用的 Python 3.11+ 虚拟环境且依赖已装好，通过 `backend/.venv/bin/...` 调用。
+
+### Task P0：准备工具链
+
+**目标：** 一个 Python **3.11+** 解释器、一个项目虚拟环境，以及（前端阶段需要的）Node **20+**。
+
+- [ ] **步骤 1：先看现有环境**
+
+```bash
+python3 --version            # 需要 >= 3.11
+command -v uv || echo "no uv"
+node --version || echo "no node"   # 前端阶段需要 >= 20
+```
+
+- [ ] **步骤 2：若缺 Python 3.11+，装 uv 并用它提供 Python**
+
+`uv` 是单个静态二进制，能在不动系统 Python 的前提下提供一个独立 CPython。按环境允许的方式任选其一安装：
+
+```bash
+# 方式 A：官方安装脚本（联网 astral.sh）
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# 方式 B：用现有 pip（用户级安装）
+python3 -m pip install --user uv
+```
+
+确保 `uv` 在 PATH 上（用户级安装常落在 `~/.local/bin` 或 `~/Library/Python/<ver>/bin`）：
+
+```bash
+export PATH="$HOME/.local/bin:$HOME/Library/Python/3.9/bin:$PATH"
+uv --version
+```
+
+- [ ] **步骤 3：记住后续命令的运行方式**
+
+虚拟环境本身在 **Task 0 步骤 5** 创建（需要先有 `backend/pyproject.toml`）。之后本计划里所有后端命令都走 venv：
+
+```bash
+cd backend && .venv/bin/pytest ...      # 测试
+cd backend && .venv/bin/python ...       # 脚本
+cd backend && .venv/bin/alembic ...      # 迁移
+```
+
+如果系统 `python3` < 3.11，**不要**用它做项目工作。
+
+- [ ] **步骤 4：可选服务（仅部署/集成需要，TDD 单测/集成测试不需要）**
+
+- **Node 20+**：前端阶段（Task 19-21、31）需要。用平台方式装（`brew install node`、`nvm install 20` 或发行版包）。
+- **Postgres / Docker**：跑测试套件**不需要**（测试用内存 SQLite）。仅 Task 3 的 Postgres 复验、Task 23 的 `docker compose` 需要。没有时这些步骤回退到 SQLite / 推迟——见对应任务的说明。
+
+> 本任务不提交，只准备工具。初次构建所用版本：`uv` 0.11.x 提供 CPython 3.12。
+
+---
+
 ## 阶段 0 —— 项目脚手架
 
 ### Task 0：后端项目骨架 + 工具链
@@ -169,10 +224,26 @@ FETCH_USER_AGENT=os-news-tracker/0.1 (+internal)
 FETCH_PER_HOST_DELAY_SECONDS=2
 ```
 
-- [ ] **步骤 5：安装并验证**
+- [ ] **步骤 5：创建虚拟环境并安装（uv，Python 3.11+）**
 
-运行：`cd backend && pip install -e ".[dev]"`
-预期：安装无错误。
+需要阶段 P 的工具链。用 3.11+ 解释器建 venv，并以 editable + dev extras 安装项目：
+
+```bash
+cd backend
+uv venv --python 3.12          # 在 backend/.venv 建独立 CPython 3.12
+uv pip install -e ".[dev]"     # 安装 fastapi、sqlalchemy、scrapling、pytest 等
+```
+
+验证解释器与 pytest 可跑（此时还没有测试 → 退出码 5 / "no tests ran" 属正常）：
+
+```bash
+.venv/bin/python --version     # Python 3.12.x
+.venv/bin/pytest -q            # 此阶段 "no tests ran" 正常
+```
+
+预期：安装无错误；`.venv` 存在。（`backend/.venv/` 已被 gitignore。）
+
+> 若必须用系统 pip 而非 uv：仅当 `python3` >= 3.11 且 pip >= 21.3 时可行——`cd backend && python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"`。
 
 - [ ] **步骤 6：提交**
 
@@ -180,6 +251,8 @@ FETCH_PER_HOST_DELAY_SECONDS=2
 git add backend/pyproject.toml backend/app/__init__.py backend/tests/conftest.py .env.example
 git commit -m "chore: scaffold backend project and tooling"
 ```
+
+（确保 `backend/.venv/` 被忽略——若没有就加进 `.gitignore`。）
 
 ---
 
