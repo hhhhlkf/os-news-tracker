@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <title>Phoronix</title>
+  <item>
+    <title>Linux 6.9 Released</title>
+    <link>https://phoronix.com/linux-6-9?utm_source=rss</link>
+    <pubDate>Mon, 01 Jun 2026 10:00:00 GMT</pubDate>
+    <description>New kernel with scheduler improvements.</description>
+  </item>
+  <item>
+    <title>Mesa 25.1 Released</title>
+    <link>https://phoronix.com/mesa-25-1</link>
+    <pubDate>Tue, 02 Jun 2026 10:00:00 GMT</pubDate>
+    <description>New Mesa graphics stack.</description>
+  </item>
+</channel></rss>
