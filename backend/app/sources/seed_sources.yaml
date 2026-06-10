@@ -1,0 +1,71 @@
+# --- News stream: RSS ---
+- name: Red Hat Blog
+  type: rss
+  url: https://www.redhat.com/en/rss/blog
+  vendor: redhat
+  stream: news
+  main_category: OS跟踪来源
+  fetch_cron: "0 8 * * *"
+- name: Ubuntu Blog
+  type: rss
+  url: https://ubuntu.com/blog/feed
+  vendor: ubuntu
+  stream: news
+  main_category: OS跟踪来源
+  fetch_cron: "0 8 * * *"
+- name: Phoronix (news)
+  type: rss
+  url: https://www.phoronix.com/rss.php
+  vendor: phoronix
+  stream: news
+  main_category: OS性能发展
+  fetch_cron: "0 */12 * * *"
+- name: LWN headlines
+  type: rss
+  url: https://lwn.net/headlines/rss
+  stream: news
+  main_category: OS性能发展
+  fetch_cron: "0 8 * * *"
+- name: arXiv OS/PF/DC/AR
+  type: rss
+  url: https://rss.arxiv.org/rss/cs.OS+cs.PF+cs.DC+cs.AR
+  stream: news
+  main_category: OS性能发展
+  relevance_filter: true
+  relevance_keywords: "operating system, scheduler, kernel, IO, performance, benchmark, virtualization"
+  fetch_cron: "0 1 * * *"
+
+# --- News stream: fixed page monitoring ---
+- name: RHEL Release Notes
+  type: page_monitor
+  url: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/
+  vendor: redhat
+  stream: news
+  main_category: OS跟踪来源
+  fetch_cron: "0 9 * * *"
+
+# --- Structured stream: API ---
+- name: Red Hat Security Data
+  type: api
+  url: https://access.redhat.com/hydra/rest/securitydata
+  adapter: redhat_securitydata
+  vendor: redhat
+  stream: structured
+  main_category: OS跟踪来源
+  fetch_cron: "0 7 * * *"
+- name: Ubuntu Security Notices
+  type: api
+  url: https://ubuntu.com/security/notices.json
+  adapter: ubuntu_security
+  vendor: ubuntu
+  stream: structured
+  main_category: OS跟踪来源
+  fetch_cron: "0 7 * * *"
+- name: Red Hat Product Life Cycle
+  type: api
+  url: https://access.redhat.com/product-life-cycles/api/v1/
+  adapter: redhat_lifecycle
+  vendor: redhat
+  stream: structured
+  main_category: OS跟踪来源
+  fetch_cron: "0 6 * * 1"
