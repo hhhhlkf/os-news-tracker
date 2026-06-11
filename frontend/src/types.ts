@@ -26,3 +26,49 @@ export interface Facets {
   importance: FacetValue[];
 }
 export interface ItemListResponse { total: number; items: ItemSummary[]; }
+
+export type ManualNewsRunState =
+  | "idle"
+  | "collecting"
+  | "processing"
+  | "stopping"
+  | "completed"
+  | "failed"
+  | "stopped";
+
+export type ManualNewsTimeMode = "relative" | "absolute";
+export type ManualNewsRelativeRange = "24h" | "7d" | "30d";
+
+export interface ManualNewsRunRequest {
+  time_mode: ManualNewsTimeMode;
+  relative_range?: ManualNewsRelativeRange | null;
+  start_at?: string | null;
+  end_at?: string | null;
+  target_count: number;
+}
+
+export interface TimeFilterStats {
+  missing_published_at: number;
+  before_start: number;
+  after_end: number;
+  matched: number;
+}
+
+export interface ManualNewsRunStatus {
+  state: ManualNewsRunState;
+  time_mode: ManualNewsTimeMode | null;
+  relative_range: ManualNewsRelativeRange | null;
+  start_at: string | null;
+  end_at: string | null;
+  target_count: number | null;
+  discovered_count: number;
+  queued_count: number;
+  processed_count: number;
+  saved_count: number;
+  fulfilled: boolean;
+  gap_reason: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  last_error: string | null;
+  time_filter_stats: TimeFilterStats | null;
+}

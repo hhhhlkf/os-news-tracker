@@ -1,0 +1,543 @@
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from pydantic import ValidationError
+
+from app.schemas import ManualNewsRunRequest, ManualNewsRunStatus, RawItem
+
+
+# ── Request schema ──────────────────────────────────────────────────
+
+
+def test_manual_news_run_request_accepts_relative_mode():
+    req = ManualNewsRunRequest(
+        time_mode="relative",
+        relative_range="7d",
+        target_count=50,
+    )
+    assert req.time_mode == "relative"
+    assert req.relative_range == "7d"
+    assert req.target_count == 50
+
+
+def test_manual_news_run_request_requires_absolute_dates():
+    with pytest.raises(ValidationError):
+        ManualNewsRunRequest(
+            time_mode="absolute",
+            target_count=50,
+        )
+
+
+def test_manual_news_run_request_rejects_inverted_absolute_window():
+    with pytest.raises(ValidationError):
+        ManualNewsRunRequest(
+            time_mode="absolute",
+            start_at=datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc),
+            end_at=datetime(2026, 6, 11, 11, 0, 0, tzinfo=timezone.utc),
+            target_count=10,
+        )
+
+
+def test_manual_news_run_request_rejects_naive_absolute_dates():
+    with pytest.raises(ValidationError):
+        ManualNewsRunRequest(
+            time_mode="absolute",
+            start_at=datetime(2026, 6, 11, 0, 0, 0),
+            end_at=datetime(2026, 6, 11, 23, 59, 59),
+            target_count=10,
+        )
+
+
+# ── Controller lifecycle ────────────────────────────────────────────
+
+
+def test_controller_starts_in_collecting_state():
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="24h", target_count=10)
+
+    assert controller.start(req) is True
+    assert controller.status().state == "collecting"
+
+
+def test_controller_rejects_second_start_while_collecting():
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="24h", target_count=10)
+
+    assert controller.start(req) is True
+    assert controller.start(req) is False
+
+
+def test_controller_rejects_start_while_processing():
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="24h", target_count=10)
+
+    controller.start(req)
+    controller.mark_processing()
+
+    assert controller.start(req) is False
+
+
+def test_controller_transitions_collecting_to_processing():
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="24h", target_count=10)
+    controller.start(req)
+
+    controller.mark_processing()
+    assert controller.status().state == "processing"
+
+
+def test_controller_transitions_processing_back_to_collecting():
+    """When a new collection round starts mid-run, state goes back to collecting."""
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="24h", target_count=10)
+    controller.start(req)
+    controller.mark_processing()
+    assert controller.status().state == "processing"
+
+    controller.mark_collecting()
+    assert controller.status().state == "collecting"
+
+
+# ── Candidate filtering / merging ───────────────────────────────────
+
+
+def test_filter_candidates_applies_time_window_only_does_not_truncate():
+    """filter_candidates filters by time, but does NOT slice to target_count."""
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="24h", target_count=2)
+    items = [
+        RawItem(source_id=1, title="newest", url="https://x/1", published_at=now - timedelta(hours=1)),
+        RawItem(source_id=1, title="middle", url="https://x/2", published_at=now - timedelta(hours=2)),
+        RawItem(source_id=1, title="also-recent", url="https://x/3", published_at=now - timedelta(hours=3)),
+        RawItem(source_id=1, title="old", url="https://x/4", published_at=now - timedelta(days=3)),
+    ]
+
+    filtered = controller.filter_candidates(req, items, now=now)
+
+    # All three in-window items should be present (not truncated by target_count=2).
+    assert len(filtered) == 3
+    assert [item.title for item in filtered] == ["newest", "middle", "also-recent"]
+
+
+def test_filter_candidates_excludes_out_of_window():
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="24h", target_count=5)
+    items = [
+        RawItem(source_id=1, title="recent", url="https://x/1", published_at=now - timedelta(hours=1)),
+        RawItem(source_id=1, title="old", url="https://x/2", published_at=now - timedelta(days=3)),
+    ]
+
+    filtered = controller.filter_candidates(req, items, now=now)
+
+    assert [item.title for item in filtered] == ["recent"]
+
+
+def test_filter_candidates_excludes_missing_published_at():
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="24h", target_count=5)
+    items = [
+        RawItem(source_id=1, title="no-date", url="https://x/1", published_at=None),
+        RawItem(source_id=1, title="has-date", url="https://x/2", published_at=now - timedelta(hours=1)),
+    ]
+
+    filtered = controller.filter_candidates(req, items, now=now)
+
+    assert [item.title for item in filtered] == ["has-date"]
+
+
+def test_merge_candidates_dedupes_by_url():
+    """merge_candidates must skip incoming items whose URL is already present."""
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="24h", target_count=10)
+
+    first_batch = [
+        RawItem(source_id=1, title="a1", url="https://x/a1", published_at=now - timedelta(hours=1)),
+        RawItem(source_id=1, title="a2", url="https://x/a2", published_at=now - timedelta(hours=2)),
+    ]
+    second_batch = [
+        RawItem(source_id=2, title="b1", url="https://x/b1", published_at=now - timedelta(minutes=30)),
+        RawItem(source_id=2, title="dup-a1", url="https://x/a1", published_at=now - timedelta(hours=1)),
+    ]
+
+    merged = controller.merge_candidates(req, first_batch, second_batch, now=now)
+
+    # b1 + a1 + a2 = 3; the duplicate a1 URL is skipped.
+    assert len(merged) == 3
+    urls = {item.url for item in merged}
+    assert urls == {"https://x/a1", "https://x/a2", "https://x/b1"}
+
+
+def test_merge_candidates_still_filters_by_time():
+    """Time-filter still applies after dedup."""
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="24h", target_count=10)
+
+    existing = [
+        RawItem(source_id=1, title="recent", url="https://x/r", published_at=now - timedelta(hours=1)),
+    ]
+    incoming = [
+        RawItem(source_id=2, title="old", url="https://x/o", published_at=now - timedelta(days=3)),
+    ]
+
+    merged = controller.merge_candidates(req, existing, incoming, now=now)
+
+    # Only the recent one remains.
+    assert len(merged) == 1
+    assert merged[0].url == "https://x/r"
+
+
+# ── Counter updates ─────────────────────────────────────────────────
+
+
+def test_discovered_and_queued_counters_are_independent():
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="24h", target_count=10)
+    controller.start(req)
+
+    # Simulate: discovered 15 raw items, but only 8 passed time filter + dedup.
+    controller.mark_discovered(15)
+    controller.mark_queued(8)
+
+    status = controller.status()
+    assert status.discovered_count == 15
+    assert status.queued_count == 8
+
+
+# ── Fulfilment ──────────────────────────────────────────────────────
+
+
+def test_fulfilled_true_when_saved_count_meets_target():
+    """fulfilled should be set to True when saved_count >= target_count."""
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="24h", target_count=10)
+    controller.start(req)
+
+    # Simulate: after processing, saved 10 items (meets target).
+    controller.mark_saved(10)
+    controller.set_fulfilled(True)
+    controller.set_gap_reason(None)
+
+    status = controller.status()
+    assert status.saved_count == 10
+    assert status.target_count == 10
+    assert status.fulfilled is True
+    assert status.gap_reason is None
+
+
+def test_fulfilled_false_when_saved_count_short_of_target():
+    """fulfilled must be False when saved_count < target_count, with gap_reason."""
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="24h", target_count=50)
+    controller.start(req)
+
+    # Simulate: only saved 12 items (short of 50).
+    controller.mark_saved(12)
+    controller.set_fulfilled(False)
+    controller.set_gap_reason("入库不足：共新增入库 12 条（目标 50），缺少 38 条")
+
+    status = controller.status()
+    assert status.saved_count == 12
+    assert status.target_count == 50
+    assert status.fulfilled is False
+    assert status.gap_reason == "入库不足：共新增入库 12 条（目标 50），缺少 38 条"
+
+
+def test_fulfilled_is_independent_of_queued_count():
+    """Even if many candidates were queued, fulfilled depends on saved_count."""
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="24h", target_count=5)
+    controller.start(req)
+
+    # Lots of candidates, but only 2 actually saved.
+    controller.mark_queued(100)
+    controller.mark_processed(30)
+    controller.mark_saved(2)
+    controller.set_fulfilled(False)
+    controller.set_gap_reason("入库不足：共新增入库 2 条（目标 5），缺少 3 条")
+
+    status = controller.status()
+    assert status.queued_count == 100
+    assert status.saved_count == 2
+    assert status.fulfilled is False
+
+
+# ── Stop ────────────────────────────────────────────────────────────
+
+
+def test_stop_marks_controller_stopping_until_complete():
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="24h", target_count=10)
+
+    controller.start(req, now=datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc))
+    controller.stop()
+
+    status = controller.status()
+    assert status.state == "stopping"
+    assert controller.should_stop() is True
+
+    controller.complete(state="stopped", now=datetime(2026, 6, 11, 12, 5, 0, tzinfo=timezone.utc))
+    assert controller.status().state == "stopped"
+    assert controller.should_stop() is False
+
+
+def test_status_includes_target_count():
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="7d", target_count=80)
+    controller.start(req)
+
+    status = controller.status()
+    assert status.target_count == 80
+
+
+def test_absolute_mode_preserves_dates_in_status():
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    start = datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 6, 11, 23, 59, 59, tzinfo=timezone.utc)
+    req = ManualNewsRunRequest(
+        time_mode="absolute",
+        start_at=start,
+        end_at=end,
+        target_count=30,
+    )
+    controller.start(req)
+
+    status = controller.status()
+    assert status.time_mode == "absolute"
+    assert status.start_at == start
+    assert status.end_at == end
+    assert status.target_count == 30
+
+
+# ── Time filter stats ────────────────────────────────────────────────
+
+
+def test_time_filter_stats_missing_published_at():
+    """Items with published_at=None must be counted as 'missing_published_at'."""
+    from app.manual_news_run import ManualNewsRunController, TimeFilterStats
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="7d", target_count=10)
+    items = [
+        RawItem(source_id=1, title="no-date", url="https://x/1", published_at=None),
+        RawItem(source_id=1, title="no-date2", url="https://x/2", published_at=None),
+        RawItem(source_id=1, title="has-date", url="https://x/3", published_at=now - timedelta(hours=1)),
+    ]
+
+    _filtered, stats = controller.filter_candidates_with_stats(req, items, now=now)
+    assert stats.missing_published_at == 2
+    assert stats.matched == 1
+    assert stats.before_start == 0
+    assert stats.after_end == 0
+
+
+def test_time_filter_stats_before_start():
+    """Items published before the window start are counted as 'before_start'."""
+    from app.manual_news_run import ManualNewsRunController, TimeFilterStats
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="7d", target_count=10)
+    items = [
+        RawItem(source_id=1, title="old", url="https://x/1", published_at=now - timedelta(days=10)),
+        RawItem(source_id=1, title="recent", url="https://x/2", published_at=now - timedelta(hours=1)),
+    ]
+
+    _filtered, stats = controller.filter_candidates_with_stats(req, items, now=now)
+    assert stats.before_start == 1
+    assert stats.matched == 1
+    assert stats.missing_published_at == 0
+    assert stats.after_end == 0
+
+
+def test_time_filter_stats_after_end_absolute():
+    """In absolute mode, items after end_at are counted as 'after_end'."""
+    from app.manual_news_run import ManualNewsRunController, TimeFilterStats
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    start = datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 6, 10, 0, 0, 0, tzinfo=timezone.utc)
+    req = ManualNewsRunRequest(time_mode="absolute", start_at=start, end_at=end, target_count=10)
+    items = [
+        RawItem(source_id=1, title="in", url="https://x/1", published_at=datetime(2026, 6, 5, 0, 0, 0, tzinfo=timezone.utc)),
+        RawItem(source_id=1, title="after", url="https://x/2", published_at=datetime(2026, 6, 11, 0, 0, 0, tzinfo=timezone.utc)),
+    ]
+
+    _filtered, stats = controller.filter_candidates_with_stats(req, items, now=now)
+    assert stats.after_end == 1
+    assert stats.matched == 1
+
+
+def test_time_filter_stats_all_categories():
+    """A single call exercises all four stat categories."""
+    from app.manual_news_run import ManualNewsRunController, TimeFilterStats
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    start = datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 6, 10, 0, 0, 0, tzinfo=timezone.utc)
+    req = ManualNewsRunRequest(time_mode="absolute", start_at=start, end_at=end, target_count=10)
+    items = [
+        RawItem(source_id=1, title="missing", url="https://x/1", published_at=None),
+        RawItem(source_id=1, title="before", url="https://x/2", published_at=datetime(2026, 5, 20, 0, 0, 0, tzinfo=timezone.utc)),
+        RawItem(source_id=1, title="after", url="https://x/3", published_at=datetime(2026, 6, 15, 0, 0, 0, tzinfo=timezone.utc)),
+        RawItem(source_id=1, title="match1", url="https://x/4", published_at=datetime(2026, 6, 5, 0, 0, 0, tzinfo=timezone.utc)),
+        RawItem(source_id=1, title="match2", url="https://x/5", published_at=datetime(2026, 6, 8, 0, 0, 0, tzinfo=timezone.utc)),
+    ]
+
+    _filtered, stats = controller.filter_candidates_with_stats(req, items, now=now)
+    assert stats.missing_published_at == 1
+    assert stats.before_start == 1
+    assert stats.after_end == 1
+    assert stats.matched == 2
+
+
+# ── Relative vs absolute consistency ─────────────────────────────────
+
+
+def test_relative_7d_and_equivalent_absolute_produce_same_candidates():
+    """Relative 7d and the corresponding absolute UTC window must filter
+    identically when fed the same items and now is fixed."""
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+
+    # Relative: last 7 days → items from 2026-06-04T12:00:00Z onwards
+    rel_req = ManualNewsRunRequest(time_mode="relative", relative_range="7d", target_count=10)
+
+    # Absolute: same window in UTC terms
+    abs_start = now - timedelta(days=7)  # 2026-06-04T12:00:00Z
+    abs_end = now  # 2026-06-11T12:00:00Z
+    abs_req = ManualNewsRunRequest(
+        time_mode="absolute", start_at=abs_start, end_at=abs_end, target_count=10,
+    )
+
+    items = [
+        RawItem(source_id=1, title="too-old", url="https://x/1", published_at=now - timedelta(days=10)),
+        RawItem(source_id=1, title="edge-old", url="https://x/2", published_at=now - timedelta(days=7, hours=1)),
+        RawItem(source_id=1, title="in-window", url="https://x/3", published_at=now - timedelta(days=3)),
+        RawItem(source_id=1, title="in-window-2", url="https://x/4", published_at=now - timedelta(hours=1)),
+        RawItem(source_id=1, title="at-boundary", url="https://x/5", published_at=now - timedelta(days=7)),
+    ]
+
+    rel_filtered = controller.filter_candidates(rel_req, items, now=now)
+    abs_filtered = controller.filter_candidates(abs_req, items, now=now)
+
+    rel_urls = {item.url for item in rel_filtered}
+    abs_urls = {item.url for item in abs_filtered}
+
+    assert rel_urls == abs_urls, (
+        f"Relative matched: {rel_urls}, absolute matched: {abs_urls}"
+    )
+
+
+def test_different_timezone_inputs_produce_same_filter_result():
+    """The same moment expressed in different timezones must produce
+    identical filtering results."""
+    from datetime import timezone as tz_mod
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+
+    # Same instant: 2026-06-04T00:00:00Z == 2026-06-04T08:00:00+08:00
+    start_utc = datetime(2026, 6, 4, 0, 0, 0, tzinfo=timezone.utc)
+    start_cst = datetime(2026, 6, 4, 8, 0, 0, tzinfo=tz_mod(timedelta(hours=8)))
+    end_utc = datetime(2026, 6, 11, 23, 59, 59, tzinfo=timezone.utc)
+    end_cst = datetime(2026, 6, 12, 7, 59, 59, tzinfo=tz_mod(timedelta(hours=8)))
+
+    req_utc = ManualNewsRunRequest(
+        time_mode="absolute", start_at=start_utc, end_at=end_utc, target_count=10,
+    )
+    req_cst = ManualNewsRunRequest(
+        time_mode="absolute", start_at=start_cst, end_at=end_cst, target_count=10,
+    )
+
+    items = [
+        RawItem(source_id=1, title="in", url="https://x/1", published_at=datetime(2026, 6, 5, 0, 0, 0, tzinfo=timezone.utc)),
+        RawItem(source_id=1, title="out", url="https://x/2", published_at=datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc)),
+    ]
+
+    utc_filtered = controller.filter_candidates(req_utc, items, now=now)
+    cst_filtered = controller.filter_candidates(req_cst, items, now=now)
+
+    assert {item.url for item in utc_filtered} == {item.url for item in cst_filtered}
+
+
+def test_published_at_none_not_counted_as_matched():
+    """Items with published_at=None must not be included in matched results."""
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="24h", target_count=10)
+    items = [
+        RawItem(source_id=1, title="no-date", url="https://x/1", published_at=None),
+        RawItem(source_id=1, title="in-window", url="https://x/2", published_at=now - timedelta(hours=1)),
+    ]
+
+    filtered = controller.filter_candidates(req, items, now=now)
+    assert len(filtered) == 1
+    assert filtered[0].url == "https://x/2"
+
+
+# ── Status includes time filter stats ────────────────────────────────
+
+
+def test_status_includes_time_filter_stats():
+    """status() must expose time_filter_stats when available."""
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="7d", target_count=10)
+    controller.start(req)
+
+    controller.set_time_filter_stats(missing_pub=3, before=5, after=0, matched=12)
+
+    status = controller.status()
+    assert status.time_filter_stats is not None
+    assert status.time_filter_stats.missing_published_at == 3
+    assert status.time_filter_stats.before_start == 5
+    assert status.time_filter_stats.after_end == 0
+    assert status.time_filter_stats.matched == 12
