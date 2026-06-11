@@ -26,6 +26,29 @@
 
 #### 1. 环境准备
 
+##### macOS
+
+安装 [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/)（支持 Intel 和 Apple Silicon）：
+
+```bash
+# 方法 A：Homebrew 安装（推荐）
+brew install --cask docker
+
+# 方法 B：手动安装
+# 从 https://www.docker.com/products/docker-desktop/ 下载 .dmg，拖入 Applications 并启动
+```
+
+启动 Docker Desktop 后，打开终端验证：
+
+```bash
+docker --version          # 应 >= 24.x
+docker compose version    # 应 >= 2.x
+```
+
+> **Apple Silicon (M1/M2/M3/M4) 注意事项：** Docker Desktop 默认通过 Rosetta 2 兼容 x86 镜像，本项目使用的基础镜像（python:3.11-slim、node:20-alpine、nginx:alpine、postgres:16）均提供 ARM64 原生支持，无需额外配置。
+
+##### Linux
+
 找一台可以访问外网的 Linux 服务器或虚拟机（CentOS 7+/Ubuntu 20.04+/Debian 11+），然后安装 Docker：
 
 ```bash
@@ -122,16 +145,16 @@ docker compose down -v         # 停止并删除数据库数据（重置）
 
 #### 1. 安装运行环境
 
-| 依赖 | 版本要求 | 安装方式 |
-| --- | --- | --- |
-| Python | 3.11+ | `python.org` 下载安装，或 `yum install python3.11` / `apt install python3.11` |
-| Node.js | 20+ | `nodejs.org` 下载安装，或使用 `nvm` / `fnm` |
-| PostgreSQL | 16（可选） | 开发时默认使用 SQLite 内存数据库，无需安装 |
+| 依赖 | 版本要求 | macOS 安装 | Linux 安装 |
+| --- | --- | --- | --- |
+| Python | 3.11+ | `brew install python@3.11` | `yum install python3.11` / `apt install python3.11` |
+| Node.js | 20+ | `brew install node@20` 或 `fnm install 20` | `nvm install 20` 或包管理器 |
+| PostgreSQL | 16（可选） | 开发时默认使用 SQLite，无需安装 | 同左 |
 
 ```bash
 # 验证安装
-python --version   # 应 >= 3.11
-node --version     # 应 >= 20
+python3 --version   # 应 >= 3.11（macOS 下命令为 python3）
+node --version      # 应 >= 20
 ```
 
 #### 2. 克隆并安装依赖
