@@ -2,108 +2,156 @@
 
 ## Project Overview
 
-技术新闻追踪 Agent（OS News Tracker），自动从多类来源采集技术情报，用 LLM 整理归纳成统一的结构化总结，汇总到可查询的 React 网页上，支持按分类、标签、实体、时间检索。
+An automated OS news intelligence tracker that collects technical news from multiple source types, enriches them with LLM-structured summaries (category, sub-tags, entities, impact), and presents results in a searchable React web UI with facet filtering and time-range retrieval.
 
-**两条数据流：**
-1. **新闻动态流** — RSS + 结构化 API + 固定页面监控 + 关键词搜索 → LLM 结构化摘要（分类、子标签、实体、摘要）
-2. **结构化事实流** — 安全公告/CVE、生命周期/EOL、镜像适配 → 直接解析入库，不走 LLM
+**Two data streams:**
 
-**流水线：** `fetch → normalize → [relevance-filter] → dedup → enrich → store`
+1. **News stream** — RSS + structured APIs + page monitoring + keyword search → LLM structured summary (category, sub-tags, entities, summary)
+2. **Structured facts stream** — Security advisories/CVE, lifecycle/EOL, image releases → parsed directly into DB, no LLM
+
+**Pipeline:** `fetch → normalize → [relevance-filter] → dedup → enrich → store`
 
 ## Tech Stack
 
-| 层 | 技术 |
-|---|------|
-| 后端 | Python 3.11+, FastAPI, SQLAlchemy 2.0 + Alembic, Postgres, APScheduler |
-| 前端 | React 18, Vite, TypeScript, TanStack Query |
-| 采集 | feedparser, Scrapling, httpx |
-| AI/LLM | 可配置的 OpenAI 兼容 client（司内 LLM 网关） |
-| 测试 | pytest, pytest-asyncio, respx |
-| 部署 | Docker Compose |
+| Layer | Technology |
+|-------|-------------|
+| Backend | Python 3.11+, FastAPI, SQLAlchemy 2.0 + Alembic, Postgres, APScheduler |
+| Frontend | React 18, Vite, TypeScript, TanStack Query |
+| Collection | feedparser, Scrapling, httpx |
+| AI/LLM | Configurable OpenAI-compatible client (internal LLM gateway) |
+| Testing | pytest, pytest-asyncio, respx, vitest |
+| Deployment | Docker Compose |
 
 ## Project Structure
 
 ```
 os-news-tracker/
-├── CLAUDE.md                         # This file
+├── CLAUDE.md                              # This file
+├── AGENTS.md                              # Subagent config
+├── README.md
+├── docker-compose.yml                     # Production Docker Compose
+├── docker-compose.dev.yml                 # Development Docker Compose (hot-reload)
 ├── backend/
-│   ├── pyproject.toml                # Python deps (FastAPI, SQLAlchemy, etc.)
-│   ├── alembic.ini                   # DB migrations config
-│   ├── alembic/versions/             # Migration scripts
+│   ├── pyproject.toml                     # Python deps (FastAPI, SQLAlchemy, etc.)
+│   ├── alembic.ini                        # DB migrations config
+│   ├── Dockerfile.dev                     # Dev container
+│   ├── alembic/
+│   │   ├── env.py
+│   │   └── versions/                      # Migration scripts
+│   │       ├── ca363b702936_initial.py
+│   │       └── b8f1a2c3d4e5_add_item_source_unique_constraint.py
 │   ├── app/
 │   │   ├── __init__.py
-│   │   ├── config.py                 # Settings (env-driven, pydantic-settings)
-│   │   ├── db.py                     # SQLAlchemy engine + SessionLocal
-│   │   ├── models.py                 # ORM models (Source, Item, Tag, Entity, etc.)
-│   │   ├── schemas.py                # Pydantic contracts
-│   │   ├── enums.py                  # InfoType, Importance, SourceType, ItemStatus, etc.
-│   │   ├── entry.py                  # App entrypoint (create_app + startup hooks)
-│   │   ├── pipeline.py               # News-stream orchestration
-│   │   ├── scheduler.py              # APScheduler wiring (per-source cron jobs)
-│   │   ├── repository.py             # DB read/write queries
+│   │   ├── config.py                      # Settings (env-driven, pydantic-settings)
+│   │   ├── db.py                          # SQLAlchemy engine + SessionLocal
+│   │   ├── models.py                      # ORM models (Source, Item, Tag, Entity, etc.)
+│   │   ├── schemas.py                     # Pydantic contracts (requests, responses, internal)
+│   │   ├── enums.py                       # InfoType, Importance, SourceType, ItemStatus, etc.
+│   │   ├── entry.py                       # App entrypoint (create_app + startup hooks)
+│   │   ├── pipeline.py                    # News-stream orchestration (fetch→store)
+│   │   ├── manual_news_run.py             # Target-driven manual news run (controller + runner)
+│   │   ├── scheduler.py                   # APScheduler wiring (per-source cron jobs)
+│   │   ├── repository.py                  # DB read/write queries (idempotent writes)
 │   │   ├── api/
-│   │   │   ├── main.py               # FastAPI app factory + CORS
-│   │   │   ├── routes.py             # /items, /items/{id}, /facets
-│   │   │   └── deps.py               # DB session dependency
+│   │   │   ├── main.py                    # FastAPI app factory + CORS
+│   │   │   ├── routes.py                  # /items, /items/{id}, /facets, /news-run
+│   │   │   └── deps.py                    # DB session dependency
 │   │   ├── sources/
-│   │   │   ├── registry.py           # Source registry (seed YAML → DB, idempotent)
-│   │   │   └── seed_sources.yaml     # Initial source definitions
+│   │   │   ├── registry.py                # Source registry (seed YAML → DB, idempotent)
+│   │   │   └── seed_sources.yaml          # Initial source definitions
 │   │   ├── fetchers/
-│   │   │   ├── base.py               # Fetcher protocol + FetchResult
-│   │   │   ├── rss.py                # RssFetcher
-│   │   │   ├── page_monitor.py       # PageMonitorFetcher
-│   │   │   ├── search.py             # SearchFetcher (keyword-based)
-│   │   │   └── api.py                # ApiFetcher (structured stream)
+│   │   │   ├── base.py                    # Fetcher protocol + FetchResult
+│   │   │   ├── rss.py                     # RssFetcher
+│   │   │   ├── page_monitor.py            # PageMonitorFetcher
+│   │   │   ├── search.py                  # SearchFetcher (keyword-based)
+│   │   │   └── api.py                     # ApiFetcher (structured stream)
 │   │   ├── extract/
-│   │   │   ├── base.py               # ContentExtractor protocol
-│   │   │   └── scrapling_extractor.py
+│   │   │   ├── base.py                    # ContentExtractor protocol
+│   │   │   └── scrapling_extractor.py     # Scrapling-based extractor (default)
 │   │   ├── search/
-│   │   │   ├── base.py               # SearchProvider protocol
-│   │   │   └── internal_gateway.py   # Placeholder impl
+│   │   │   ├── base.py                    # SearchProvider protocol
+│   │   │   └── internal_gateway.py        # Placeholder impl
 │   │   ├── processing/
-│   │   │   ├── normalizer.py         # RawItem → NormalizedItem (pure)
-│   │   │   ├── dedup.py              # url_hash + simhash + near-dup
-│   │   │   ├── relevance.py          # LLM relevance gate for search hits
-│   │   │   └── enricher.py           # LLM enrich → EnrichedFields
+│   │   │   ├── normalizer.py              # RawItem → NormalizedItem (pure)
+│   │   │   ├── dedup.py                   # url_hash + simhash + near-dup
+│   │   │   ├── relevance.py               # LLM relevance gate for search hits
+│   │   │   └── enricher.py                # LLM enrich → EnrichedFields
 │   │   ├── structured/
-│   │   │   ├── schemas.py            # AdvisoryRecord, LifecycleRecord, etc.
-│   │   │   ├── repository.py         # Idempotent upsert for structured data
-│   │   │   ├── pipeline.py           # Structured stream run path
+│   │   │   ├── schemas.py                 # AdvisoryRecord, LifecycleRecord, etc.
+│   │   │   ├── repository.py              # Idempotent upsert for structured data
+│   │   │   ├── pipeline.py                # Structured stream run path
 │   │   │   └── adapters/
-│   │   │       ├── base.py           # SourceAdapter protocol + registry
+│   │   │       ├── base.py                # SourceAdapter protocol + registry
 │   │   │       └── ubuntu_security.py
 │   │   └── llm/
-│   │       └── client.py             # OpenAI-compatible client + cache
+│   │       └── client.py                  # OpenAI-compatible client + cache
 │   └── tests/
 │       ├── conftest.py
-│       ├── fixtures/                 # Saved RSS/HTML samples + LLM responses
-│       ├── unit/                     # Unit tests (pure logic, fetchers, etc.)
-│       └── integration/              # Integration tests
+│       ├── fixtures/                      # Saved RSS/HTML samples + LLM responses
+│       ├── unit/
+│       │   ├── test_config.py
+│       │   ├── test_dedup.py
+│       │   ├── test_enricher.py
+│       │   ├── test_entry_import.py
+│       │   ├── test_extract.py
+│       │   ├── test_llm_client.py
+│       │   ├── test_manual_news_run.py    # Time filter stats, consistency, timezone safety
+│       │   ├── test_models.py
+│       │   ├── test_normalizer.py
+│       │   ├── test_page_monitor.py
+│       │   ├── test_rss_fetcher.py
+│       │   ├── test_scheduler.py
+│       │   ├── test_schemas.py
+│       │   ├── test_search_fetcher.py
+│       │   ├── test_search_provider.py
+│       │   └── test_source_link_dedup.py  # Idempotent merge_source_link, save_enriched
+│       └── integration/
+│           ├── test_api.py
+│           ├── test_api_source_dedup.py   # API-level source link dedup + order stability
+│           ├── test_pipeline.py
+│           ├── test_registry.py
+│           └── test_repository.py
 ├── frontend/
 │   ├── package.json
 │   ├── vite.config.ts
+│   ├── tsconfig.json / tsconfig.app.json / tsconfig.node.json
 │   ├── index.html
+│   ├── Dockerfile.dev                     # Dev container
 │   └── src/
 │       ├── main.tsx
 │       ├── App.tsx
-│       ├── types.ts                  # ItemSummary, ItemDetail, Facets, etc.
+│       ├── App.css
+│       ├── index.css
+│       ├── types.ts                       # ItemSummary, ItemDetail, Facets, TimeFilterStats, etc.
+│       ├── vite-env.d.ts
+│       ├── demoData.ts                    # Demo/offline fallback data
 │       ├── api/
-│       │   └── client.ts             # fetchItems, fetchItemDetail, fetchFacets + ApiError
+│       │   └── client.ts                  # fetchItems, fetchItemDetail, fetchFacets + ApiError
 │       ├── components/
-│       │   ├── ItemList.tsx          # Paginated list with loading/empty/error states
-│       │   ├── ItemCard.tsx          # Clickable list row (badges + title + date)
-│       │   ├── ItemDetail.tsx        # Slide-out detail panel (7 sections)
-│       │   ├── FacetSidebar.tsx      # Facet filter sidebar (3 groups: category/type/importance)
-│       │   ├── ImportanceBadge.tsx   # Color-coded badge: 高=red, 中=yellow, 低=gray
-│       │   └── InfoTypeBadge.tsx     # Neutral outlined badge
+│       │   ├── ItemList.tsx               # Paginated list with loading/empty/error states
+│       │   ├── ItemCard.tsx               # Clickable list row (badges + title + date)
+│       │   ├── ItemDetail.tsx             # Slide-out detail panel (7 sections + deduped source links)
+│       │   ├── FacetSidebar.tsx           # Facet filter sidebar (3 groups: category/type/importance)
+│       │   ├── ImportanceBadge.tsx        # Color-coded badge: high=red, medium=yellow, low=gray
+│       │   ├── InfoTypeBadge.tsx          # Neutral outlined badge
+│       │   ├── NewsRunControl.tsx         # Manual news run control panel (start/stop, time range, stats)
+│       │   └── TimeRangePicker.tsx        # Relative vs absolute time range picker
 │       └── pages/
-│           └── HomePage.tsx          # Top-level layout (search + sidebar + list + overlay)
+│           ├── HomePage.tsx               # Top-level layout (search + sidebar + list + overlay + run control)
+│           ├── homeData.ts                # Demo/live data mode resolution + filtering
+│           ├── homeData.test.ts           # Tests for demo data mode
+│           └── newsRunControl.test.ts     # Tests for NewsRunControl helpers
 └── docs/
+    ├── code-review-reference.md
     └── superpowers/
+        ├── README.md
         ├── specs/
-        │   └── 2026-06-09-os-news-tracker-design.md  # Design doc (V1/MVP scope)
+        │   ├── 2026-06-09-os-news-tracker-design.md          # Original V1 design doc
+        │   └── 2026-06-11-manual-news-run-control-design.md  # Manual news run control design
         └── plans/
-            └── 2026-06-09-os-news-tracker-v1.md      # Implementation plan (all tasks)
+            ├── 2026-06-09-os-news-tracker-v1.md              # Implementation plan
+            ├── 2026-06-09-os-news-tracker-v1-zh.md           # Implementation plan (Chinese)
+            └── 2026-06-11-manual-news-run-control.md         # Manual news run control plan
 ```
 
 ## Common Commands
@@ -140,63 +188,79 @@ npm ci
 # Dev server
 npm run dev
 
+# Run tests
+npx vitest run
+
 # Type-check + build
 npm run build
 ```
 
 ## Development Workflow
 
-本项目使用 **Subagent-Driven Development (SDD)** 流程：
+This project uses **Subagent-Driven Development (SDD)**:
 
-1. **实现阶段** — 为每个 Task 派发独立 implementer subagent（完整 task spec + 上下文）
-2. **规范审查** — Spec compliance reviewer 逐行验证实现与计划一致
-3. **代码质量审查** — Code quality reviewer 检查架构、错误处理、类型安全、测试
-4. **修复循环** — 审查发现的问题由 implementer 修复后重新审查
+1. **Implementation** — Each task gets an independent implementer subagent (full task spec + context)
+2. **Spec Review** — Spec compliance reviewer verifies implementation matches the plan line-by-line
+3. **Code Quality Review** — Code quality reviewer checks architecture, error handling, type safety, tests
+4. **Fix Loop** — Issues found during review are fixed by the implementer and re-reviewed
 
-**关键规则：**
-- 每个 Task 一个 commit（通过 `git commit --amend` 修复后迭代）
-- 规范审查必须通过后才进行代码质量审查
-- 纯逻辑（normalizer, dedup）隔离单元测试，无 I/O 依赖
-- Fetchers/extractors/search 均基于 Protocol，可插拔、可独立测试
-- 遵循 TDD：先写失败测试 → 最小实现 → 验证通过
+**Key rules:**
+
+- One commit per task (iterate via `git commit --amend`)
+- Spec review must pass before code quality review begins
+- Pure logic (normalizer, dedup) uses isolated unit tests with no I/O dependencies
+- Fetchers/extractors/search are all Protocol-based, pluggable and independently testable
+- Follow TDD: write failing tests first → minimal implementation → verify pass
 
 ## Code Conventions
 
-### Python（后端）
-- **类型注解：** 所有函数签名使用完整类型注解
-- **Pydantic v2：** 数据契约使用 `pydantic.BaseModel`，配置使用 `pydantic-settings`
-- **SQLAlchemy 2.0：** 使用 `Mapped` + `mapped_column` 声明式映射
-- **Protocols：** 可插拔组件（Fetcher, ContentExtractor, SearchProvider, SourceAdapter）均定义为 Protocol 类，不依赖具体实现
-- **纯函数：** normalizer、dedup 为纯函数，无副作用，易测试
-- **错误处理：** 使用 `try/finally` 确保资源释放（如 DB session）
-- **日志：** 使用 `logging.getLogger(__name__)` 模块级 logger
-- **环境变量：** 配置通过 `ENABLE_SCHEDULER` 等环境变量控制行为
+### Python (Backend)
 
-### TypeScript / React（前端）
-- **内联样式：** 所有组件使用 inline `style` props（无 CSS modules，无 Tailwind）
-- **@tanstack/react-query：** 数据获取使用 `useQuery`（`queryKey` + `queryFn`）
-- **ApiError 模式：** `api/client.ts` 导出 `ApiError` 类（含 HTTP status）；错误处理使用 `instanceof ApiError`
-- **条件渲染：** null 守卫（`&&`），空数组守卫（`.length > 0`），nullable 字段的 truthy 检查
-- **类型安全：** 使用 `keyof Facets` 进行类型安全的分面组迭代
-- **Slide-out overlay：** 固定定位详情面板，背景点击关闭，`stopPropagation` 防止面板内点击关闭
+- **Type annotations:** Full type annotations on all function signatures
+- **Pydantic v2:** Data contracts use `pydantic.BaseModel`; config uses `pydantic-settings`
+- **SQLAlchemy 2.0:** Use `Mapped` + `mapped_column` declarative mapping
+- **Protocols:** Pluggable components (Fetcher, ContentExtractor, SearchProvider, SourceAdapter) defined as Protocol classes — no concrete dependencies
+- **Pure functions:** normalizer, dedup are pure functions with no side effects, easy to test
+- **Error handling:** Use `try/finally` to ensure resource release (e.g., DB sessions)
+- **Logging:** Module-level logger via `logging.getLogger(__name__)`
+- **Environment variables:** Configuration controlled via `ENABLE_SCHEDULER`, `DATABASE_URL`, etc.
+- **UTC datetime:** All datetime values are UTC-aware. `_as_utc()` helper converts naive→UTC (assumed) and aware→UTC (converted). Frontend sends explicit `Z` suffix.
+- **Idempotent writes:** Junction-table inserts use `_add_source_link_if_new()` pattern — check existence before insert, return bool. All junction writes (`merge_source_link`, `save_enriched`) are safe to call repeatedly.
+- **Thread safety:** `ManualNewsRunController` uses `threading.Lock` protecting `_RuntimeState`; cooperative shutdown via `should_stop()`.
+
+### TypeScript / React (Frontend)
+
+- **Inline styles:** All components use inline `style` props (no CSS modules, no Tailwind)
+- **@tanstack/react-query:** Data fetching uses `useQuery` (`queryKey` + `queryFn`); 2s polling during active run states
+- **ApiError pattern:** `api/client.ts` exports `ApiError` class (with HTTP status); error handling uses `instanceof ApiError`
+- **Conditional rendering:** null guards (`&&`), empty array guards (`.length > 0`), truthy checks on nullable fields
+- **Type safety:** `keyof Facets` for type-safe facet group iteration
+- **Slide-out overlay:** Fixed-position detail panel, background click to close, `stopPropagation` prevents close on panel click
+- **UTC time:** `toAbsoluteDateTime()` emits explicit UTC ISO-8601 strings (`${date}T${time}Z`) — never uses `new Date()` with local-time strings
+- **Defense-in-depth:** Frontend `Map`-based dedup on `source_links` as fallback (primary fix is in backend)
 
 ## Architecture Decisions
 
-| 决策 | 结论 |
-|------|------|
-| 编排方式 | **确定性流水线 + 局部 LLM**（非自主 Agent 循环） |
-| 采集源 | 4 类 Fetcher：`rss` / `api` / `page_monitor` / `search` |
-| 提取引擎 | Scrapling 默认 + 可插拔接口（Firecrawl 后续可选） |
-| 去重策略 | url_hash + simhash + 近重复匹配 |
-| 搜索 | 优先司内联网能力，接口可插拔 |
-| V1 范围 | 采集 + 两条流处理 + 可查询网页；不含订阅、推送、管理后台 |
-| 部署 | 公司内网，可正常访问外网 |
+| Decision | Conclusion |
+|----------|------------|
+| Orchestration | **Deterministic pipeline + localized LLM** (not autonomous agent loops) |
+| Collection sources | 4 Fetcher types: `rss` / `api` / `page_monitor` / `search` |
+| Extraction engine | Scrapling default + pluggable interface (Firecrawl as future option) |
+| Dedup strategy | url_hash + simhash + near-duplicate matching |
+| Search | Internal search capability preferred; interface is pluggable |
+| Manual news run | Target-driven, two-phase (collect→process) loop with up to 3 expansion rounds on search-type sources; thread-safe singleton controller |
+| Time semantics | All times UTC. `_as_utc()` backend, explicit `Z` suffix frontend. Relative ranges are open-ended (no upper bound); absolute ranges are bounded both sides |
+| Observability | `TimeFilterStats` (missing_published_at, before_start, after_end, matched) tallied per-source during collection, exposed in status, logs, and gap_reason |
+| Source link dedup | `UniqueConstraint(item_id, source_id, url)` on `item_sources` + `_add_source_link_if_new()` idempotent writes + API-level dedup + frontend fallback |
+| V1 scope | Collection + two-stream processing + searchable web UI; no subscriptions, push notifications, or admin backend |
+| Deployment | Internal network, normal external internet access |
 
 ## Reference URLs
 
-### 发行版参考
-| 发行版 | 链接 |
-|--------|------|
+### Distribution References
+
+| Distribution | Link |
+|-------------|------|
 | Fedora | https://src.fedoraproject.org/ |
 | SUSE | https://build.opensuse.org/project/show/openSUSE:Factory |
 | Debian | https://salsa.debian.org/public · https://www.debian.org/distrib/packages |
@@ -205,16 +269,19 @@ npm run build
 | Rocky Linux | https://git.rockylinux.org/staging/rpms |
 | OpenCloudOS | https://git.opencloudos.tech/sources-stream/ |
 
-### 安全相关
-- Red Hat CVE: https://access.redhat.com/security/cve/
-- NVD 漏洞库: https://nvd.nist.gov/vuln/detail/
+### Security
 
-### Koji / 构建系统
-- Fedora Koji: https://koji.fedoraproject.org/koji/
-- CentOS Koji: https://koji.mbox.centos.org/koji/
-- CentOS Stream Koji: https://kojihub.stream.centos.org/koji/
-- OpenCloudOS Koji: https://build.opencloudos.tech/koji/index
+- Red Hat CVE: <https://access.redhat.com/security/cve/>
+- NVD: <https://nvd.nist.gov/vuln/detail/>
 
-### 生命周期
-- Red Hat 生命周期: https://access.redhat.com/support/policy/updates/errata/
-- RHEL9 ABI 兼容性: https://access.redhat.com/articles/rhel9-abi-compatibility
+### Koji / Build Systems
+
+- Fedora Koji: <https://koji.fedoraproject.org/koji/>
+- CentOS Koji: <https://koji.mbox.centos.org/koji/>
+- CentOS Stream Koji: <https://kojihub.stream.centos.org/koji/>
+- OpenCloudOS Koji: <https://build.opencloudos.tech/koji/index>
+
+### Lifecycle
+
+- Red Hat Lifecycle: <https://access.redhat.com/support/policy/updates/errata/>
+- RHEL9 ABI Compatibility: <https://access.redhat.com/articles/rhel9-abi-compatibility>
