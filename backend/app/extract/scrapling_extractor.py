@@ -38,7 +38,7 @@ class _TextExtractor(HTMLParser):
 def _default_fetcher():
     from scrapling.fetchers import Fetcher
 
-    return Fetcher
+    return Fetcher()
 
 
 class ScraplingExtractor(ContentExtractor):
@@ -46,7 +46,12 @@ class ScraplingExtractor(ContentExtractor):
         self._fetcher = fetcher or _default_fetcher()
 
     def extract(self, url: str) -> ExtractedDoc:
-        page = self._fetcher.fetch(url)
+        if hasattr(self._fetcher, "fetch"):
+            page = self._fetcher.fetch(url)
+        elif hasattr(self._fetcher, "get"):
+            page = self._fetcher.get(url)
+        else:
+            raise AttributeError("configured fetcher must expose fetch() or get()")
         html = getattr(page, "html_content", None) or getattr(page, "body", "") or ""
         parser = _TextExtractor()
         parser.feed(html)

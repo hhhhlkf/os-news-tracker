@@ -3,7 +3,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.manual_news_run import (
+    get_manual_news_run_status,
+    start_manual_news_run,
+    stop_manual_news_run,
+)
 from app.models import Item, ItemSource
+from app.schemas import ManualNewsRunRequest
 
 router = APIRouter()
 
@@ -75,3 +81,20 @@ def item_detail(item_id: int, db: Session = Depends(get_db)):
         "entities": [{"type": entity.type, "name": entity.name} for entity in item.entities],
         "source_links": [{"source_id": source.source_id, "url": source.url} for source in sources],
     }
+
+
+@router.get("/news-run")
+def get_news_run():
+    return get_manual_news_run_status()
+
+
+@router.post("/news-run/start")
+def start_news_run(request: ManualNewsRunRequest):
+    if not start_manual_news_run(request):
+        raise HTTPException(status_code=409, detail="manual news run already active")
+    return get_manual_news_run_status()
+
+
+@router.post("/news-run/stop")
+def stop_news_run():
+    return stop_manual_news_run()

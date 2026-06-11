@@ -9,7 +9,7 @@ from app.api.main import create_app
 from app.enums import Importance, InfoType, SourceType
 from app.models import Base, Source
 from app.repository import Repository
-from app.schemas import EnrichedFields, EntityRef, NormalizedItem
+from app.schemas import EnrichedFields, EntityRef, ManualNewsRunStatus, NormalizedItem
 
 
 @pytest.fixture
@@ -84,3 +84,57 @@ def test_item_detail(client):
     detail = client.get(f"/items/{item_id}").json()
     assert detail["summary"] == "s"
     assert detail["entities"][0]["name"] == "Linux"
+
+
+def test_get_news_run_status(client, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.routes.get_manual_news_run_status",
+        lambda: ManualNewsRunStatus(state="idle"),
+    )
+
+    resp = client.get("/news-run")
+
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "idle"
+
+
+def test_start_news_run_returns_conflict_when_already_active(client, monkeypatch):
+    monkeypatch.setattr("app.api.routes.start_manual_news_run", lambda request: False)
+
+    resp = client.post(
+        "/news-run/start",
+        json={"time_mode": "relative", "relative_range": "7d", "target_count": 50},
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "manual news run already active"
+
+
+def test_stop_news_run_returns_latest_status(client, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.routes.stop_manual_news_run",
+        lambda: ManualNewsRunStatus(state="stopping"),
+    )
+
+    resp = client.post("/news-run/stop")
+
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "stopping"
+
+
+def test_start_news_run_accepts_target_count(client, monkeypatch):
+    called_with = {}
+
+    def _fake_start(request):
+        called_with["request"] = request
+        return True
+
+    monkeypatch.setattr("app.api.routes.start_manual_news_run", _fake_start)
+
+    resp = client.post(
+        "/news-run/start",
+        json={"time_mode": "relative", "relative_range": "7d", "target_count": 100},
+    )
+
+    assert resp.status_code == 200
+    assert called_with["request"].target_count == 100

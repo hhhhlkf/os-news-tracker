@@ -60,3 +60,36 @@ def test_pipeline_end_to_end_dedups_on_rerun(session):
     n2 = pipeline.run_source(src, fetcher=_StubFetcher())
     assert n1 == 1
     assert n2 == 0
+
+
+class _InternalOnlyCategoryEnricher:
+    def enrich(self, item):
+        return EnrichedFields(
+            title_tldr="Linux 6.9",
+            summary="s",
+            key_points=["a"],
+            info_type=InfoType.RELEASE,
+            importance=Importance.HIGH,
+            why_it_matters="w",
+            main_category="司内AI工具",
+            sub_tags=["kernel"],
+            entities=[EntityRef(type="os", name="Linux")],
+            confidence=0.9,
+        )
+
+
+def test_pipeline_blocks_internal_ai_category_for_non_internal_sources(session):
+    src = session.get(Source, 1)
+    src.main_category = "OS性能发展"
+    session.commit()
+
+    pipeline = Pipeline(
+        session=session,
+        extractor=_StubExtractor(),
+        enricher=_InternalOnlyCategoryEnricher(),
+    )
+
+    assert pipeline.run_source(src, fetcher=_StubFetcher()) == 1
+
+    stored = session.query(Source).get(1).items[0]
+    assert stored.main_category == "OS性能发展"

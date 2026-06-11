@@ -18,7 +18,11 @@ class RssFetcher(Fetcher):
                 try:
                     published = dateparser.parse(entry["published"])
                     if published.tzinfo:
-                        published = published.astimezone(timezone.utc).replace(tzinfo=None)
+                        published = published.astimezone(timezone.utc)
+                    else:
+                        # Assume UTC when the source omits a timezone,
+                        # keeping the datetime aware so comparisons are safe.
+                        published = published.replace(tzinfo=timezone.utc)
                 except (TypeError, ValueError):
                     published = None
             items.append(
