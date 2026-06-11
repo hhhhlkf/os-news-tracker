@@ -1,29 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchItemDetail, ApiError } from "../api/client";
+import type { ItemDetail as ItemDetailRecord } from "../types";
 import { ImportanceBadge } from "./ImportanceBadge";
 import { InfoTypeBadge } from "./InfoTypeBadge";
 
-export function ItemDetail({ id }: { id: number }) {
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["item", id],
-    queryFn: () => fetchItemDetail(id),
-  });
-
-  if (isLoading) return <div>加载中…</div>;
-
-  if (error) {
-    return (
-      <div style={{ color: "#b42318", padding: 16 }}>
-        加载失败: {error instanceof ApiError ? `${error.message}` : "未知错误"}
-      </div>
-    );
-  }
-
-  if (!data) return <div>暂无数据</div>;
-
+function ItemDetailBody({ data }: { data: ItemDetailRecord }) {
   return (
-    <div style={{ padding: 16 }}>
-      <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+    <div style={{ padding: 20 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
         <ImportanceBadge value={data.importance} />
         <InfoTypeBadge value={data.info_type} />
         <span style={{ fontSize: 12, color: "#667085" }}>{data.main_category}</span>
@@ -86,4 +70,31 @@ export function ItemDetail({ id }: { id: number }) {
       )}
     </div>
   );
+}
+
+export function ItemDetail({ id, item }: { id?: number; item?: ItemDetailRecord }) {
+  if (item) return <ItemDetailBody data={item} />;
+
+  if (id === undefined) {
+    return <div style={{ padding: 16, color: "#667085" }}>请选择一条内容查看详情</div>;
+  }
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["item", id],
+    queryFn: () => fetchItemDetail(id),
+  });
+
+  if (isLoading) return <div>加载中…</div>;
+
+  if (error) {
+    return (
+      <div style={{ color: "#b42318", padding: 16 }}>
+        加载失败: {error instanceof ApiError ? `${error.message}` : "未知错误"}
+      </div>
+    );
+  }
+
+  if (!data) return <div>暂无数据</div>;
+
+  return <ItemDetailBody data={data} />;
 }

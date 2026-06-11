@@ -1,4 +1,10 @@
-import type { ItemListResponse, ItemDetail, Facets } from "../types";
+import type {
+  ItemListResponse,
+  ItemDetail,
+  Facets,
+  ManualNewsRunRequest,
+  ManualNewsRunStatus,
+} from "../types";
 
 const BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
@@ -39,5 +45,29 @@ export async function fetchItemDetail(id: number): Promise<ItemDetail> {
 export async function fetchFacets(): Promise<Facets> {
   const r = await fetch(`${BASE}/facets`);
   if (!r.ok) throw new ApiError(r.status, `failed to load facets (HTTP ${r.status})`);
+  return r.json();
+}
+
+export async function fetchNewsRunStatus(): Promise<ManualNewsRunStatus> {
+  const r = await fetch(`${BASE}/news-run`);
+  if (!r.ok) throw new ApiError(r.status, `failed to load news run status (HTTP ${r.status})`);
+  return r.json();
+}
+
+export async function startNewsRun(request: ManualNewsRunRequest): Promise<ManualNewsRunStatus> {
+  const r = await fetch(`${BASE}/news-run/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  if (!r.ok) throw new ApiError(r.status, `failed to start news run (HTTP ${r.status})`);
+  return r.json();
+}
+
+export async function stopNewsRun(): Promise<ManualNewsRunStatus> {
+  const r = await fetch(`${BASE}/news-run/stop`, {
+    method: "POST",
+  });
+  if (!r.ok) throw new ApiError(r.status, `failed to stop news run (HTTP ${r.status})`);
   return r.json();
 }
