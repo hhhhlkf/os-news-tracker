@@ -6,6 +6,7 @@ export interface ItemSummary {
   info_type: string | null;
   importance: string | null;
   published_at: string | null;
+  fetched_at: string | null;
   url: string;
 }
 

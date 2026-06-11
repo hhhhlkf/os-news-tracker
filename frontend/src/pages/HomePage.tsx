@@ -12,7 +12,7 @@ import type { ManualNewsRunRequest, ManualNewsRunState } from "../types";
 const PAGE_SIZE = 10;
 
 export function HomePage() {
-  const [filters, setFilters] = useState<Record<string, string>>({ q: "" });
+  const [filters, setFilters] = useState<Record<string, string>>({ q: "", sort_by: "published_at", sort_dir: "desc" });
   const [page, setPage] = useState(1);
   const [openId, setOpenId] = useState<number | null>(null);
   const [runActionError, setRunActionError] = useState<string | null>(null);
@@ -72,7 +72,7 @@ export function HomePage() {
   const selectedLiveItemId = mode === "live" ? openId ?? undefined : undefined;
 
   const hasLiveEmptyState = mode === "live" && listData?.total === 0;
-  const activeFilterCount = Object.entries(filters).filter(([, value]) => value).length;
+  const activeFilterCount = Object.entries(filters).filter(([key, value]) => value && key !== "sort_by" && key !== "sort_dir").length;
 
   useEffect(() => {
     const nextState = newsRunQuery.data?.state ?? null;
@@ -214,10 +214,31 @@ export function HomePage() {
                 fontSize: 14,
               }}
             />
+            <select
+              value={`${filters.sort_by ?? "published_at"}:${filters.sort_dir ?? "desc"}`}
+              onChange={(e) => {
+                const [sort_by, sort_dir] = e.target.value.split(":") as ["published_at" | "fetched_at", "desc" | "asc"];
+                setPage(1);
+                setFilters((f) => ({ ...f, sort_by, sort_dir }));
+              }}
+              style={{
+                border: "1px solid #d0d5dd",
+                borderRadius: 8,
+                padding: "12px 14px",
+                fontSize: 14,
+                background: "#fff",
+                color: "#344054",
+              }}
+            >
+              <option value="published_at:desc">发布时间 最新优先</option>
+              <option value="published_at:asc">发布时间 最早优先</option>
+              <option value="fetched_at:desc">入库时间 最新优先</option>
+              <option value="fetched_at:asc">入库时间 最早优先</option>
+            </select>
             <button
               onClick={() => {
                 setPage(1);
-                setFilters({ q: "" });
+                setFilters({ q: "", sort_by: "published_at", sort_dir: "desc" });
                 setOpenId(null);
               }}
               style={{
@@ -263,6 +284,7 @@ export function HomePage() {
               pageSize={PAGE_SIZE}
               isLoading={mode === "live" && itemsQuery.isLoading}
               emptyMessage="没有匹配的条目，试试放宽搜索词或取消筛选条件。"
+              sortBy={(filters.sort_by as "published_at" | "fetched_at") ?? "published_at"}
               onOpen={setOpenId}
               onPageChange={setPage}
             />

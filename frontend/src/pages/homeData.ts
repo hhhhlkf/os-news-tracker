@@ -13,10 +13,13 @@ function normalize(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase();
 }
 
+type SortBy = "published_at" | "fetched_at" | undefined;
+type SortDir = "desc" | "asc" | undefined;
+
 export function filterDemoItems(items: ItemDetail[], filters: Record<string, string>): ItemDetail[] {
   const q = normalize(filters.q);
 
-  return items.filter((item) => {
+  const filtered = items.filter((item) => {
     const matchesSearch =
       q.length === 0 ||
       [item.title, item.title_tldr, item.summary, item.main_category, item.info_type]
@@ -29,7 +32,41 @@ export function filterDemoItems(items: ItemDetail[], filters: Record<string, str
     const matchesImportance =
       !filters.importance || item.importance === filters.importance;
 
-    return matchesSearch && matchesCategory && matchesType && matchesImportance;
+    // Time-range filtering on published_at
+    const hasTimeFilter = !!(filters.published_after || filters.published_before);
+    let matchesTimeRange = true;
+    if (hasTimeFilter) {
+      if (!item.published_at) {
+        matchesTimeRange = false; // exclude items with null published_at when time filter is active
+      } else {
+        if (filters.published_after) {
+          if (item.published_at < filters.published_after) {
+            matchesTimeRange = false;
+          }
+        }
+        if (filters.published_before) {
+          // published_before is inclusive: compute next day as upper bound
+          const beforeDate = new Date(filters.published_before + "T00:00:00Z");
+          beforeDate.setDate(beforeDate.getDate() + 1);
+          const upperBound = beforeDate.toISOString();
+          if (item.published_at >= upperBound) {
+            matchesTimeRange = false;
+          }
+        }
+      }
+    }
+
+    return matchesSearch && matchesCategory && matchesType && matchesImportance && matchesTimeRange;
+  });
+
+  const sortBy: SortBy = (filters.sort_by as SortBy) ?? "published_at";
+  const sortDir: SortDir = (filters.sort_dir as SortDir) ?? "desc";
+
+  return [...filtered].sort((a, b) => {
+    const fieldA = sortBy === "fetched_at" ? (a.fetched_at ?? "") : (a.published_at ?? "");
+    const fieldB = sortBy === "fetched_at" ? (b.fetched_at ?? "") : (b.published_at ?? "");
+    const cmp = fieldA < fieldB ? -1 : fieldA > fieldB ? 1 : 0;
+    return sortDir === "asc" ? cmp : -cmp;
   });
 }
 

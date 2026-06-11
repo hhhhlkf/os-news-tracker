@@ -24,6 +24,10 @@ export interface ItemQueryParams {
   q?: string;
   limit?: number | string;
   offset?: number | string;
+  sort_by?: "published_at" | "fetched_at";
+  sort_dir?: "desc" | "asc";
+  published_after?: string;
+  published_before?: string;
 }
 
 export async function fetchItems(params: ItemQueryParams): Promise<ItemListResponse> {

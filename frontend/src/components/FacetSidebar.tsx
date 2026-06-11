@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import type { Facets } from "../types";
 
 interface Props {
@@ -7,7 +8,53 @@ interface Props {
   onSelect: (key: string, value: string) => void;
 }
 
+function daysAgo(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+type TimePreset = "all" | "24h" | "7d" | "30d" | "custom";
+
 export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
+  const [customExpanded, setCustomExpanded] = useState(false);
+
+  const activePreset: TimePreset = useMemo(() => {
+    const after = selected.published_after;
+    const before = selected.published_before;
+    if (!after && !before) return "all";
+    if (after === daysAgo(1) && !before) return "24h";
+    if (after === daysAgo(7) && !before) return "7d";
+    if (after === daysAgo(30) && !before) return "30d";
+    return "custom";
+  }, [selected.published_after, selected.published_before]);
+
+  function handlePresetClick(preset: TimePreset) {
+    if (preset === "all") {
+      onSelect("published_after", "");
+      onSelect("published_before", "");
+      setCustomExpanded(false);
+    } else if (preset === "24h") {
+      onSelect("published_after", daysAgo(1));
+      onSelect("published_before", "");
+      setCustomExpanded(false);
+    } else if (preset === "7d") {
+      onSelect("published_after", daysAgo(7));
+      onSelect("published_before", "");
+      setCustomExpanded(false);
+    } else if (preset === "30d") {
+      onSelect("published_after", daysAgo(30));
+      onSelect("published_before", "");
+      setCustomExpanded(false);
+    } else {
+      // custom — toggle expansion
+      setCustomExpanded((prev) => !prev);
+    }
+  }
+
   if (isLoading) {
     return (
       <aside style={{ width: 260, paddingRight: 20 }}>
@@ -20,6 +67,14 @@ export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
     ["main_category", "主分类"],
     ["info_type", "信息类型"],
     ["importance", "重要度"],
+  ];
+
+  const presets: { key: TimePreset; label: string }[] = [
+    { key: "all", label: "全部" },
+    { key: "24h", label: "24h" },
+    { key: "7d", label: "7天" },
+    { key: "30d", label: "30天" },
+    { key: "custom", label: "自定义" },
   ];
 
   return (
@@ -55,6 +110,76 @@ export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
           ))}
         </section>
       ))}
+
+      {/* ── Published time filter ── */}
+      <section
+        style={{
+          marginBottom: 16,
+          border: "1px solid #d0d5dd",
+          borderRadius: 8,
+          padding: 14,
+          background: "#fff",
+        }}
+      >
+        <div style={{ fontWeight: 600, marginBottom: 10, color: "#101828" }}>发布时间</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: customExpanded ? 12 : 0 }}>
+          {presets.map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => handlePresetClick(key)}
+              style={{
+                border: "1px solid #d0d5dd",
+                borderRadius: 6,
+                padding: "6px 10px",
+                fontSize: 12,
+                cursor: "pointer",
+                background: activePreset === key ? "#eff8ff" : "transparent",
+                color: activePreset === key ? "#175cd3" : "#344054",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {customExpanded && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{ color: "#475467", fontSize: 13 }}>开始日期</label>
+              <input
+                type="date"
+                value={selected.published_after ?? ""}
+                onChange={(e) => onSelect("published_after", e.target.value)}
+                style={{
+                  border: "1px solid #d0d5dd",
+                  borderRadius: 8,
+                  padding: "10px 12px",
+                  fontSize: 14,
+                  color: "#101828",
+                  background: "#fff",
+                  minWidth: 160,
+                }}
+              />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{ color: "#475467", fontSize: 13 }}>结束日期</label>
+              <input
+                type="date"
+                value={selected.published_before ?? ""}
+                onChange={(e) => onSelect("published_before", e.target.value)}
+                style={{
+                  border: "1px solid #d0d5dd",
+                  borderRadius: 8,
+                  padding: "10px 12px",
+                  fontSize: 14,
+                  color: "#101828",
+                  background: "#fff",
+                  minWidth: 160,
+                }}
+              />
+            </div>
+          </div>
+        )}
+      </section>
     </aside>
   );
 }

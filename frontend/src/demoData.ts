@@ -9,6 +9,7 @@ export const demoItems: ItemDetail[] = [
     info_type: "性能数据",
     importance: "高",
     published_at: "2026-06-10T09:00:00Z",
+    fetched_at: "2026-06-10T09:05:00Z",
     url: "https://example.com/kernel-scheduler-update",
     summary: "新一轮调度器优化在 CPU 密集与 IO 密集任务混跑时改善了尾延迟表现。",
     key_points: [
@@ -30,6 +31,7 @@ export const demoItems: ItemDetail[] = [
     info_type: "更新",
     importance: "高",
     published_at: "2026-06-09T05:30:00Z",
+    fetched_at: "2026-06-09T05:35:00Z",
     url: "https://example.com/ubuntu-openssl-advisory",
     summary: "Ubuntu 更新了 OpenSSL 相关安全公告，修复多个影响服务端连接处理的问题。",
     key_points: [
@@ -51,6 +53,7 @@ export const demoItems: ItemDetail[] = [
     info_type: "适配",
     importance: "中",
     published_at: "2026-06-08T03:00:00Z",
+    fetched_at: "2026-06-08T03:05:00Z",
     url: "https://example.com/opencloudos-runtime-compat",
     summary: "新增了容器运行时与若干内核版本组合下的兼容性说明，覆盖常见部署方式。",
     key_points: [
@@ -72,6 +75,7 @@ export const demoItems: ItemDetail[] = [
     info_type: "观点/分析",
     importance: "中",
     published_at: "2026-06-07T11:20:00Z",
+    fetched_at: "2026-06-07T11:25:00Z",
     url: "https://example.com/internal-ai-triage",
     summary: "团队分享了把司内 AI 工具接入 release note 初筛的经验，重点是减少人工扫读时间。",
     key_points: [

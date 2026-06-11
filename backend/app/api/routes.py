@@ -1,3 +1,6 @@
+from datetime import date, datetime, timedelta, timezone
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -13,6 +16,9 @@ from app.schemas import ManualNewsRunRequest
 
 router = APIRouter()
 
+SortBy = Literal["published_at", "fetched_at"]
+SortDir = Literal["desc", "asc"]
+
 
 def _item_summary(item: Item) -> dict:
     return {
@@ -23,6 +29,7 @@ def _item_summary(item: Item) -> dict:
         "info_type": item.info_type,
         "importance": item.importance,
         "published_at": item.published_at.isoformat() if item.published_at else None,
+        "fetched_at": item.fetched_at.isoformat() if item.fetched_at else None,
         "url": item.url,
     }
 
@@ -36,6 +43,10 @@ def list_items(
     q: str | None = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
+    sort_by: SortBy = "published_at",
+    sort_dir: SortDir = "desc",
+    published_after: str | None = None,
+    published_before: str | None = None,
 ):
     stmt = select(Item)
     if main_category:
@@ -47,8 +58,33 @@ def list_items(
     if q:
         like = f"%{q}%"
         stmt = stmt.where((Item.title.ilike(like)) | (Item.summary.ilike(like)))
+
+    # Time-range filters on published_at
+    if published_after is not None:
+        try:
+            after_date = date.fromisoformat(published_after)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"invalid published_after date: {published_after!r}")
+        stmt = stmt.where(Item.published_at >= datetime(after_date.year, after_date.month, after_date.day, tzinfo=timezone.utc))
+
+    if published_before is not None:
+        try:
+            before_date = date.fromisoformat(published_before)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"invalid published_before date: {published_before!r}")
+        before_end = datetime(before_date.year, before_date.month, before_date.day, tzinfo=timezone.utc) + timedelta(days=1)
+        stmt = stmt.where(Item.published_at < before_end)
+
+    sort_col = Item.published_at if sort_by == "published_at" else Item.fetched_at
+    if sort_dir == "desc":
+        order_clause = sort_col.desc()
+    else:
+        order_clause = sort_col.asc()
+    if sort_by == "published_at":
+        order_clause = order_clause.nullslast()
+
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    rows = db.scalars(stmt.order_by(Item.published_at.desc().nullslast()).limit(limit).offset(offset)).all()
+    rows = db.scalars(stmt.order_by(order_clause).limit(limit).offset(offset)).all()
     return {"total": total, "items": [_item_summary(item) for item in rows]}
 
 

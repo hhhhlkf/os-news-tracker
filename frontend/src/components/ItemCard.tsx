@@ -2,7 +2,12 @@ import type { ItemSummary } from "../types";
 import { ImportanceBadge } from "./ImportanceBadge";
 import { InfoTypeBadge } from "./InfoTypeBadge";
 
-export function ItemCard({ item, onClick }: { item: ItemSummary; onClick: () => void }) {
+export function ItemCard({ item, onClick, sortBy }: {
+  item: ItemSummary;
+  onClick: () => void;
+  sortBy?: "published_at" | "fetched_at";
+}) {
+  const isFetchedAt = sortBy === "fetched_at";
   return (
     <button onClick={onClick} style={{
       display: "block", width: "100%", textAlign: "left",
@@ -15,11 +20,18 @@ export function ItemCard({ item, onClick }: { item: ItemSummary; onClick: () => 
         {item.main_category && (
           <span style={{ fontSize: 12, color: "#667085" }}>{item.main_category}</span>
         )}
-        {item.published_at && (
-          <span style={{ fontSize: 12, color: "#98a2b3", marginLeft: "auto" }}>
-            {item.published_at.slice(0, 10)}
-          </span>
-        )}
+        {isFetchedAt
+          ? item.fetched_at && (
+              <span style={{ fontSize: 12, color: "#98a2b3", marginLeft: "auto" }}>
+                入库 {item.fetched_at.slice(0, 10)}
+              </span>
+            )
+          : item.published_at && (
+              <span style={{ fontSize: 12, color: "#98a2b3", marginLeft: "auto" }}>
+                {item.published_at.slice(0, 10)}
+              </span>
+            )
+        }
       </div>
       <div style={{ fontWeight: 600 }}>{item.title_tldr ?? item.title}</div>
     </button>

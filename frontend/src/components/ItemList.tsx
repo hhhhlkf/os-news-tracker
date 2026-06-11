@@ -35,11 +35,12 @@ interface Props {
   pageSize: number;
   isLoading?: boolean;
   emptyMessage?: string;
+  sortBy?: "published_at" | "fetched_at";
   onOpen: (id: number) => void;
   onPageChange: (page: number) => void;
 }
 
-export function ItemList({ items, total, page, pageSize, isLoading, emptyMessage, onOpen, onPageChange }: Props) {
+export function ItemList({ items, total, page, pageSize, isLoading, emptyMessage, sortBy, onOpen, onPageChange }: Props) {
   if (isLoading) {
     return <div style={{ color: "#667085", padding: 20 }}>正在加载条目…</div>;
   }
@@ -68,7 +69,7 @@ export function ItemList({ items, total, page, pageSize, isLoading, emptyMessage
     <div style={{ flex: 1 }}>
       <div style={{ color: "#667085", marginBottom: 10 }}>共 {total} 条</div>
       {items.map((item) => (
-        <ItemCard key={item.id} item={item} onClick={() => onOpen(item.id)} />
+        <ItemCard key={item.id} item={item} onClick={() => onOpen(item.id)} sortBy={sortBy} />
       ))}
       <div style={{
         display: "flex",
