@@ -70,7 +70,18 @@ def item_detail(item_id: int, db: Session = Depends(get_db)):
     item = db.get(Item, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="not found")
-    sources = db.scalars(select(ItemSource).where(ItemSource.item_id == item_id)).all()
+    sources = db.scalars(
+        select(ItemSource)
+        .where(ItemSource.item_id == item_id)
+        .order_by(ItemSource.id)
+    ).all()
+    seen: set[tuple[int, str]] = set()
+    unique_links: list[dict] = []
+    for src in sources:
+        key = (src.source_id, src.url)
+        if key not in seen:
+            seen.add(key)
+            unique_links.append({"source_id": src.source_id, "url": src.url})
     return {
         **_item_summary(item),
         "summary": item.summary,
@@ -79,7 +90,7 @@ def item_detail(item_id: int, db: Session = Depends(get_db)):
         "llm_confidence": item.llm_confidence,
         "sub_tags": [tag.name for tag in item.tags if tag.kind == "sub_tag"],
         "entities": [{"type": entity.type, "name": entity.name} for entity in item.entities],
-        "source_links": [{"source_id": source.source_id, "url": source.url} for source in sources],
+        "source_links": unique_links,
     }
 
 

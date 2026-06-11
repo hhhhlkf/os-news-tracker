@@ -32,6 +32,20 @@ class Repository:
             self._s.add(entity)
         return entity
 
+    def _add_source_link_if_new(self, item_id: int, source_id: int, url: str) -> bool:
+        """Insert an ItemSource row only if the (item_id, source_id, url) triple doesn't exist yet."""
+        exists = self._s.scalar(
+            select(ItemSource.id).where(
+                ItemSource.item_id == item_id,
+                ItemSource.source_id == source_id,
+                ItemSource.url == url,
+            )
+        )
+        if exists is not None:
+            return False
+        self._s.add(ItemSource(item_id=item_id, source_id=source_id, url=url))
+        return True
+
     def save_enriched(self, item: NormalizedItem, fields: EnrichedFields) -> Item:
         db_item = Item(
             source_id=item.source_id,
@@ -58,15 +72,16 @@ class Repository:
             db_item.entities.append(self._get_or_create_entity(entity.type, entity.name))
         self._s.add(db_item)
         self._s.flush()
-        self._s.add(ItemSource(item_id=db_item.id, source_id=item.source_id, url=item.canonical_url))
+        self._add_source_link_if_new(db_item.id, item.source_id, item.canonical_url)
         self._s.commit()
         return db_item
 
     def merge_source_link(self, canonical_url: str, source_id: int, url: str) -> bool:
+        """Link a source+url to an existing item.  Returns True only if a new row was inserted."""
         h = url_hash(canonical_url)
         item_id = self._s.scalar(select(Item.id).where(Item.url_hash == h))
         if item_id is None:
             return False
-        self._s.add(ItemSource(item_id=item_id, source_id=source_id, url=url))
+        added = self._add_source_link_if_new(item_id, source_id, url)
         self._s.commit()
-        return True
+        return added

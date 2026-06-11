@@ -62,8 +62,12 @@ function ItemDetailBody({ data }: { data: ItemDetailRecord }) {
         <section>
           <h4 style={{ color: "#475467" }}>来源链接</h4>
           <ul>
-            {data.source_links.map((s, i) => (
-              <li key={i}><a href={s.url} target="_blank" rel="noreferrer">{s.url}</a></li>
+            {Array.from(
+              new Map(data.source_links.map((s) => [`${s.source_id}:${s.url}`, s])).values(),
+            ).map((s) => (
+              <li key={`${s.source_id}:${s.url}`}>
+                <a href={s.url} target="_blank" rel="noreferrer">{s.url}</a>
+              </li>
             ))}
           </ul>
         </section>

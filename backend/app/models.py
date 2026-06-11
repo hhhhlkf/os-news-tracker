@@ -62,6 +62,9 @@ class ItemEntity(Base):
 
 class ItemSource(Base):
     __tablename__ = "item_sources"
+    __table_args__ = (
+        UniqueConstraint("item_id", "source_id", "url", name="uq_item_source_url"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
     item_id: Mapped[int] = mapped_column(ForeignKey("items.id"))
     source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"))
