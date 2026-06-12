@@ -387,6 +387,11 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
                     _controller.complete(state="stopped")
                     return
 
+                # Re-attach the source to the active session so that
+                # modifications (e.g. last_content_hash, health_status)
+                # are persisted on commit.
+                source = collect_session.merge(source)
+
                 fetcher = build_fetcher(source, extractor, search)
                 try:
                     candidates = fetcher.fetch(source)
