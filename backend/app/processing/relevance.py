@@ -6,8 +6,13 @@ class _Completer(Protocol):
 
 
 _PROMPT = (
-    "判断下面网页内容是否与关键词「{keywords}」相关的技术新闻。"
-    "只回答 true 或 false。\n标题：{title}\n正文片段：{snippet}"
+    "你是操作系统维护团队的情报筛选员。判断以下内容是否值得 OS maintainer 关注。\n"
+    "收录标准：版本发布、安全公告、软件包更新、新技术/工具发布、性能数据、AI agent/LLM 工具链进展。\n"
+    "排除标准：纯社区活动通知、招聘、用户入门教程、市场营销、非技术公告。\n"
+    "关键词：{keywords}\n"
+    "标题：{title}\n"
+    "正文片段：{snippet}\n"
+    "只回答 true 或 false。"
 )
 
 

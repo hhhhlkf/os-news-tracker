@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker
 from app.enums import Importance, InfoType, SourceType
 from app.models import Base, Source
 from app.pipeline import Pipeline
-from app.schemas import EnrichedFields, EntityRef, ExtractedDoc, RawItem
+from app.schemas import EnrichedFields, ExtractedDoc, RawItem
 
 
 @pytest.fixture
@@ -40,15 +40,14 @@ class _StubExtractor:
 class _StubEnricher:
     def enrich(self, item):
         return EnrichedFields(
-            title_tldr="Linux 6.9",
+            title_zh="Linux 6.9 正式发布",
             summary="s",
-            key_points=["a"],
+            tech_highlights=["[内核] 调度器改进"],
             info_type=InfoType.RELEASE,
             importance=Importance.HIGH,
-            why_it_matters="w",
             main_category="OS性能发展",
             sub_tags=["kernel"],
-            entities=[EntityRef(type="os", name="Linux")],
+            keywords=["Linux 6.9"],
             confidence=0.9,
         )
 
@@ -65,15 +64,14 @@ def test_pipeline_end_to_end_dedups_on_rerun(session):
 class _InternalOnlyCategoryEnricher:
     def enrich(self, item):
         return EnrichedFields(
-            title_tldr="Linux 6.9",
+            title_zh="Linux 6.9 正式发布",
             summary="s",
-            key_points=["a"],
+            tech_highlights=["[内核] 调度器改进"],
             info_type=InfoType.RELEASE,
             importance=Importance.HIGH,
-            why_it_matters="w",
             main_category="司内AI工具",
             sub_tags=["kernel"],
-            entities=[EntityRef(type="os", name="Linux")],
+            keywords=["Linux 6.9"],
             confidence=0.9,
         )
 

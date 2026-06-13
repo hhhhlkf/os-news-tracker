@@ -11,7 +11,7 @@ from app.manual_news_run import (
     start_manual_news_run,
     stop_manual_news_run,
 )
-from app.models import Item, ItemSource
+from app.models import Item, ItemSource, ItemTag, Tag
 from app.schemas import ManualNewsRunRequest
 
 router = APIRouter()
@@ -40,6 +40,7 @@ def list_items(
     main_category: str | None = None,
     info_type: str | None = None,
     importance: str | None = None,
+    sub_tag: str | None = None,
     q: str | None = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
@@ -55,6 +56,14 @@ def list_items(
         stmt = stmt.where(Item.info_type == info_type)
     if importance:
         stmt = stmt.where(Item.importance == importance)
+    if sub_tag:
+        stmt = stmt.where(
+            Item.id.in_(
+                select(ItemTag.item_id)
+                .join(Tag, Tag.id == ItemTag.tag_id)
+                .where(Tag.name == sub_tag, Tag.kind == "sub_tag")
+            )
+        )
     if q:
         like = f"%{q}%"
         stmt = stmt.where((Item.title.ilike(like)) | (Item.summary.ilike(like)))
@@ -94,10 +103,20 @@ def facets(db: Session = Depends(get_db)):
         rows = db.execute(select(column, func.count()).group_by(column)).all()
         return [{"value": value, "count": count} for value, count in rows if value is not None]
 
+    sub_tag_rows = db.execute(
+        select(Tag.name, func.count(func.distinct(ItemTag.item_id)))
+        .join(ItemTag, Tag.id == ItemTag.tag_id)
+        .where(Tag.kind == "sub_tag")
+        .group_by(Tag.name)
+        .order_by(func.count(func.distinct(ItemTag.item_id)).desc())
+        .limit(30)
+    ).all()
+
     return {
         "main_category": _counts(Item.main_category),
         "info_type": _counts(Item.info_type),
         "importance": _counts(Item.importance),
+        "sub_tags": [{"value": name, "count": count} for name, count in sub_tag_rows],
     }
 
 

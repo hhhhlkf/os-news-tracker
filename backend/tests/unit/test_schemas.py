@@ -1,5 +1,5 @@
 from datetime import datetime
-from app.schemas import RawItem, ExtractedDoc, EnrichedFields, EntityRef
+from app.schemas import RawItem, ExtractedDoc, EnrichedFields
 from app.enums import InfoType, Importance
 
 
@@ -10,16 +10,15 @@ def test_raw_item_minimal():
 
 def test_enriched_fields_validation():
     e = EnrichedFields(
-        title_tldr="x",
+        title_zh="中文标题",
         summary="s",
-        key_points=["a", "b"],
+        tech_highlights=["[内核] 调度器改进", "[能效] 改善策略"],
         info_type=InfoType.RELEASE,
         importance=Importance.HIGH,
-        why_it_matters="w",
         main_category="OS性能发展",
         sub_tags=["kernel"],
-        entities=[EntityRef(type="os", name="Linux")],
+        keywords=["Linux 6.9"],
         confidence=0.9,
     )
     assert e.info_type == InfoType.RELEASE
-    assert e.entities[0].name == "Linux"
+    assert e.keywords == ["Linux 6.9"]

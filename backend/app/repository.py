@@ -47,6 +47,7 @@ class Repository:
         return True
 
     def save_enriched(self, item: NormalizedItem, fields: EnrichedFields) -> Item:
+        all_tags = list(dict.fromkeys(fields.sub_tags + fields.keywords))
         db_item = Item(
             source_id=item.source_id,
             title=item.title,
@@ -56,20 +57,18 @@ class Repository:
             clean_content=item.clean_content,
             published_at=item.published_at,
             main_category=fields.main_category,
-            title_tldr=fields.title_tldr,
+            title_tldr=fields.title_zh,
             summary=fields.summary,
-            key_points=fields.key_points,
+            key_points=fields.tech_highlights,
             info_type=fields.info_type,
             importance=fields.importance,
-            why_it_matters=fields.why_it_matters,
+            why_it_matters=None,
             status=ItemStatus.ENRICHED,
             llm_confidence=fields.confidence,
         )
-        for tag_name in fields.sub_tags:
+        for tag_name in all_tags:
             db_item.tags.append(self._get_or_create_tag(tag_name, TagKind.SUB_TAG))
         db_item.tags.append(self._get_or_create_tag(fields.main_category, TagKind.MAIN_CATEGORY))
-        for entity in fields.entities:
-            db_item.entities.append(self._get_or_create_entity(entity.type, entity.name))
         self._s.add(db_item)
         self._s.flush()
         self._add_source_link_if_new(db_item.id, item.source_id, item.canonical_url)

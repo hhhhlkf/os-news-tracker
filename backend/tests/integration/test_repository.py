@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker
 from app.enums import Importance, InfoType, SourceType
 from app.models import Base, Source
 from app.repository import Repository
-from app.schemas import EnrichedFields, EntityRef, NormalizedItem
+from app.schemas import EnrichedFields, NormalizedItem
 
 
 @pytest.fixture
@@ -31,25 +31,25 @@ def _norm():
 
 def _fields():
     return EnrichedFields(
-        title_tldr="x",
+        title_zh="中文标题",
         summary="s",
-        key_points=["a"],
+        tech_highlights=["[内核] 调度器改进"],
         info_type=InfoType.RELEASE,
         importance=Importance.HIGH,
-        why_it_matters="w",
         main_category="OS性能发展",
         sub_tags=["kernel"],
-        entities=[EntityRef(type="os", name="Linux")],
+        keywords=["kernel", "sched_ext"],
         confidence=0.9,
     )
 
 
-def test_save_new_item_persists_tags_entities(session):
+def test_save_new_item_merges_sub_tags_and_keywords(session):
     repo = Repository(session)
     item = repo.save_enriched(_norm(), _fields())
     assert item.id is not None
-    assert item.tags[0].name == "kernel"
-    assert item.entities[0].name == "Linux"
+    tag_names = {tag.name for tag in item.tags}
+    assert {"kernel", "sched_ext", "OS性能发展"} <= tag_names
+    assert item.entities == []
     assert repo.exists_by_canonical("https://x/a") is True
 
 

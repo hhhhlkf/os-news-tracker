@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from app.enums import Importance, InfoType, SourceType
 from app.models import Base, Item, ItemSource, Source
 from app.repository import Repository
-from app.schemas import EnrichedFields, EntityRef, NormalizedItem
+from app.schemas import EnrichedFields, NormalizedItem
 
 
 @pytest.fixture
@@ -35,15 +35,14 @@ def _make_normalized(source_id: int = 1, canonical_url: str = "https://x.com/art
 
 def _make_enriched() -> EnrichedFields:
     return EnrichedFields(
-        title_tldr="Linux 6.9",
+        title_zh="Linux 6.9 正式发布",
         summary="summary",
-        key_points=["point"],
+        tech_highlights=["[内核] point"],
         info_type=InfoType.RELEASE,
         importance=Importance.HIGH,
-        why_it_matters="matters",
         main_category="OS性能发展",
         sub_tags=["kernel"],
-        entities=[EntityRef(type="os", name="Linux")],
+        keywords=["Linux"],
         confidence=0.9,
     )
 

@@ -11,7 +11,7 @@ from app.api.main import create_app
 from app.enums import Importance, InfoType, SourceType
 from app.models import Base, Source
 from app.repository import Repository
-from app.schemas import EnrichedFields, EntityRef, ManualNewsRunStatus, NormalizedItem
+from app.schemas import EnrichedFields, ManualNewsRunStatus, NormalizedItem
 
 
 @pytest.fixture
@@ -39,15 +39,14 @@ def client():
                 published_at=datetime(2026, 6, 10, 9, 0, 0, tzinfo=timezone.utc),
             ),
             EnrichedFields(
-                title_tldr="Item A TLDR",
+                title_zh="项目 A 中文标题",
                 summary="sa",
-                key_points=["pa"],
+                tech_highlights=["[内核] pa"],
                 info_type=InfoType.RELEASE,
                 importance=Importance.HIGH,
-                why_it_matters="wa",
                 main_category="OS性能发展",
                 sub_tags=["kernel"],
-                entities=[EntityRef(type="os", name="Linux")],
+                keywords=["Linux"],
                 confidence=0.9,
             ),
         ),
@@ -61,15 +60,14 @@ def client():
                 published_at=datetime(2026, 6, 9, 5, 30, 0, tzinfo=timezone.utc),
             ),
             EnrichedFields(
-                title_tldr="Item B TLDR",
+                title_zh="项目 B 中文标题",
                 summary="sb",
-                key_points=["pb"],
+                tech_highlights=["[安全] pb"],
                 info_type=InfoType.UPDATE,
                 importance=Importance.MEDIUM,
-                why_it_matters="wb",
                 main_category="OS跟踪来源",
                 sub_tags=["security"],
-                entities=[EntityRef(type="vendor", name="Ubuntu")],
+                keywords=["Ubuntu"],
                 confidence=0.85,
             ),
         ),
@@ -83,15 +81,14 @@ def client():
                 published_at=datetime(2026, 6, 8, 3, 0, 0, tzinfo=timezone.utc),
             ),
             EnrichedFields(
-                title_tldr="Item C TLDR",
+                title_zh="项目 C 中文标题",
                 summary="sc",
-                key_points=["pc"],
+                tech_highlights=["[容器] pc"],
                 info_type=InfoType.ADAPTATION,
                 importance=Importance.LOW,
-                why_it_matters="wc",
                 main_category="软件包适配",
                 sub_tags=["container"],
-                entities=[EntityRef(type="vendor", name="OpenCloudOS")],
+                keywords=["OpenCloudOS"],
                 confidence=0.8,
             ),
         ),
@@ -105,15 +102,14 @@ def client():
                 published_at=None,
             ),
             EnrichedFields(
-                title_tldr="Item D TLDR",
+                title_zh="项目 D 中文标题",
                 summary="sd",
-                key_points=["pd"],
+                tech_highlights=["[流程] pd"],
                 info_type=InfoType.ANALYSIS,
                 importance=Importance.MEDIUM,
-                why_it_matters="wd",
                 main_category="司内AI工具",
                 sub_tags=["workflow"],
-                entities=[EntityRef(type="topic", name="AI")],
+                keywords=["AI"],
                 confidence=0.75,
             ),
         ),
@@ -141,7 +137,7 @@ def test_list_items(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] == 4
-    assert data["items"][0]["title_tldr"] == "Item A TLDR"
+    assert data["items"][0]["title_tldr"] == "项目 A 中文标题"
 
 
 def test_filter_by_main_category(client):
@@ -152,13 +148,23 @@ def test_filter_by_main_category(client):
 def test_facets_endpoint(client):
     facets = client.get("/facets").json()
     assert "OS性能发展" in [f["value"] for f in facets["main_category"]]
+    assert "kernel" in [f["value"] for f in facets["sub_tags"]]
 
 
 def test_item_detail(client):
     item_id = client.get("/items").json()["items"][0]["id"]
     detail = client.get(f"/items/{item_id}").json()
     assert detail["summary"] == "sa"
-    assert detail["entities"][0]["name"] == "Linux"
+    assert detail["key_points"][0] == "[内核] pa"
+    assert detail["sub_tags"] == ["kernel", "Linux"]
+
+
+def test_filter_by_sub_tag(client):
+    resp = client.get("/items?sub_tag=kernel")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 1
+    assert data["items"][0]["title"] == "Item A"
 
 
 # ── Sorting tests ────────────────────────────────────────────────────

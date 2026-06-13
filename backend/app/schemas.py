@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
-from app.enums import InfoType, Importance, EntityType
+from app.enums import InfoType, Importance
 
 
 class RawItem(BaseModel):
@@ -20,22 +20,15 @@ class ExtractedDoc(BaseModel):
     published_at: datetime | None = None
 
 
-class EntityRef(BaseModel):
-    type: EntityType
-    name: str
-    role: str | None = None
-
-
 class EnrichedFields(BaseModel):
-    title_tldr: str
+    title_zh: str
     summary: str
-    key_points: list[str] = Field(default_factory=list)
+    tech_highlights: list[str] = Field(default_factory=list)
     info_type: InfoType
     importance: Importance
-    why_it_matters: str
     main_category: str
     sub_tags: list[str] = Field(default_factory=list)
-    entities: list[EntityRef] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
     confidence: float = 0.0
 
 

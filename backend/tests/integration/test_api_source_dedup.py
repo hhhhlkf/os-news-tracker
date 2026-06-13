@@ -11,7 +11,7 @@ from app.api.main import create_app
 from app.enums import Importance, InfoType, SourceType
 from app.models import Base, ItemSource, Source
 from app.repository import Repository
-from app.schemas import EnrichedFields, EntityRef, NormalizedItem
+from app.schemas import EnrichedFields, NormalizedItem
 
 
 @pytest.fixture
@@ -59,15 +59,14 @@ def client_with_dup_sources():
             clean_content="body",
         ),
         EnrichedFields(
-            title_tldr="Linux 6.9 发布",
+            title_zh="Linux 6.9 正式发布",
             summary="s",
-            key_points=["a"],
+            tech_highlights=["[内核] a"],
             info_type=InfoType.RELEASE,
             importance=Importance.HIGH,
-            why_it_matters="w",
             main_category="OS性能发展",
             sub_tags=["kernel"],
-            entities=[EntityRef(type="os", name="Linux")],
+            keywords=["Linux"],
             confidence=0.9,
         ),
     )
