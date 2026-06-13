@@ -257,7 +257,7 @@ export function HomePage() {
 
         <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
           <FacetSidebar
-            facets={facets ?? { main_category: [], info_type: [], importance: [] }}
+            facets={facets ?? { main_category: [], info_type: [], importance: [], sub_tags: [] }}
             isLoading={mode === "live" && facetsQuery.isLoading}
             selected={filters}
             onSelect={setFilter}

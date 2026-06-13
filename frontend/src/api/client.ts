@@ -21,6 +21,7 @@ export interface ItemQueryParams {
   main_category?: string;
   info_type?: string;
   importance?: string;
+  sub_tag?: string;
   q?: string;
   limit?: number | string;
   offset?: number | string;

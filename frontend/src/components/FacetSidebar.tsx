@@ -67,6 +67,7 @@ export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
     ["main_category", "主分类"],
     ["info_type", "信息类型"],
     ["importance", "重要度"],
+    ["sub_tags", "技术热点"],
   ];
 
   const presets: { key: TimePreset; label: string }[] = [

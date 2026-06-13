@@ -4,6 +4,14 @@ import type { ItemDetail as ItemDetailRecord } from "../types";
 import { ImportanceBadge } from "./ImportanceBadge";
 import { InfoTypeBadge } from "./InfoTypeBadge";
 
+function parseTechHighlight(text: string): { keyword: string; detail: string } | null {
+  const match = text.match(/^\[(.+?)\]\s*(.*)/);
+  if (match) {
+    return { keyword: match[1], detail: match[2] };
+  }
+  return null;
+}
+
 function ItemDetailBody({ data }: { data: ItemDetailRecord }) {
   return (
     <div style={{ padding: 20 }}>
@@ -12,7 +20,15 @@ function ItemDetailBody({ data }: { data: ItemDetailRecord }) {
         <InfoTypeBadge value={data.info_type} />
         <span style={{ fontSize: 12, color: "#667085" }}>{data.main_category}</span>
       </div>
-      <h2 style={{ margin: "4px 0 12px" }}>{data.title}</h2>
+
+      {data.title_tldr ? (
+        <>
+          <h2 style={{ margin: "4px 0 4px" }}>{data.title_tldr}</h2>
+          <div style={{ fontSize: 13, color: "#667085", marginBottom: 12 }}>{data.title}</div>
+        </>
+      ) : (
+        <h2 style={{ margin: "4px 0 12px" }}>{data.title}</h2>
+      )}
 
       {data.summary && (
         <section style={{ marginBottom: 16 }}>
@@ -23,36 +39,44 @@ function ItemDetailBody({ data }: { data: ItemDetailRecord }) {
 
       {data.key_points.length > 0 && (
         <section style={{ marginBottom: 16 }}>
-          <h4 style={{ color: "#475467" }}>关键点</h4>
+          <h4 style={{ color: "#475467" }}>技术要点</h4>
           <div>
-            {data.key_points.map((kp, i) => (
-              <div key={i} style={{
-                border: "1px solid #eaecf0", borderRadius: 8,
-                padding: "8px 12px", marginBottom: 6, background: "#fafafa",
-              }}>{kp}</div>
-            ))}
+            {data.key_points.map((kp, i) => {
+              const parsed = parseTechHighlight(kp);
+              return (
+                <div
+                  key={i}
+                  style={{
+                    border: "1px solid #eaecf0",
+                    borderRadius: 8,
+                    padding: "8px 12px",
+                    marginBottom: 6,
+                    background: "#fafafa",
+                  }}
+                >
+                  {parsed ? (
+                    <>
+                      <strong style={{ color: "#175cd3" }}>[{parsed.keyword}]</strong>{" "}
+                      {parsed.detail}
+                    </>
+                  ) : (
+                    kp
+                  )}
+                </div>
+              );
+            })}
           </div>
         </section>
       )}
 
-      {data.why_it_matters && (
-        <section style={{
-          marginBottom: 16, background: "#eff8ff",
-          borderLeft: "4px solid #2e90fa", padding: "10px 14px", borderRadius: 6,
-        }}>
-          <h4 style={{ color: "#175cd3", marginTop: 0 }}>影响 / 意义</h4>
-          <p style={{ marginBottom: 0 }}>{data.why_it_matters}</p>
-        </section>
-      )}
-
-      {data.entities.length > 0 && (
+      {data.sub_tags.length > 0 && (
         <section style={{ marginBottom: 16 }}>
-          <h4 style={{ color: "#475467" }}>实体</h4>
+          <h4 style={{ color: "#475467" }}>技术热点</h4>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {data.entities.map((e, i) => (
+            {data.sub_tags.map((tag, i) => (
               <span key={i} style={{
                 background: "#f2f4f7", borderRadius: 6, padding: "2px 8px", fontSize: 12,
-              }}>{e.type}: {e.name}</span>
+              }}>{tag}</span>
             ))}
           </div>
         </section>

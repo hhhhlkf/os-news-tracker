@@ -13,10 +13,8 @@ export interface ItemSummary {
 export interface ItemDetail extends ItemSummary {
   summary: string | null;
   key_points: string[];
-  why_it_matters: string | null;
   llm_confidence: number | null;
   sub_tags: string[];
-  entities: { type: string; name: string }[];
   source_links: { source_id: number; url: string }[];
 }
 
@@ -25,6 +23,7 @@ export interface Facets {
   main_category: FacetValue[];
   info_type: FacetValue[];
   importance: FacetValue[];
+  sub_tags: FacetValue[];
 }
 export interface ItemListResponse { total: number; items: ItemSummary[]; }
 

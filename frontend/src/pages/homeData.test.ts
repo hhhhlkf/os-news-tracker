@@ -20,6 +20,7 @@ describe("filterDemoItems", () => {
       main_category: "OS性能发展",
       info_type: "性能数据",
       importance: "高",
+      sub_tag: "scheduler",
     });
 
     expect(filtered).toHaveLength(1);
@@ -34,5 +35,6 @@ describe("buildDemoFacets", () => {
     expect(facets.main_category.find((facet) => facet.value === "OS性能发展")?.count).toBe(1);
     expect(facets.info_type.find((facet) => facet.value === "适配")?.count).toBe(1);
     expect(facets.importance.find((facet) => facet.value === "高")?.count).toBeGreaterThan(0);
+    expect(facets.sub_tags.find((facet) => facet.value === "kernel")?.count).toBe(1);
   });
 });

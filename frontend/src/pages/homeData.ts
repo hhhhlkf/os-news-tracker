@@ -31,6 +31,8 @@ export function filterDemoItems(items: ItemDetail[], filters: Record<string, str
     const matchesType = !filters.info_type || item.info_type === filters.info_type;
     const matchesImportance =
       !filters.importance || item.importance === filters.importance;
+    const matchesSubTag =
+      !filters.sub_tag || item.sub_tags.includes(filters.sub_tag);
 
     // Time-range filtering on published_at
     const hasTimeFilter = !!(filters.published_after || filters.published_before);
@@ -56,7 +58,7 @@ export function filterDemoItems(items: ItemDetail[], filters: Record<string, str
       }
     }
 
-    return matchesSearch && matchesCategory && matchesType && matchesImportance && matchesTimeRange;
+    return matchesSearch && matchesCategory && matchesType && matchesImportance && matchesSubTag && matchesTimeRange;
   });
 
   const sortBy: SortBy = (filters.sort_by as SortBy) ?? "published_at";
@@ -91,10 +93,20 @@ function countBy(items: ItemDetail[], pick: (item: ItemDetail) => string | null)
 }
 
 export function buildDemoFacets(items: ItemDetail[]) {
+  const tagCounts = new Map<string, number>();
+  for (const item of items) {
+    for (const tag of item.sub_tags) {
+      tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+    }
+  }
+
   return {
     main_category: countBy(items, (item) => item.main_category),
     info_type: countBy(items, (item) => item.info_type),
     importance: countBy(items, (item) => item.importance),
+    sub_tags: sortFacetValues(
+      Array.from(tagCounts, ([value, count]) => ({ value, count })),
+    ).slice(0, 30),
   };
 }
 
@@ -102,6 +114,6 @@ export function makeListResponse(items: ItemDetail[], limit?: number, offset?: n
   const sliced = limit != null ? items.slice(offset ?? 0, (offset ?? 0) + limit) : items;
   return {
     total: items.length,
-    items: sliced.map(({ summary: _summary, key_points: _keyPoints, why_it_matters: _why, llm_confidence: _confidence, sub_tags: _tags, entities: _entities, source_links: _sources, ...summaryItem }) => summaryItem),
+    items: sliced.map(({ summary: _summary, key_points: _keyPoints, llm_confidence: _confidence, sub_tags: _tags, source_links: _sources, ...summaryItem }) => summaryItem),
   };
 }
