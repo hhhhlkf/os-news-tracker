@@ -2,12 +2,12 @@
 
 ## Project Overview
 
-An automated OS news intelligence tracker that collects technical news from multiple source types, enriches them with LLM-structured summaries (category, sub-tags, entities, impact), and presents results in a searchable React web UI with facet filtering and time-range retrieval.
+An automated OS news intelligence tracker that collects technical news from multiple source types, enriches them with LLM-structured summaries (category, sub-tags, entities, impact), and presents results in a searchable React web UI with facet filtering, time-range filtering, and manual news run control.
 
 **Two data streams:**
 
-1. **News stream** — RSS + structured APIs + page monitoring + keyword search → LLM structured summary (category, sub-tags, entities, summary)
-2. **Structured facts stream** — Security advisories/CVE, lifecycle/EOL, image releases → parsed directly into DB, no LLM
+1. **News stream** — RSS + page monitoring + keyword search → LLM structured summary (category, sub-tags, entities, summary)
+2. **Structured facts stream** — Security advisories/CVE, lifecycle/EOL, image releases → parsed directly into DB, no LLM (adapters planned, not yet implemented)
 
 **Pipeline:** `fetch → normalize → [relevance-filter] → dedup → enrich → store`
 
@@ -44,27 +44,26 @@ os-news-tracker/
 │   │   ├── __init__.py
 │   │   ├── config.py                      # Settings (env-driven, pydantic-settings)
 │   │   ├── db.py                          # SQLAlchemy engine + SessionLocal
-│   │   ├── models.py                      # ORM models (Source, Item, Tag, Entity, etc.)
+│   │   ├── models.py                      # ORM models (Source, Item, Tag, Entity, SecurityAdvisory, ProductLifecycle, etc.)
 │   │   ├── schemas.py                     # Pydantic contracts (requests, responses, internal)
 │   │   ├── enums.py                       # InfoType, Importance, SourceType, ItemStatus, etc.
 │   │   ├── entry.py                       # App entrypoint (create_app + startup hooks)
 │   │   ├── pipeline.py                    # News-stream orchestration (fetch→store)
-│   │   ├── manual_news_run.py             # Target-driven manual news run (controller + runner)
+│   │   ├── manual_news_run.py             # Target-driven manual news run (controller + runner, thread-safe)
 │   │   ├── scheduler.py                   # APScheduler wiring (per-source cron jobs)
 │   │   ├── repository.py                  # DB read/write queries (idempotent writes)
 │   │   ├── api/
 │   │   │   ├── main.py                    # FastAPI app factory + CORS
-│   │   │   ├── routes.py                  # /items, /items/{id}, /facets, /news-run
+│   │   │   ├── routes.py                  # /items (sort+filter), /items/{id}, /facets, /news-run
 │   │   │   └── deps.py                    # DB session dependency
 │   │   ├── sources/
 │   │   │   ├── registry.py                # Source registry (seed YAML → DB, idempotent)
-│   │   │   └── seed_sources.yaml          # Initial source definitions
+│   │   │   └── seed_sources.yaml          # 84 source definitions (RSS/page_monitor/api/search)
 │   │   ├── fetchers/
 │   │   │   ├── base.py                    # Fetcher protocol + FetchResult
 │   │   │   ├── rss.py                     # RssFetcher
 │   │   │   ├── page_monitor.py            # PageMonitorFetcher
-│   │   │   ├── search.py                  # SearchFetcher (keyword-based)
-│   │   │   └── api.py                     # ApiFetcher (structured stream)
+│   │   │   └── search.py                  # SearchFetcher (keyword-based)
 │   │   ├── extract/
 │   │   │   ├── base.py                    # ContentExtractor protocol
 │   │   │   └── scrapling_extractor.py     # Scrapling-based extractor (default)
@@ -76,13 +75,6 @@ os-news-tracker/
 │   │   │   ├── dedup.py                   # url_hash + simhash + near-dup
 │   │   │   ├── relevance.py               # LLM relevance gate for search hits
 │   │   │   └── enricher.py                # LLM enrich → EnrichedFields
-│   │   ├── structured/
-│   │   │   ├── schemas.py                 # AdvisoryRecord, LifecycleRecord, etc.
-│   │   │   ├── repository.py              # Idempotent upsert for structured data
-│   │   │   ├── pipeline.py                # Structured stream run path
-│   │   │   └── adapters/
-│   │   │       ├── base.py                # SourceAdapter protocol + registry
-│   │   │       └── ubuntu_security.py
 │   │   └── llm/
 │   │       └── client.py                  # OpenAI-compatible client + cache
 │   └── tests/
@@ -106,7 +98,7 @@ os-news-tracker/
 │       │   ├── test_search_provider.py
 │       │   └── test_source_link_dedup.py  # Idempotent merge_source_link, save_enriched
 │       └── integration/
-│           ├── test_api.py
+│           ├── test_api.py                # Sorting + time filtering + CRUD tests
 │           ├── test_api_source_dedup.py   # API-level source link dedup + order stability
 │           ├── test_pipeline.py
 │           ├── test_registry.py
@@ -124,21 +116,21 @@ os-news-tracker/
 │       ├── index.css
 │       ├── types.ts                       # ItemSummary, ItemDetail, Facets, TimeFilterStats, etc.
 │       ├── vite-env.d.ts
-│       ├── demoData.ts                    # Demo/offline fallback data
+│       ├── demoData.ts                    # Demo/offline fallback data (4 items with fetched_at)
 │       ├── api/
-│       │   └── client.ts                  # fetchItems, fetchItemDetail, fetchFacets + ApiError
+│       │   └── client.ts                  # fetchItems, fetchItemDetail, fetchFacets, news run APIs + ApiError
 │       ├── components/
-│       │   ├── ItemList.tsx               # Paginated list with loading/empty/error states
-│       │   ├── ItemCard.tsx               # Clickable list row (badges + title + date)
+│       │   ├── ItemList.tsx               # Paginated list with loading/empty/error states + sortBy prop
+│       │   ├── ItemCard.tsx               # Clickable list row (badges + title + date/fetched_at label)
 │       │   ├── ItemDetail.tsx             # Slide-out detail panel (7 sections + deduped source links)
-│       │   ├── FacetSidebar.tsx           # Facet filter sidebar (3 groups: category/type/importance)
+│       │   ├── FacetSidebar.tsx           # Facet filter sidebar (category/type/importance + time filter presets)
 │       │   ├── ImportanceBadge.tsx        # Color-coded badge: high=red, medium=yellow, low=gray
 │       │   ├── InfoTypeBadge.tsx          # Neutral outlined badge
 │       │   ├── NewsRunControl.tsx         # Manual news run control panel (start/stop, time range, stats)
 │       │   └── TimeRangePicker.tsx        # Relative vs absolute time range picker
 │       └── pages/
-│           ├── HomePage.tsx               # Top-level layout (search + sidebar + list + overlay + run control)
-│           ├── homeData.ts                # Demo/live data mode resolution + filtering
+│           ├── HomePage.tsx               # Top-level layout (search + sort + sidebar + list + overlay + run control)
+│           ├── homeData.ts                # Demo/live data mode resolution + filtering (sort + time range)
 │           ├── homeData.test.ts           # Tests for demo data mode
 │           └── newsRunControl.test.ts     # Tests for NewsRunControl helpers
 └── docs/
@@ -219,12 +211,14 @@ This project uses **Subagent-Driven Development (SDD)**:
 - **Type annotations:** Full type annotations on all function signatures
 - **Pydantic v2:** Data contracts use `pydantic.BaseModel`; config uses `pydantic-settings`
 - **SQLAlchemy 2.0:** Use `Mapped` + `mapped_column` declarative mapping
-- **Protocols:** Pluggable components (Fetcher, ContentExtractor, SearchProvider, SourceAdapter) defined as Protocol classes — no concrete dependencies
+- **Protocols:** Pluggable components (Fetcher, ContentExtractor, SearchProvider) defined as Protocol classes — no concrete dependencies
 - **Pure functions:** normalizer, dedup are pure functions with no side effects, easy to test
 - **Error handling:** Use `try/finally` to ensure resource release (e.g., DB sessions)
 - **Logging:** Module-level logger via `logging.getLogger(__name__)`
 - **Environment variables:** Configuration controlled via `ENABLE_SCHEDULER`, `DATABASE_URL`, etc.
 - **UTC datetime:** All datetime values are UTC-aware. `_as_utc()` helper converts naive→UTC (assumed) and aware→UTC (converted). Frontend sends explicit `Z` suffix.
+- **Published date filtering:** `published_after` is inclusive (≥), `published_before` is inclusive (< next day). Both use `date.fromisoformat()` with `datetime(…, tzinfo=timezone.utc)`. Invalid dates return 422.
+- **Sorting:** `SortBy = Literal["published_at", "fetched_at"]`, `SortDir = Literal["desc", "asc"]`. Default: `published_at` DESC with `nullslast()` (null published_at always last).
 - **Idempotent writes:** Junction-table inserts use `_add_source_link_if_new()` pattern — check existence before insert, return bool. All junction writes (`merge_source_link`, `save_enriched`) are safe to call repeatedly.
 - **Thread safety:** `ManualNewsRunController` uses `threading.Lock` protecting `_RuntimeState`; cooperative shutdown via `should_stop()`.
 
@@ -238,21 +232,24 @@ This project uses **Subagent-Driven Development (SDD)**:
 - **Slide-out overlay:** Fixed-position detail panel, background click to close, `stopPropagation` prevents close on panel click
 - **UTC time:** `toAbsoluteDateTime()` emits explicit UTC ISO-8601 strings (`${date}T${time}Z`) — never uses `new Date()` with local-time strings
 - **Defense-in-depth:** Frontend `Map`-based dedup on `source_links` as fallback (primary fix is in backend)
+- **Sort dropdown:** `<select>` in HomePage search bar with `value:key` format; `sortBy` prop threaded through ItemList → ItemCard
+- **Time filter presets:** `useMemo` computes `activePreset` from `published_after`/`published_before`; presets use `daysAgo(n)` helper. Custom range shows two `<input type="date">` fields.
 
 ## Architecture Decisions
 
 | Decision | Conclusion |
 |----------|------------|
 | Orchestration | **Deterministic pipeline + localized LLM** (not autonomous agent loops) |
-| Collection sources | 4 Fetcher types: `rss` / `api` / `page_monitor` / `search` |
+| Collection sources | 3 Fetcher types implemented: `rss` / `page_monitor` / `search`. `api` type planned for structured stream |
+| Source registry | 84 sources in `seed_sources.yaml` (23 RSS, 46 page_monitor, 15 api). 15 adapters referenced for structured stream (not yet implemented) |
 | Extraction engine | Scrapling default + pluggable interface (Firecrawl as future option) |
 | Dedup strategy | url_hash + simhash + near-duplicate matching |
 | Search | Internal search capability preferred; interface is pluggable |
 | Manual news run | Target-driven, two-phase (collect→process) loop with up to 3 expansion rounds on search-type sources; thread-safe singleton controller |
-| Time semantics | All times UTC. `_as_utc()` backend, explicit `Z` suffix frontend. Relative ranges are open-ended (no upper bound); absolute ranges are bounded both sides |
+| Time semantics | All times UTC. `_as_utc()` backend, explicit `Z` suffix frontend. Relative ranges are open-ended (no upper bound); absolute ranges are bounded both sides. `published_at` null items: sorted last (nullslast), excluded from time-filtered queries |
 | Observability | `TimeFilterStats` (missing_published_at, before_start, after_end, matched) tallied per-source during collection, exposed in status, logs, and gap_reason |
 | Source link dedup | `UniqueConstraint(item_id, source_id, url)` on `item_sources` + `_add_source_link_if_new()` idempotent writes + API-level dedup + frontend fallback |
-| V1 scope | Collection + two-stream processing + searchable web UI; no subscriptions, push notifications, or admin backend |
+| V1 scope | Collection + two-stream processing + searchable web UI + manual news run; no subscriptions, push notifications, or admin backend |
 | Deployment | Internal network, normal external internet access |
 
 ## Reference URLs

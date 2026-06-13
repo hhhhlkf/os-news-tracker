@@ -2,11 +2,11 @@
 
 ## Project Overview
 
-技术新闻追踪 Agent（OS News Tracker）— 自动从多类来源采集技术情报，用 LLM 整理归纳，汇总到可查询的 React 网页。
+技术新闻追踪 Agent（OS News Tracker）— 自动从多类来源采集技术情报，用 LLM 整理归纳，汇总到可查询的 React 网页。支持分面筛选、时间范围过滤、排序切换和手动新闻采集运行控制。
 
 **Two data streams:**
-1. **News stream** — RSS + structured APIs + page monitor + keyword search → LLM enrichment (category, sub-tags, entities, summary)
-2. **Structured stream** — Security advisories/CVE, lifecycle/EOL, image compatibility → direct parse to typed tables (no LLM)
+1. **News stream** — RSS + page monitor + keyword search → LLM enrichment (category, sub-tags, entities, summary)
+2. **Structured stream** — Security advisories/CVE, lifecycle/EOL, image compatibility → direct parse to typed tables (no LLM). Adapters planned, not yet implemented.
 
 **Pipeline:** `fetch → normalize → [relevance-filter] → dedup → enrich → store`
 
@@ -18,7 +18,7 @@
 | Frontend | React 18, Vite, TypeScript, TanStack Query |
 | Ingestion | feedparser, Scrapling, httpx |
 | AI/LLM | Configurable OpenAI-compatible client (internal LLM gateway) |
-| Testing | pytest, pytest-asyncio, respx |
+| Testing | pytest, pytest-asyncio, respx, vitest |
 | Deployment | Docker Compose |
 
 ## Project Structure
@@ -34,26 +34,26 @@ os-news-tracker/
 │   ├── app/
 │   │   ├── config.py                 # pydantic-settings (env-driven)
 │   │   ├── db.py                     # SQLAlchemy engine + session factory
-│   │   ├── models.py                 # ORM models (Base, Source, Item, Tag, Entity, etc.)
+│   │   ├── models.py                 # ORM models (Base, Source, Item, Tag, Entity, SecurityAdvisory, ProductLifecycle, etc.)
 │   │   ├── schemas.py                # Pydantic contracts
 │   │   ├── enums.py                  # InfoType, Importance, SourceType, ItemStatus, EntityType, TagKind
 │   │   ├── entry.py                  # App entrypoint: create_app() + startup hooks (create tables, seed, scheduler)
 │   │   ├── pipeline.py               # News-stream orchestration
+│   │   ├── manual_news_run.py        # Target-driven manual news run (thread-safe controller + runner)
 │   │   ├── scheduler.py              # APScheduler: per-source cron jobs
-│   │   ├── repository.py             # DB queries
+│   │   ├── repository.py             # DB queries (idempotent writes)
 │   │   ├── api/
 │   │   │   ├── main.py               # FastAPI app factory (CORS middleware + router)
-│   │   │   ├── routes.py             # GET /items, GET /items/{id}, GET /facets
+│   │   │   ├── routes.py             # GET /items (sort+filter), GET /items/{id}, GET /facets, GET/POST /news-run
 │   │   │   └── deps.py               # get_session dependency
 │   │   ├── sources/
 │   │   │   ├── registry.py           # seed_sources_from_yaml() — idempotent YAML→DB seeding
-│   │   │   └── seed_sources.yaml     # Initial source config
+│   │   │   └── seed_sources.yaml     # 84 source definitions (23 RSS, 46 page_monitor, 15 api)
 │   │   ├── fetchers/
 │   │   │   ├── base.py               # Fetcher Protocol
 │   │   │   ├── rss.py
 │   │   │   ├── page_monitor.py
-│   │   │   ├── search.py
-│   │   │   └── api.py
+│   │   │   └── search.py
 │   │   ├── extract/
 │   │   │   ├── base.py               # ContentExtractor Protocol
 │   │   │   └── scrapling_extractor.py
@@ -65,20 +65,20 @@ os-news-tracker/
 │   │   │   ├── dedup.py              # url_hash + simhash + near-duplicate match
 │   │   │   ├── relevance.py          # LLM relevance gate
 │   │   │   └── enricher.py           # LLM enrich → EnrichedFields
-│   │   ├── structured/
-│   │   │   ├── schemas.py            # AdvisoryRecord, LifecycleRecord, ImageRecord, CompatibilityRecord
-│   │   │   ├── repository.py         # Idempotent upsert
-│   │   │   ├── pipeline.py
-│   │   │   └── adapters/
-│   │   │       ├── base.py           # SourceAdapter Protocol + registry
-│   │   │       └── ubuntu_security.py
 │   │   └── llm/
 │   │       └── client.py             # OpenAI-compatible client + cache
 │   └── tests/
 │       ├── conftest.py
 │       ├── fixtures/
-│       ├── unit/                     # 14+ test files
+│       ├── unit/                     # 15 test files (config, dedup, enricher, extract, llm, models, normalizer, fetchers, etc.)
+│       │   ├── test_manual_news_run.py
+│       │   └── test_source_link_dedup.py
 │       └── integration/
+│           ├── test_api.py           # CRUD + sorting + time filtering (89 tests total)
+│           ├── test_api_source_dedup.py
+│           ├── test_pipeline.py
+│           ├── test_registry.py
+│           └── test_repository.py
 ├── frontend/
 │   ├── package.json
 │   ├── vite.config.ts
@@ -86,21 +86,28 @@ os-news-tracker/
 │   └── src/
 │       ├── main.tsx
 │       ├── App.tsx
-│       ├── types.ts
-│       ├── api/client.ts             # fetchItems, fetchItemDetail, fetchFacets, ApiError
+│       ├── types.ts                  # ItemSummary, ItemDetail, Facets, ManualNewsRunStatus, etc.
+│       ├── demoData.ts               # Demo/offline fallback (4 items, supports sort + time filter)
+│       ├── api/client.ts             # fetchItems, fetchItemDetail, fetchFacets, news run APIs, ApiError
 │       ├── components/
-│       │   ├── ItemList.tsx          # Paginated list (loading/empty/error states)
-│       │   ├── ItemCard.tsx          # Clickable row: badges + title + date
-│       │   ├── ItemDetail.tsx        # Slide-out detail panel (7 sections)
-│       │   ├── FacetSidebar.tsx      # 3-group facet filter (category/type/importance)
+│       │   ├── ItemList.tsx          # Paginated list (loading/empty/error states) + sortBy prop
+│       │   ├── ItemCard.tsx          # Clickable row: badges + title + date (or "入库" label)
+│       │   ├── ItemDetail.tsx        # Slide-out detail panel (7 sections, deduped source links)
+│       │   ├── FacetSidebar.tsx      # 4-group filter: category/type/importance + time presets
 │       │   ├── ImportanceBadge.tsx   # Color-coded: 高=red, 中=yellow, 低=gray
-│       │   └── InfoTypeBadge.tsx     # Neutral outlined badge
+│       │   ├── InfoTypeBadge.tsx     # Neutral outlined badge
+│       │   ├── NewsRunControl.tsx    # Manual news run: start/stop, time range, live stats
+│       │   └── TimeRangePicker.tsx   # Relative vs absolute time range selector
 │       └── pages/
-│           └── HomePage.tsx          # Search + sidebar + list + slide-out overlay
+│           ├── HomePage.tsx          # Search + sort dropdown + sidebar + list + overlay + run control
+│           ├── homeData.ts           # Demo/live mode resolution + filterDemoItems (sort + time range)
+│           ├── homeData.test.ts
+│           └── newsRunControl.test.ts
 └── docs/
     └── superpowers/
         ├── specs/2026-06-09-os-news-tracker-design.md
-        └── plans/2026-06-09-os-news-tracker-v1.md
+        ├── specs/2026-06-11-manual-news-run-control-design.md
+        └── plans/
 ```
 
 ## Common Commands
@@ -129,6 +136,7 @@ alembic revision --autogenerate -m "description"
 ```bash
 npm ci              # Install dependencies
 npm run dev         # Dev server
+npx vitest run      # Run tests
 npm run build       # Type-check + production build
 ```
 
@@ -155,31 +163,41 @@ This project follows **Subagent-Driven Development (SDD)** via the Superpowers m
 - **Type annotations** on all function signatures
 - **Pydantic v2** for data contracts; **pydantic-settings** for config
 - **SQLAlchemy 2.0**: `Mapped` + `mapped_column` declarative style
-- **Protocols** for pluggable components: `Fetcher`, `ContentExtractor`, `SearchProvider`, `SourceAdapter`
+- **Protocols** for pluggable components: `Fetcher`, `ContentExtractor`, `SearchProvider`
 - **Pure functions** for processing: normalizer, dedup
 - **Resource cleanup**: `try/finally` around DB sessions
 - **Logging**: `logging.getLogger(__name__)` module-level loggers
 - **Env vars**: `ENABLE_SCHEDULER` gates scheduler startup (default: `"1"`)
+- **UTC datetime**: All datetimes are UTC-aware. `published_after`/`published_before` use `date.fromisoformat()` + `datetime(…, tzinfo=timezone.utc)`. Invalid dates return 422.
+- **Sorting**: `SortBy = Literal["published_at", "fetched_at"]`, `SortDir = Literal["desc", "asc"]`. `published_at` sort uses `nullslast()` — items without publish date always appear last.
+- **Time filtering**: `published_before` is inclusive (adds 1 day as upper bound). Both params nullable — omitted means no bound.
 
 ### TypeScript/React (Frontend)
 
 - **Inline styles**: All components use `style` props (no CSS modules or Tailwind)
-- **TanStack Query**: `useQuery` with `queryKey` + `queryFn` for all data fetching
+- **TanStack Query**: `useQuery` with `queryKey` + `queryFn` for all data fetching; 2s polling during active run states
 - **ApiError pattern**: Custom error class from `api/client.ts`; handle with `instanceof ApiError`
 - **Conditional rendering**: Null guards (`&&`), empty array guards (`.length > 0`), truthy checks for nullable fields
 - **Type-safe facets**: `keyof Facets` for iterating facet groups (no `as any`)
 - **Slide-out overlay**: Fixed-position panel, backdrop click-to-close, `stopPropagation` on panel
+- **Sort dropdown**: `<select>` with `value:key` format in HomePage; `sortBy` prop through ItemList → ItemCard; "入库" label shown when sorting by `fetched_at`
+- **Time filter presets**: 5 buttons (全部/24h/7d/30d/自定义); `useMemo` computes active preset; custom expands two `<input type="date">` fields; `daysAgo(n)` helper for offset computation
+- **Demo data sync**: `filterDemoItems` mirrors backend filtering (time range, sort, null exclusion)
 
 ## Architecture Decisions
 
 | Decision | Resolution |
 |----------|-----------|
 | Orchestration | **Deterministic pipeline + local LLM** (NOT autonomous agent loop) |
-| Source types | 4 Fetcher types: `rss`, `api`, `page_monitor`, `search` |
+| Source types | 3 Fetcher types implemented: `rss`, `page_monitor`, `search`. `api` type (structured stream) planned |
+| Source count | 84 sources in seed_sources.yaml: 23 RSS, 46 page_monitor, 15 api. 15 adapter names referenced |
 | Extraction engine | Scrapling default + pluggable interface |
 | Dedup strategy | url_hash + simhash + near-duplicate matching |
 | Search | Internal search capability preferred; interface is pluggable |
-| V1 scope | Ingestion + two-stream processing + queryable web UI. NO subscriptions, push, admin panel |
+| Manual news run | Target-driven, two-phase loop; thread-safe singleton; up to 3 expansion rounds on search sources |
+| Time semantics | All UTC. `nullslast()` for null published_at. Inclusive `published_before`; invalid dates → 422 |
+| Sorting | `published_at` (default) or `fetched_at`, asc/desc. Null published_at always last |
+| V1 scope | Ingestion + two-stream processing + queryable web UI + manual news run. NO subscriptions, push, admin panel |
 | Deployment | Internal network, with normal external internet access |
 
 ## Reference URLs
@@ -194,7 +212,6 @@ This project follows **Subagent-Driven Development (SDD)** via the Superpowers m
 | CentOS C9S | https://gitlab.com/redhat/centos-stream/rpms |
 | Rocky Linux | https://git.rockylinux.org/staging/rpms |
 | OpenCloudOS | https://git.opencloudos.tech/sources-stream/ |
-| TencentOS | http://qa.mirrors.tlinux.woa.com/tlinux/3.3/isos/x86_64/ |
 
 ### Security
 - Red Hat CVE: https://access.redhat.com/security/cve/
@@ -205,29 +222,7 @@ This project follows **Subagent-Driven Development (SDD)** via the Superpowers m
 - CentOS: https://koji.mbox.centos.org/koji/
 - CentOS Stream: https://kojihub.stream.centos.org/koji/
 - OpenCloudOS: https://build.opencloudos.tech/koji/index
-- CCLinux: https://koji.cclinux.org/koji/index
 
 ### Lifecycle & Compatibility
 - Red Hat Lifecycle: https://access.redhat.com/support/policy/updates/errata/
 - RHEL9 ABI Compatibility: https://access.redhat.com/articles/rhel9-abi-compatibility
-
-### Package Lookup
-- Fedora Lookaside: https://src.fedoraproject.org/lookaside/pkgs/
-- CentOS Lookaside: https://git.centos.org/sources/
-- EPEL8: https://rpmfind.net/linux/RPM/epel/8/x86_64/Packages/
-- Tsinghua Mirror (CentOS): https://mirrors.tuna.tsinghua.edu.cn/centos-vault/
-
-### RPM Building
-- Fedora Wiki (How to build RPM): https://fedoraproject.org/wiki/How_to_create_an_RPM_package/zh-cn
-
-### CentOS Infrastructure
-- CentOS Wiki Sources: https://wiki.centos.org/zh/Sources
-- CentOS Git: https://git.centos.org/
-- C9S Mirror Manager: https://admin.fedoraproject.org/mirrormanager/mirrors/CentOS/9-stream
-- MQTT Updates: https://wiki.centos.org/zh/Sources
-
-### OpenCloudOS Stream
-- Build Stream: https://build.stream.opencloudos.tech/
-- Gitee: https://gitee.com/organizations/opencloudos-stream/projects
-- ISO Downloads: https://testing.mirrors.opencloudos.tech/opencloudos/9.0/isos/x86_64/
-- Images: https://testing.mirrors.opencloudos.tech/opencloudos/9.0/images/x86_64/
