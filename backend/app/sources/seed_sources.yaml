@@ -9,6 +9,7 @@
   vendor: redhat
   stream: news
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 8 * * *"
 - name: RHEL Blog
   type: rss
@@ -16,6 +17,7 @@
   vendor: redhat
   stream: news
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 8 * * *"
 - name: OpenShift Blog
   type: rss
@@ -23,6 +25,7 @@
   vendor: redhat
   stream: news
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 8 * * *"
 - name: Red Hat AI Blog
   type: rss
@@ -30,6 +33,7 @@
   vendor: redhat
   stream: news
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 8 * * *"
 
 # --- Ubuntu / Canonical ---
@@ -39,6 +43,7 @@
   vendor: ubuntu
   stream: news
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 8 * * *"
 - name: Canonical Blog
   type: rss
@@ -46,6 +51,7 @@
   vendor: ubuntu
   stream: news
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 8 * * *"
 - name: Ubuntu Community Release (Discourse)
   type: rss
@@ -53,6 +59,7 @@
   vendor: ubuntu
   stream: news
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 9 * * *"
 
 # --- OS性能发展: RSS ---
@@ -62,6 +69,7 @@
   vendor: phoronix
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 */12 * * *"
 - name: Phoronix (full)
   type: rss
@@ -69,6 +77,7 @@
   vendor: phoronix
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 */12 * * *"
   relevance_filter: true
   relevance_keywords: "benchmark, kernel, scheduler, IO, performance, GPU, EPYC, AI, ML"
@@ -77,36 +86,42 @@
   url: https://lwn.net/headlines/rss
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 8 * * *"
 - name: LWN Features
   type: rss
   url: https://lwn.net/headlines/Features
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 8 * * *"
 - name: ServeTheHome
   type: rss
   url: https://www.servethehome.com/feed
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 8 * * *"
 - name: Linux Kernel Releases
   type: rss
   url: https://www.kernel.org/feeds/kdist.xml
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 6 * * *"
 - name: CachyOS Kernel Releases
   type: rss
   url: https://github.com/CachyOS/linux-cachyos/releases.atom
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 6 * * *"
 - name: LKML Latest Topics
   type: rss
   url: https://lore.kernel.org/lkml/new.atom
   stream: news
   main_category: OS性能发展
+  enabled: false
   relevance_filter: true
   relevance_keywords: "scheduler, sched, io_uring, BPF, performance, latency, throughput, NUMA, cgroup"
   fetch_cron: "0 6 * * *"
@@ -115,6 +130,7 @@
   url: https://rss.arxiv.org/rss/cs.OS+cs.PF+cs.DC+cs.AR
   stream: news
   main_category: OS性能发展
+  enabled: false
   relevance_filter: true
   relevance_keywords: "operating system, scheduler, kernel, IO, performance, benchmark, virtualization"
   fetch_cron: "0 1 * * *"
@@ -125,30 +141,35 @@
   url: "https://www.monperrus.net/martin/dblp-rss.py?search=venue:OSDI:"
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 2 * * 1"
 - name: SOSP Papers (DBLP)
   type: rss
   url: "https://www.monperrus.net/martin/dblp-rss.py?search=venue:SOSP:"
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 2 * * 1"
 - name: EuroSys Papers (DBLP)
   type: rss
   url: "https://www.monperrus.net/martin/dblp-rss.py?search=venue:EuroSys:"
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 2 * * 1"
 - name: ASPLOS Papers (DBLP)
   type: rss
   url: "https://www.monperrus.net/martin/dblp-rss.py?search=venue:ASPLOS:"
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 2 * * 1"
 - name: MLSys Papers (DBLP)
   type: rss
   url: "https://www.monperrus.net/martin/dblp-rss.py?search=venue:MLSys:"
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 2 * * 1"
 
 # --- OS性能发展: 页面监控 ---
@@ -157,60 +178,70 @@
   url: https://openbenchmarking.org/suite/pts/machine-learning
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 12 * * *"
 - name: OpenBenchmarking All Suites
   type: page_monitor
   url: https://openbenchmarking.org/suites/pts
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 12 * * 1"
 - name: Phoronix Test Suite
   type: page_monitor
   url: https://www.phoronix-test-suite.com/
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 12 * * 1"
 - name: CachyOS Blog
   type: page_monitor
   url: https://cachyos.org/blog/
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 12 * * *"
 - name: USENIX OSDI
   type: page_monitor
   url: https://www.usenix.org/conferences/byname/179
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 12 * * 1"
 - name: USENIX ATC
   type: page_monitor
   url: https://www.usenix.org/conferences/byname/131
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 12 * * 1"
 - name: USENIX FAST
   type: page_monitor
   url: https://www.usenix.org/conferences/byname/137
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 12 * * 1"
 - name: ACM SOSP
   type: page_monitor
   url: https://sosp.org/
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 12 * * 1"
 - name: ACM EuroSys
   type: page_monitor
   url: https://www.eurosys.org/
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 12 * * 1"
 - name: MLSys Conference
   type: page_monitor
   url: https://mlsys.org/
   stream: news
   main_category: OS性能发展
+  enabled: false
   fetch_cron: "0 12 * * 1"
 
 # =============================================
@@ -224,6 +255,7 @@
   vendor: redhat
   stream: news
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 9 * * *"
 - name: OpenShift Release Notes
   type: page_monitor
@@ -231,6 +263,7 @@
   vendor: redhat
   stream: news
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 9 * * *"
 - name: RHEL Release Dates
   type: page_monitor
@@ -238,6 +271,7 @@
   vendor: redhat
   stream: news
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 9 * * 1"
 
 # --- Ubuntu ---
@@ -247,43 +281,7 @@
   vendor: ubuntu
   stream: news
   main_category: OS跟踪来源
-  fetch_cron: "0 9 * * *"
-
-# --- openEuler ---
-- name: openEuler News
-  type: page_monitor
-  url: https://www.openeuler.org/en/news/
-  vendor: openeuler
-  stream: news
-  main_category: OS跟踪来源
-  fetch_cron: "0 9 * * *"
-- name: openEuler Release Notes
-  type: page_monitor
-  url: https://docs.openeuler.org/en/
-  vendor: openeuler
-  stream: news
-  main_category: OS跟踪来源
-  fetch_cron: "0 9 * * *"
-- name: openEuler Lifecycle
-  type: page_monitor
-  url: https://www.openeuler.org/en/other/lifecycle/
-  vendor: openeuler
-  stream: news
-  main_category: OS跟踪来源
-  fetch_cron: "0 6 * * 1"
-- name: openEuler Security Bulletins
-  type: page_monitor
-  url: https://www.openeuler.org/en/security/security-bulletins/
-  vendor: openeuler
-  stream: news
-  main_category: OS跟踪来源
-  fetch_cron: "0 9 * * *"
-- name: openEuler CVE
-  type: page_monitor
-  url: https://www.openeuler.org/en/security/cve/
-  vendor: openeuler
-  stream: news
-  main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 9 * * *"
 
 # --- OpenAnolis ---
@@ -316,6 +314,25 @@
   main_category: OS跟踪来源
   fetch_cron: "0 9 * * *"
 
+- name: openEuler Gitee Kernel Releases
+  type: page_monitor
+  url: https://gitee.com/openeuler/kernel/releases
+  vendor: openeuler
+  stream: news
+  main_category: OS跟踪来源
+  fetch_cron: "0 */6 * * *"
+  link_selector: ".release-list .release-item a, .release-entry h4 a, a[href*='releases/tag']"
+  date_selector: ".release-date, .time, time"
+- name: openEuler Gitee Community
+  type: page_monitor
+  url: https://gitee.com/openeuler/community/releases
+  vendor: openeuler
+  stream: news
+  main_category: OS跟踪来源
+  fetch_cron: "0 */6 * * *"
+  link_selector: ".release-list .release-item a, .release-entry h4 a, a[href*='releases/tag']"
+  date_selector: ".release-date, .time, time"
+
 # =============================================
 # Structured stream: API
 # =============================================
@@ -328,6 +345,7 @@
   vendor: redhat
   stream: structured
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 7 * * *"
 - name: Red Hat Product Life Cycle
   type: api
@@ -336,6 +354,7 @@
   vendor: redhat
   stream: structured
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 6 * * 1"
 - name: Red Hat Container Catalog (Pyxis)
   type: api
@@ -344,6 +363,7 @@
   vendor: redhat
   stream: structured
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 6 * * 1"
 
 # --- Ubuntu ---
@@ -354,6 +374,7 @@
   vendor: ubuntu
   stream: structured
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 7 * * *"
 - name: Ubuntu CVE
   type: api
@@ -362,6 +383,7 @@
   vendor: ubuntu
   stream: structured
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 7 * * *"
 - name: Ubuntu Releases
   type: api
@@ -370,6 +392,7 @@
   vendor: ubuntu
   stream: structured
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 6 * * 1"
 - name: Ubuntu OVAL Security Data
   type: api
@@ -378,6 +401,7 @@
   vendor: ubuntu
   stream: structured
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 6 * * 1"
 - name: Launchpad Ubuntu Packages
   type: api
@@ -386,6 +410,7 @@
   vendor: ubuntu
   stream: structured
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 6 * * 1"
 - name: Ubuntu Cloud Images (SimpleStreams)
   type: api
@@ -394,6 +419,7 @@
   vendor: ubuntu
   stream: structured
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 6 * * 1"
 - name: Ubuntu releases.yaml
   type: api
@@ -402,6 +428,7 @@
   vendor: ubuntu
   stream: structured
   main_category: OS跟踪来源
+  enabled: false
   fetch_cron: "0 6 * * 1"
 
 # --- openEuler ---
@@ -429,41 +456,45 @@
 # =============================================
 
 # --- openEuler (友商) ---
-- name: openEuler 新闻资讯 (zh)
-  type: page_monitor
-  url: https://www.openeuler.org/zh/news/
-  vendor: openeuler
-  stream: news
-  main_category: 友商产品信息
-  fetch_cron: "0 10 * * *"
-- name: openEuler Blog
-  type: page_monitor
-  url: https://www.openeuler.org/en/interaction/blog-list/
-  vendor: openeuler
-  stream: news
-  main_category: 友商产品信息
-  fetch_cron: "0 10 * * *"
-- name: openEuler 安全中心 (zh)
-  type: page_monitor
-  url: https://www.openeuler.org/zh/security/
-  vendor: openeuler
-  stream: news
-  main_category: 友商产品信息
-  fetch_cron: "0 10 * * *"
 - name: openEuler Forum
-  type: page_monitor
-  url: https://forum.openeuler.org/
+  type: rss
+  url: https://forum.openeuler.org/latest.rss
   vendor: openeuler
   stream: news
   main_category: 友商产品信息
-  fetch_cron: "0 10 * * *"
-- name: openEuler Mailing List Archive
+  fetch_cron: "0 */4 * * *"
+- name: openEuler Release 邮件列表
   type: page_monitor
-  url: https://mailweb.openeuler.org/archives/
+  url: https://mailweb.openeuler.org/archives/list/release@openeuler.org/
   vendor: openeuler
   stream: news
   main_category: 友商产品信息
-  fetch_cron: "0 10 * * *"
+  fetch_cron: "0 9 * * *"
+  link_selector: "a[href*='/thread/']"
+- name: openEuler Dev 邮件列表
+  type: page_monitor
+  url: https://mailweb.openeuler.org/archives/list/dev@openeuler.org/
+  vendor: openeuler
+  stream: news
+  main_category: 友商产品信息
+  fetch_cron: "0 9 * * *"
+  link_selector: "a[href*='/thread/']"
+- name: openEuler TC 邮件列表
+  type: page_monitor
+  url: https://mailweb.openeuler.org/archives/list/tc@openeuler.org/
+  vendor: openeuler
+  stream: news
+  main_category: 友商产品信息
+  fetch_cron: "0 9 * * *"
+  link_selector: "a[href*='/thread/']"
+- name: openEuler Kernel 邮件列表
+  type: page_monitor
+  url: https://mailweb.openeuler.org/archives/list/kernel@openeuler.org/
+  vendor: openeuler
+  stream: news
+  main_category: 友商产品信息
+  fetch_cron: "0 9 * * *"
+  link_selector: "a[href*='/thread/']"
 - name: openEuler Repo Metadata
   type: api
   url: https://repo.openeuler.org/
@@ -517,6 +548,7 @@
   vendor: redhat
   stream: news
   main_category: 友商产品信息
+  enabled: false
   fetch_cron: "0 10 * * *"
 - name: Red Hat Docs
   type: page_monitor
@@ -524,6 +556,7 @@
   vendor: redhat
   stream: news
   main_category: 友商产品信息
+  enabled: false
   fetch_cron: "0 10 * * 1"
 - name: Red Hat GitHub
   type: page_monitor
@@ -531,6 +564,7 @@
   vendor: redhat
   stream: news
   main_category: 友商产品信息
+  enabled: false
   fetch_cron: "0 10 * * 1"
 
 # --- Ubuntu / Canonical (友商) ---
@@ -540,6 +574,7 @@
   vendor: ubuntu
   stream: news
   main_category: 友商产品信息
+  enabled: false
   fetch_cron: "0 10 * * *"
 - name: Ubuntu News (The Fridge)
   type: rss
@@ -547,6 +582,7 @@
   vendor: ubuntu
   stream: news
   main_category: 友商产品信息
+  enabled: false
   fetch_cron: "0 10 * * *"
 - name: Ubuntu Discourse
   type: page_monitor
@@ -554,6 +590,7 @@
   vendor: ubuntu
   stream: news
   main_category: 友商产品信息
+  enabled: false
   fetch_cron: "0 10 * * *"
 - name: Canonical GitHub
   type: page_monitor
@@ -561,6 +598,7 @@
   vendor: ubuntu
   stream: news
   main_category: 友商产品信息
+  enabled: false
   fetch_cron: "0 10 * * 1"
 - name: Ubuntu OSV Security Notices
   type: api
@@ -569,6 +607,7 @@
   vendor: ubuntu
   stream: structured
   main_category: 友商产品信息
+  enabled: false
   fetch_cron: "0 7 * * *"
 - name: Canonical Security Metadata
   type: api
@@ -577,27 +616,12 @@
   vendor: ubuntu
   stream: structured
   main_category: 友商产品信息
+  enabled: false
   fetch_cron: "0 6 * * 1"
 
 # =============================================
 # 软件包适配
 # =============================================
-
-# --- openEuler ---
-- name: openEuler 兼容性中心
-  type: page_monitor
-  url: https://www.openeuler.org/zh/compatibility/
-  vendor: openeuler
-  stream: news
-  main_category: 软件包适配
-  fetch_cron: "0 11 * * *"
-- name: openEuler 软件包查询
-  type: page_monitor
-  url: https://search.openeuler.org/
-  vendor: openeuler
-  stream: news
-  main_category: 软件包适配
-  fetch_cron: "0 11 * * *"
 
 # --- OpenAnolis ---
 - name: OpenAnolis 兼容性列表平台
@@ -622,6 +646,7 @@
   vendor: redhat
   stream: news
   main_category: 软件包适配
+  enabled: false
   fetch_cron: "0 11 * * *"
 - name: Red Hat Package Browser
   type: page_monitor
@@ -629,6 +654,7 @@
   vendor: redhat
   stream: news
   main_category: 软件包适配
+  enabled: false
   fetch_cron: "0 11 * * *"
 
 # --- Ubuntu ---
@@ -638,6 +664,7 @@
   vendor: ubuntu
   stream: news
   main_category: 软件包适配
+  enabled: false
   fetch_cron: "0 11 * * *"
 - name: Ubuntu Packages
   type: page_monitor
@@ -645,4 +672,5 @@
   vendor: ubuntu
   stream: news
   main_category: 软件包适配
+  enabled: false
   fetch_cron: "0 11 * * *"

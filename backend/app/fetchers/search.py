@@ -24,7 +24,7 @@ class SearchFetcher(Fetcher):
                     title=doc.title or result.title or result.url,
                     url=result.url,
                     raw_content=doc.clean_content,
-                    published_at=doc.published_at,
+                    published_at=doc.published_at or result.published_at,
                 )
             )
         return items

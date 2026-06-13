@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Example Atom Feed</title>
+  <entry>
+    <title>Atom Entry with updated only</title>
+    <link href="https://example.com/atom-entry-1"/>
+    <updated>2026-06-10T14:30:00Z</updated>
+    <summary>This entry has no published, only updated.</summary>
+  </entry>
+  <entry>
+    <title>Atom Entry with both dates</title>
+    <link href="https://example.com/atom-entry-2"/>
+    <published>2026-06-09T08:00:00Z</published>
+    <updated>2026-06-10T12:00:00Z</updated>
+    <summary>This entry has both published and updated.</summary>
+  </entry>
+</feed>

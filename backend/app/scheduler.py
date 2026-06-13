@@ -52,7 +52,7 @@ def run_source_job(source_id: int):
         source = session.get(Source, source_id)
         if not source or not source.enabled:
             return
-        extractor = ScraplingExtractor()
+        extractor = ScraplingExtractor(use_stealth=source.stealth)
         search = get_search_provider()
         fetcher = build_fetcher(source, extractor, search)
         pipeline = Pipeline(session=session, extractor=extractor, enricher=Enricher())

@@ -57,6 +57,11 @@ class Pipeline:
     def process_item(self, source: Source, raw) -> bool:
         doc = self._extract_for(raw, source)
         normalized = normalize(raw, doc)
+        if normalized.published_at is None:
+            logger.warning(
+                "item %s has no published_at after extraction (source=%s, type=%s)",
+                normalized.canonical_url, source.name, source.type,
+            )
         if self._repo.exists_by_canonical(normalized.canonical_url):
             self._repo.merge_source_link(normalized.canonical_url, source.id, raw.url)
             return False
@@ -80,7 +85,17 @@ class Pipeline:
                     clean_content=raw.raw_content,
                     published_at=raw.published_at,
                 )
-            return self._extractor.extract(raw.url)
+            doc = self._extractor.extract(raw.url)
+            # Preserve the RSS-provided date if page extraction didn't find one.
+            doc.published_at = doc.published_at or raw.published_at
+            return doc
+
+        # List-mode page_monitor: raw_content is None → fetch article page.
+        if source.type == SourceType.PAGE_MONITOR and not raw.raw_content:
+            doc = self._extractor.extract(raw.url)
+            doc.published_at = doc.published_at or raw.published_at
+            return doc
+
         return ExtractedDoc(
             url=raw.url,
             title=raw.title,

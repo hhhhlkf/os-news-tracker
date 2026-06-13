@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel
@@ -9,6 +10,7 @@ class SearchResult(BaseModel):
     url: str
     title: str | None = None
     snippet: str | None = None
+    published_at: datetime | None = None
 
 
 @runtime_checkable

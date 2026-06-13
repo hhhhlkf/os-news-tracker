@@ -91,3 +91,52 @@ def test_pipeline_blocks_internal_ai_category_for_non_internal_sources(session):
 
     stored = session.query(Source).get(1).items[0]
     assert stored.main_category == "OS性能发展"
+
+
+def test_list_mode_page_monitor_extracts_from_article_url(session):
+    """When a page_monitor item has no raw_content (list mode), the pipeline
+    should fetch and extract the article page content."""
+    src = Source(
+        id=2,
+        name="ListMonitor",
+        type=SourceType.PAGE_MONITOR,
+        url="https://example.com/news-list",
+    )
+    session.add(src)
+    session.commit()
+
+    class _ListModeFetcher:
+        def fetch(self, source):
+            return [
+                RawItem(
+                    source_id=2,
+                    title="Article from list",
+                    url="https://example.com/article-1",
+                    raw_content=None,  # list mode — no pre-fetched content
+                    published_at=None,
+                )
+            ]
+
+    # Track which URLs the extractor was asked to extract.
+    class _TrackingExtractor:
+        def __init__(self):
+            self.extracted_urls: list[str] = []
+
+        def extract(self, url):
+            self.extracted_urls.append(url)
+            return ExtractedDoc(
+                url=url,
+                title="Article from list",
+                clean_content="extracted article body",
+                published_at=None,
+            )
+
+    extractor = _TrackingExtractor()
+    pipeline = Pipeline(session=session, extractor=extractor, enricher=_StubEnricher())
+    n = pipeline.run_source(src, fetcher=_ListModeFetcher())
+    assert n == 1
+    # The extractor was called for the article URL, not the list page URL.
+    assert "https://example.com/article-1" in extractor.extracted_urls
+
+    stored = src.items[0]
+    assert stored.url == "https://example.com/article-1"
