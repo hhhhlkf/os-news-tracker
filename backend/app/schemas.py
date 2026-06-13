@@ -84,6 +84,7 @@ class TimeFilterStats(BaseModel):
     before_start: int = 0
     after_end: int = 0
     matched: int = 0
+    included_without_date: int = 0
 
 
 class ManualNewsRunStatus(BaseModel):

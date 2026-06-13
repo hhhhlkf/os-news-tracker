@@ -6,6 +6,7 @@ from threading import Lock
 import logging
 import threading
 
+from app.enums import MissingDatePolicy
 from app.schemas import (
     ManualNewsRunRequest,
     ManualNewsRunStatus,
@@ -35,6 +36,18 @@ _MAX_EXPANSION_ROUNDS = 3
 
 logger = logging.getLogger(__name__)
 
+
+def _resolve_missing_date_policy() -> MissingDatePolicy:
+    """Read ``MISSING_DATE_POLICY`` from settings at call time (not import)
+    so tests can change the value."""
+    from app.config import get_settings
+
+    raw = get_settings().missing_date_policy
+    try:
+        return MissingDatePolicy(raw)
+    except ValueError:
+        logger.warning("invalid MISSING_DATE_POLICY=%r, falling back to exclude", raw)
+        return MissingDatePolicy.EXCLUDE
 
 @dataclass
 class _RuntimeState:
@@ -152,6 +165,7 @@ class ManualNewsRunController:
         before: int = 0,
         after: int = 0,
         matched: int = 0,
+        included_without_date: int = 0,
     ) -> None:
         with self._lock:
             self._runtime.time_filter_stats = TimeFilterStats(
@@ -159,6 +173,7 @@ class ManualNewsRunController:
                 before_start=before,
                 after_end=after,
                 matched=matched,
+                included_without_date=included_without_date,
             )
 
     # -- candidate helpers ------------------------------------------------
@@ -177,7 +192,7 @@ class ManualNewsRunController:
             if self._matches_time_window(request, item, current_time)
         ]
         filtered.sort(
-            key=lambda item: item.published_at or datetime.min.replace(tzinfo=timezone.utc),
+            key=lambda item: item.published_at or datetime.now(timezone.utc),
             reverse=True,
         )
         return filtered
@@ -198,9 +213,16 @@ class ManualNewsRunController:
         stats = TimeFilterStats()
         filtered: list[RawItem] = []
 
+        policy = _resolve_missing_date_policy()
+
         for item in items:
             if item.published_at is None:
-                stats.missing_published_at += 1
+                if policy == MissingDatePolicy.INCLUDE_AS_NOW:
+                    stats.included_without_date += 1
+                    stats.matched += 1
+                    filtered.append(item)
+                else:
+                    stats.missing_published_at += 1
                 continue
 
             item_ts = _as_utc(item.published_at)
@@ -282,7 +304,7 @@ class ManualNewsRunController:
         now: datetime,
     ) -> bool:
         if item.published_at is None:
-            return False
+            return _resolve_missing_date_policy() == MissingDatePolicy.INCLUDE_AS_NOW
         item_ts = _as_utc(item.published_at)
         if request.time_mode == "relative":
             lower_bound = _as_utc(now) - _RELATIVE_RANGE_TO_DELTA[request.relative_range]
@@ -379,7 +401,6 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
 
         collect_session = SessionLocal()
         try:
-            extractor = ScraplingExtractor()
             search = get_search_provider()
 
             for source in sources_for_round:
@@ -392,6 +413,8 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
                 # are persisted on commit.
                 source = collect_session.merge(source)
 
+                # Create extractor per-source so stealth is honored.
+                extractor = ScraplingExtractor(use_stealth=source.stealth)
                 fetcher = build_fetcher(source, extractor, search)
                 try:
                     candidates = fetcher.fetch(source)
@@ -416,6 +439,7 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
                     before=acc_stats.before_start,
                     after=acc_stats.after_end,
                     matched=acc_stats.matched,
+                    included_without_date=acc_stats.included_without_date,
                 )
 
                 new_items = [c for c in time_filtered if c.url not in seen_urls]
@@ -532,6 +556,8 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
             f"发现 {discovered_total} 条",
             f"时间命中 {acc_stats.matched} 条",
         ]
+        if acc_stats.included_without_date:
+            filter_detail_parts.append(f"无日期视为当前 {acc_stats.included_without_date} 条")
         if acc_stats.missing_published_at:
             filter_detail_parts.append(f"缺少发布时间 {acc_stats.missing_published_at} 条")
         if acc_stats.before_start:

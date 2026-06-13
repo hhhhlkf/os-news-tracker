@@ -148,7 +148,11 @@ def test_filter_candidates_excludes_out_of_window():
     assert [item.title for item in filtered] == ["recent"]
 
 
-def test_filter_candidates_excludes_missing_published_at():
+def test_filter_candidates_excludes_missing_published_at(monkeypatch):
+    monkeypatch.setenv("MISSING_DATE_POLICY", "exclude")
+    # Clear the lru_cache so get_settings() re-reads the env var.
+    from app.config import get_settings
+    get_settings.cache_clear()
     from app.manual_news_run import ManualNewsRunController
 
     controller = ManualNewsRunController()
@@ -350,8 +354,11 @@ def test_absolute_mode_preserves_dates_in_status():
 # ── Time filter stats ────────────────────────────────────────────────
 
 
-def test_time_filter_stats_missing_published_at():
-    """Items with published_at=None must be counted as 'missing_published_at'."""
+def test_time_filter_stats_missing_published_at(monkeypatch):
+    """Items with published_at=None are counted as 'missing_published_at' when policy is exclude."""
+    monkeypatch.setenv("MISSING_DATE_POLICY", "exclude")
+    from app.config import get_settings
+    get_settings.cache_clear()
     from app.manual_news_run import ManualNewsRunController, TimeFilterStats
 
     controller = ManualNewsRunController()
@@ -408,8 +415,11 @@ def test_time_filter_stats_after_end_absolute():
     assert stats.matched == 1
 
 
-def test_time_filter_stats_all_categories():
-    """A single call exercises all four stat categories."""
+def test_time_filter_stats_all_categories(monkeypatch):
+    """A single call exercises all stat categories (with exclude policy)."""
+    monkeypatch.setenv("MISSING_DATE_POLICY", "exclude")
+    from app.config import get_settings
+    get_settings.cache_clear()
     from app.manual_news_run import ManualNewsRunController, TimeFilterStats
 
     controller = ManualNewsRunController()
@@ -505,8 +515,11 @@ def test_different_timezone_inputs_produce_same_filter_result():
     assert {item.url for item in utc_filtered} == {item.url for item in cst_filtered}
 
 
-def test_published_at_none_not_counted_as_matched():
-    """Items with published_at=None must not be included in matched results."""
+def test_published_at_none_not_counted_as_matched(monkeypatch):
+    """Items with published_at=None must not be included when policy is exclude."""
+    monkeypatch.setenv("MISSING_DATE_POLICY", "exclude")
+    from app.config import get_settings
+    get_settings.cache_clear()
     from app.manual_news_run import ManualNewsRunController
 
     controller = ManualNewsRunController()
@@ -541,3 +554,67 @@ def test_status_includes_time_filter_stats():
     assert status.time_filter_stats.before_start == 5
     assert status.time_filter_stats.after_end == 0
     assert status.time_filter_stats.matched == 12
+
+
+# ── MissingDatePolicy include_as_now ────────────────────────────────
+
+
+def test_include_as_now_adds_items_to_matched(monkeypatch):
+    """With MISSING_DATE_POLICY=include_as_now, None-date items enter matched."""
+    # Restore the default (tests above may have set it to "exclude").
+    monkeypatch.delenv("MISSING_DATE_POLICY", raising=False)
+    from app.config import get_settings
+    get_settings.cache_clear()
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="24h", target_count=10)
+    items = [
+        RawItem(source_id=1, title="no-date", url="https://x/1", published_at=None),
+        RawItem(source_id=1, title="in-window", url="https://x/2", published_at=now - timedelta(hours=1)),
+    ]
+
+    filtered = controller.filter_candidates(req, items, now=now)
+    assert len(filtered) == 2
+    assert {item.title for item in filtered} == {"no-date", "in-window"}
+
+
+def test_include_as_now_stats_tracks_included_without_date(monkeypatch):
+    """With include_as_now, included_without_date tracks the count."""
+    monkeypatch.delenv("MISSING_DATE_POLICY", raising=False)
+    from app.config import get_settings
+    get_settings.cache_clear()
+    from app.manual_news_run import ManualNewsRunController, TimeFilterStats
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="7d", target_count=10)
+    items = [
+        RawItem(source_id=1, title="no-date", url="https://x/1", published_at=None),
+        RawItem(source_id=1, title="no-date2", url="https://x/2", published_at=None),
+        RawItem(source_id=1, title="has-date", url="https://x/3", published_at=now - timedelta(hours=1)),
+    ]
+
+    _filtered, stats = controller.filter_candidates_with_stats(req, items, now=now)
+    assert stats.included_without_date == 2
+    assert stats.missing_published_at == 0
+    assert stats.matched == 3
+
+
+def test_include_as_now_empty_list(monkeypatch):
+    """Empty candidate list with include_as_now produces zero stats."""
+    monkeypatch.delenv("MISSING_DATE_POLICY", raising=False)
+    from app.config import get_settings
+    get_settings.cache_clear()
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="24h", target_count=10)
+    items: list[RawItem] = []
+
+    _filtered, stats = controller.filter_candidates_with_stats(req, items, now=now)
+    assert stats.included_without_date == 0
+    assert stats.matched == 0
+    assert stats.missing_published_at == 0

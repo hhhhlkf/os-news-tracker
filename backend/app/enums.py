@@ -66,6 +66,19 @@ class CompatibilityKind(StrEnum):
     OSV = "osv"
 
 
+class MissingDatePolicy(StrEnum):
+    """Policy for handling items with missing ``published_at`` during time filtering.
+
+    - ``exclude`` — drop items with no date (current behaviour).
+    - ``include_as_now`` — treat items with no date as if they were just published,
+      counting them in ``matched`` but also tracked separately in
+      ``TimeFilterStats.included_without_date``.
+    """
+
+    EXCLUDE = "exclude"
+    INCLUDE_AS_NOW = "include_as_now"
+
+
 MAIN_CATEGORIES = [
     "OS跟踪来源",
     "友商产品信息",

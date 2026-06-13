@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     search_provider: str = "none"
     fetch_user_agent: str = "os-news-tracker/0.1 (+internal)"
     fetch_per_host_delay_seconds: float = 2.0
+    missing_date_policy: str = "include_as_now"
 
 
 @lru_cache
