@@ -65,9 +65,8 @@ def test_page_monitor_uses_extracted_date():
     assert items[0].published_at == extracted_date
 
 
-def test_page_monitor_falls_back_to_now_when_no_date():
-    """When the extractor returns no date, datetime.now(UTC) is used as fallback."""
-    before = datetime.now(timezone.utc)
+def test_page_monitor_preserves_missing_date():
+    """Legacy items leave missing dates unresolved for the pipeline quality gate."""
     src = Source(
         id=4,
         name="NoDate",
@@ -79,15 +78,8 @@ def test_page_monitor_falls_back_to_now_when_no_date():
         extractor=_StubExtractor("content", published_at=None)
     )
     items = fetcher.fetch(src)
-    after = datetime.now(timezone.utc)
     assert len(items) == 1
-    # The fallback should be within a small window around now.
-    assert items[0].published_at is not None
-    assert before - after < items[0].published_at - after < after - after  # pyright: ignore[reportUnusedExpression]
-    # Simpler: just assert it's a recent UTC datetime.
-    delta = (after - items[0].published_at).total_seconds()
-    assert delta >= 0  # fallback time ≤ after
-    assert delta < 5    # within 5 seconds
+    assert items[0].published_at is None
 
 
 # ── List-page mode (方案2) ──────────────────────────────────────────

@@ -291,6 +291,7 @@
   vendor: openanolis
   stream: news
   main_category: OS跟踪来源
+  enabled: false  # Dynamic news list; needs API adapter or reliable article selector.
   fetch_cron: "0 9 * * *"
 - name: Anolis OS Product Docs
   type: page_monitor
@@ -298,6 +299,7 @@
   vendor: openanolis
   stream: news
   main_category: OS跟踪来源
+  enabled: false  # Product documentation index, not a news/article feed.
   fetch_cron: "0 9 * * *"
 - name: ANAS Errata
   type: page_monitor
@@ -305,6 +307,7 @@
   vendor: openanolis
   stream: news
   main_category: OS跟踪来源
+  enabled: false  # Dynamic advisory list; structured adapter is safer than legacy page mode.
   fetch_cron: "0 9 * * *"
 - name: ANAS CVE
   type: page_monitor
@@ -312,6 +315,7 @@
   vendor: openanolis
   stream: news
   main_category: OS跟踪来源
+  enabled: false  # Dynamic CVE list; structured adapter is safer than legacy page mode.
   fetch_cron: "0 9 * * *"
 
 - name: openEuler Gitee Kernel Releases
@@ -511,6 +515,7 @@
   vendor: openanolis
   stream: news
   main_category: 友商产品信息
+  enabled: false  # Bug tracker landing page; no article/news list selector.
   fetch_cron: "0 10 * * *"
 - name: OpenAnolis Mailing Lists
   type: page_monitor
@@ -518,6 +523,7 @@
   vendor: openanolis
   stream: news
   main_category: 友商产品信息
+  enabled: false  # Mailing-list index page; monitor concrete archives instead.
   fetch_cron: "0 10 * * *"
 - name: OpenAnolis SIG
   type: page_monitor
@@ -525,20 +531,25 @@
   vendor: openanolis
   stream: news
   main_category: 友商产品信息
+  enabled: false  # SIG directory page, not a news/article feed.
   fetch_cron: "0 10 * * 1"
+# Disabled: organization portal, not a news/article feed.
 - name: OpenAnolis Gitee
   type: page_monitor
   url: https://gitee.com/openanolis
   vendor: openanolis
   stream: news
   main_category: 友商产品信息
+  enabled: false
   fetch_cron: "0 10 * * 1"
+# Disabled: repository documentation index, not a news/article feed.
 - name: Anolis Developer Docs
   type: page_monitor
   url: https://gitee.com/anolis/docs
   vendor: openanolis
   stream: news
   main_category: 友商产品信息
+  enabled: false
   fetch_cron: "0 10 * * 1"
 
 # --- Red Hat (友商) ---
@@ -630,6 +641,7 @@
   vendor: openanolis
   stream: news
   main_category: 软件包适配
+  enabled: false  # Compatibility catalog landing page; structured adapter needed.
   fetch_cron: "0 11 * * *"
 - name: OpenAnolis 硬件兼容性 SIG (HCT)
   type: page_monitor
@@ -637,6 +649,7 @@
   vendor: openanolis
   stream: news
   main_category: 软件包适配
+  enabled: false  # SIG landing page, not a news/article feed.
   fetch_cron: "0 11 * * 1"
 
 # --- Red Hat ---

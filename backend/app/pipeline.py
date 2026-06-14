@@ -7,11 +7,15 @@ from app.enums import SourceType
 from app.models import Source
 from app.processing.normalizer import normalize
 from app.repository import Repository
+from app.schemas import NormalizedItem, RawItem
 
 logger = logging.getLogger(__name__)
 
 INTERNAL_AI_CATEGORY = "司内AI工具"
 INTERNAL_AI_HOSTS = {"km.woa.com", "iwiki.woa.com"}
+
+# Legacy whole-page monitors need enough article-like content before LLM enrichment.
+MIN_CONTENT_LEN = 500
 
 
 class Pipeline:
@@ -65,6 +69,9 @@ class Pipeline:
         if self._repo.exists_by_canonical(normalized.canonical_url):
             self._repo.merge_source_link(normalized.canonical_url, source.id, raw.url)
             return False
+        if self._is_legacy_page_monitor_item(source, raw):
+            if not self._passes_legacy_page_quality_gate(source, normalized):
+                return False
         try:
             fields = self._enricher.enrich(normalized)
         except Exception:
@@ -91,7 +98,7 @@ class Pipeline:
             return doc
 
         # List-mode page_monitor: raw_content is None → fetch article page.
-        if source.type == SourceType.PAGE_MONITOR and not raw.raw_content:
+        if source.type == SourceType.PAGE_MONITOR and raw.raw_content is None:
             doc = self._extractor.extract(raw.url)
             doc.published_at = doc.published_at or raw.published_at
             return doc
@@ -113,3 +120,32 @@ class Pipeline:
 
         fallback_category = source.main_category or "OS跟踪来源"
         return fields.model_copy(update={"main_category": fallback_category})
+
+    def _is_legacy_page_monitor_item(self, source: Source, raw: RawItem) -> bool:
+        return (
+            source.type == SourceType.PAGE_MONITOR
+            and not source.link_selector
+            and raw.raw_content is not None
+        )
+
+    def _passes_legacy_page_quality_gate(
+        self,
+        source: Source,
+        item: NormalizedItem,
+    ) -> bool:
+        if len(item.clean_content) < MIN_CONTENT_LEN:
+            logger.info(
+                "legacy page_monitor skipped %s (source=%s, reason=short_content, len=%s)",
+                item.canonical_url,
+                source.name,
+                len(item.clean_content),
+            )
+            return False
+        if item.published_at is None:
+            logger.info(
+                "legacy page_monitor skipped %s (source=%s, reason=missing_published_at)",
+                item.canonical_url,
+                source.name,
+            )
+            return False
+        return True

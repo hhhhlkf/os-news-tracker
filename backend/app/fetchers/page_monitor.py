@@ -21,16 +21,13 @@ class PageMonitorFetcher(Fetcher):
         if source.last_content_hash == new_hash:
             return []
         source.last_content_hash = new_hash
-        # Use the date extracted from the page; fall back to now (UTC) so
-        # items pass time-filtering in manual news runs.
-        published_at = doc.published_at or datetime.now(timezone.utc)
         return [
             RawItem(
                 source_id=source.id,
                 title=doc.title or source.name,
                 url=source.url,
                 raw_content=doc.clean_content,
-                published_at=published_at,
+                published_at=doc.published_at,
             )
         ]
 
