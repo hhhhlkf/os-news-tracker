@@ -9,6 +9,7 @@ _PROMPT_TEMPLATE = """你是操作系统维护工程师的技术情报分析师�
 
 只收录有专业价值的技术内容：版本发布、安全公告、新技术/工具发布、AI agent/LLM 工具链进展、性能基准测试、技术架构分析。
 不收录：社区活动通知、招聘信息、用户入门教程、市场营销材料、非技术性公告。
+如果正文为空、只有站点导航、只是文档首页/仓库首页/SIG 介绍页，或者信息不足以支撑真实技术摘要，则不要收录。
 
 输出严格 JSON（不要多余文字）。
 
@@ -24,6 +25,8 @@ _PROMPT_TEMPLATE = """你是操作系统维护工程师的技术情报分析师�
 - sub_tags: 细粒度子标签（字符串数组，如厂商名/产品名/技术名）
 - keywords: 扁平关键词数组，列出文中的关键技术术语（如 ["Linux 6.12", "RHEL 10", "systemd 256", "eBPF"]）
 - confidence: 0~1 的浮点，表示你对归类与摘要的把握
+- should_store: 布尔值。若页面不是新闻/热点/技术更新，或信息不足，则必须为 false
+- reject_reason: 当 should_store=false 时必填，简要说明拒收原因；当 should_store=true 时可为 null
 
 标题：{title}
 正文：
@@ -57,4 +60,8 @@ class Enricher:
         data = _extract_json(raw)
         if data.get("main_category") not in MAIN_CATEGORIES:
             data["main_category"] = MAIN_CATEGORIES[-1]
+        if "should_store" not in data:
+            data["should_store"] = True
+        if data.get("should_store") and "reject_reason" not in data:
+            data["reject_reason"] = None
         return EnrichedFields(**data)

@@ -19,6 +19,20 @@ function daysAgo(n: number): string {
 
 type TimePreset = "all" | "24h" | "7d" | "30d" | "custom";
 
+const HOTSPOT_SCROLL_HEIGHT = 164;
+
+export function getFacetFilterKey(key: keyof Facets): string {
+  return key === "sub_tags" ? "sub_tag" : key;
+}
+
+export function getFacetGroups(): [keyof Facets, string][] {
+  return [
+    ["main_category", "主分类"],
+    ["importance", "重要度"],
+    ["sub_tags", "技术热点"],
+  ];
+}
+
 export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
   const [customExpanded, setCustomExpanded] = useState(false);
 
@@ -63,12 +77,7 @@ export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
     );
   }
 
-  const groups: [keyof Facets, string][] = [
-    ["main_category", "主分类"],
-    ["info_type", "信息类型"],
-    ["importance", "重要度"],
-    ["sub_tags", "技术热点"],
-  ];
+  const groups = getFacetGroups();
 
   const presets: { key: TimePreset; label: string }[] = [
     { key: "all", label: "全部" },
@@ -92,23 +101,35 @@ export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
           }}
         >
           <div style={{ fontWeight: 600, marginBottom: 10, color: "#101828" }}>{label}</div>
-          {facets[key].map((f: { value: string; count: number }) => (
-            <div key={f.value}
-                 onClick={() => onSelect(key, selected[key] === f.value ? "" : f.value)}
-                 style={{
-                   cursor: "pointer",
-                   padding: "8px 10px",
-                   borderRadius: 6,
-                   background: selected[key] === f.value ? "#eff8ff" : "transparent",
-                   color: selected[key] === f.value ? "#175cd3" : "#344054",
-                   fontSize: 13,
-                   display: "flex",
-                   justifyContent: "space-between",
-                 }}>
-              <span>{f.value}</span>
-              <span style={{ color: "#98a2b3" }}>{f.count}</span>
-            </div>
-          ))}
+          <div
+            style={key === "sub_tags" ? {
+              maxHeight: HOTSPOT_SCROLL_HEIGHT,
+              overflowY: "auto",
+              paddingRight: 4,
+            } : undefined}
+          >
+            {facets[key].map((f: { value: string; count: number }) => {
+              const filterKey = getFacetFilterKey(key);
+              const activeValue = selected[filterKey];
+              return (
+                <div key={f.value}
+                     onClick={() => onSelect(filterKey, activeValue === f.value ? "" : f.value)}
+                     style={{
+                       cursor: "pointer",
+                       padding: "8px 10px",
+                       borderRadius: 6,
+                       background: activeValue === f.value ? "#eff8ff" : "transparent",
+                       color: activeValue === f.value ? "#175cd3" : "#344054",
+                       fontSize: 13,
+                       display: "flex",
+                       justifyContent: "space-between",
+                     }}>
+                  <span>{f.value}</span>
+                  <span style={{ color: "#98a2b3" }}>{f.count}</span>
+                </div>
+              );
+            })}
+          </div>
         </section>
       ))}
 

@@ -30,6 +30,8 @@ class EnrichedFields(BaseModel):
     sub_tags: list[str] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
     confidence: float = 0.0
+    should_store: bool = True
+    reject_reason: str | None = None
 
 
 class NormalizedItem(BaseModel):

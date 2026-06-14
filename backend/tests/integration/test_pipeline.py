@@ -140,3 +140,42 @@ def test_list_mode_page_monitor_extracts_from_article_url(session):
 
     stored = src.items[0]
     assert stored.url == "https://example.com/article-1"
+
+
+def test_pipeline_applies_relevance_filter_when_enabled(session, monkeypatch):
+    src = session.get(Source, 1)
+    src.relevance_filter = True
+    src.relevance_keywords = "kernel, release"
+    session.commit()
+
+    monkeypatch.setattr("app.pipeline.llm_relevance", lambda *args, **kwargs: False)
+
+    pipeline = Pipeline(session=session, extractor=_StubExtractor(), enricher=_StubEnricher())
+
+    assert pipeline.run_source(src, fetcher=_StubFetcher()) == 0
+    assert session.query(Source).get(1).items == []
+
+
+class _RejectingEnricher:
+    def enrich(self, item):
+        return EnrichedFields(
+            title_zh="无效页面",
+            summary="页面缺少可提取的正文内容。",
+            tech_highlights=[],
+            info_type=InfoType.OTHER,
+            importance=Importance.LOW,
+            main_category="友商产品信息",
+            sub_tags=[],
+            keywords=[],
+            confidence=0.1,
+            should_store=False,
+            reject_reason="source page is a docs or landing page without newsworthy content",
+        )
+
+
+def test_pipeline_skips_non_newsworthy_items_rejected_by_enricher(session):
+    src = session.get(Source, 1)
+    pipeline = Pipeline(session=session, extractor=_StubExtractor(), enricher=_RejectingEnricher())
+
+    assert pipeline.run_source(src, fetcher=_StubFetcher()) == 0
+    assert session.query(Source).get(1).items == []

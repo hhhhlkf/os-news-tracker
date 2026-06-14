@@ -217,7 +217,10 @@ class ManualNewsRunController:
 
         for item in items:
             if item.published_at is None:
-                if policy == MissingDatePolicy.INCLUDE_AS_NOW:
+                if (
+                    request.time_mode == "relative"
+                    and policy == MissingDatePolicy.INCLUDE_AS_NOW
+                ):
                     stats.included_without_date += 1
                     stats.matched += 1
                     filtered.append(item)
@@ -304,7 +307,10 @@ class ManualNewsRunController:
         now: datetime,
     ) -> bool:
         if item.published_at is None:
-            return _resolve_missing_date_policy() == MissingDatePolicy.INCLUDE_AS_NOW
+            return (
+                request.time_mode == "relative"
+                and _resolve_missing_date_policy() == MissingDatePolicy.INCLUDE_AS_NOW
+            )
         item_ts = _as_utc(item.published_at)
         if request.time_mode == "relative":
             lower_bound = _as_utc(now) - _RELATIVE_RANGE_TO_DELTA[request.relative_range]
@@ -434,6 +440,7 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
                 acc_stats.before_start += round_stats.before_start
                 acc_stats.after_end += round_stats.after_end
                 acc_stats.matched += round_stats.matched
+                acc_stats.included_without_date += round_stats.included_without_date
                 _controller.set_time_filter_stats(
                     missing_pub=acc_stats.missing_published_at,
                     before=acc_stats.before_start,

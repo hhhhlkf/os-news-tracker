@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.enums import SourceType
 from app.models import Source
 from app.processing.normalizer import normalize
+from app.processing.relevance import llm_relevance
 from app.repository import Repository
 from app.schemas import NormalizedItem, RawItem
 
@@ -72,10 +73,30 @@ class Pipeline:
         if self._is_legacy_page_monitor_item(source, raw):
             if not self._passes_legacy_page_quality_gate(source, normalized):
                 return False
+        if source.relevance_filter:
+            if not llm_relevance(
+                normalized.title,
+                normalized.clean_content,
+                source.relevance_keywords or "",
+            ):
+                logger.info(
+                    "relevance filtered out %s (source=%s)",
+                    normalized.canonical_url,
+                    source.name,
+                )
+                return False
         try:
             fields = self._enricher.enrich(normalized)
         except Exception:
             logger.exception("enrich failed for %s", normalized.canonical_url)
+            return False
+        if not fields.should_store:
+            logger.info(
+                "enricher rejected %s (source=%s, reason=%s)",
+                normalized.canonical_url,
+                source.name,
+                fields.reject_reason or "unknown",
+            )
             return False
         fields = self._apply_category_constraints(source, fields)
         self._repo.save_enriched(normalized, fields)

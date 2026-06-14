@@ -27,6 +27,7 @@ def _valid_payload():
             "sub_tags": ["kernel", "scheduler"],
             "keywords": ["Linux 6.9", "sched_ext", "EAS"],
             "confidence": 0.92,
+            "should_store": True,
         },
         ensure_ascii=False,
     )
@@ -85,5 +86,37 @@ def test_enricher_prompt_contains_role_and_exclusions():
     assert "title_zh" in prompt
     assert "tech_highlights" in prompt
     assert "keywords" in prompt
+    assert "should_store" in prompt
+    assert "reject_reason" in prompt
+    assert "信息不足" in prompt
     assert "why_it_matters" not in prompt
     assert "entities" not in prompt
+
+
+def test_enricher_allows_rejection_payload():
+    n = NormalizedItem(
+        source_id=1,
+        title="Anolis Developer Docs",
+        url="https://gitee.com/anolis/docs",
+        canonical_url="https://gitee.com/anolis/docs",
+        clean_content="",
+    )
+    payload = json.dumps(
+        {
+            "title_zh": "Anolis 开发者文档",
+            "summary": "页面缺少可供提炼的新闻或技术更新正文。",
+            "tech_highlights": [],
+            "info_type": "其他",
+            "importance": "低",
+            "main_category": "友商产品信息",
+            "sub_tags": [],
+            "keywords": [],
+            "confidence": 0.12,
+            "should_store": False,
+            "reject_reason": "docs landing page without article-level technical update",
+        },
+        ensure_ascii=False,
+    )
+    fields = Enricher(llm=_StubLlm(payload)).enrich(n)
+    assert fields.should_store is False
+    assert "docs landing page" in (fields.reject_reason or "")

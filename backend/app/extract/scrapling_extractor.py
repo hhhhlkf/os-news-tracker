@@ -354,6 +354,16 @@ class ScraplingExtractor(ContentExtractor):
                     parent = link_el.getparent()
                     if not date_els and parent is not None:
                         date_els = parent.cssselect(date_selector)
+                    # Fall back to the nearest ancestor container that also
+                    # contains a matching date element, such as Gitee release
+                    # cards where the timestamp is a sibling of the body block.
+                    if not date_els:
+                        ancestor = parent.getparent() if parent is not None else None
+                        while ancestor is not None:
+                            date_els = ancestor.cssselect(date_selector)
+                            if date_els:
+                                break
+                            ancestor = ancestor.getparent()
                     if date_els:
                         dt_attr = date_els[0].get("datetime", "")
                         date_str = dt_attr if dt_attr else date_els[0].text_content().strip()

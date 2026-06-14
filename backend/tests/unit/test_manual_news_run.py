@@ -556,6 +556,27 @@ def test_status_includes_time_filter_stats():
     assert status.time_filter_stats.matched == 12
 
 
+def test_status_includes_included_without_date_count():
+    """status() must expose included_without_date when available."""
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    req = ManualNewsRunRequest(time_mode="relative", relative_range="7d", target_count=10)
+    controller.start(req)
+
+    controller.set_time_filter_stats(
+        missing_pub=0,
+        before=1,
+        after=2,
+        matched=3,
+        included_without_date=4,
+    )
+
+    status = controller.status()
+    assert status.time_filter_stats is not None
+    assert status.time_filter_stats.included_without_date == 4
+
+
 # ── MissingDatePolicy include_as_now ────────────────────────────────
 
 
@@ -600,6 +621,29 @@ def test_include_as_now_stats_tracks_included_without_date(monkeypatch):
     assert stats.included_without_date == 2
     assert stats.missing_published_at == 0
     assert stats.matched == 3
+
+
+def test_include_as_now_does_not_affect_absolute_ranges(monkeypatch):
+    """Absolute date windows must exclude None-date items even with include_as_now."""
+    monkeypatch.delenv("MISSING_DATE_POLICY", raising=False)
+    from app.config import get_settings
+    get_settings.cache_clear()
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    start = datetime(2026, 4, 14, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 4, 30, 23, 59, 59, tzinfo=timezone.utc)
+    req = ManualNewsRunRequest(time_mode="absolute", start_at=start, end_at=end, target_count=10)
+    items = [
+        RawItem(source_id=1, title="no-date", url="https://x/1", published_at=None),
+        RawItem(source_id=1, title="in-window", url="https://x/2", published_at=datetime(2026, 4, 17, 10, 0, 0, tzinfo=timezone.utc)),
+    ]
+
+    filtered, stats = controller.filter_candidates_with_stats(req, items, now=datetime(2026, 6, 14, 12, 0, 0, tzinfo=timezone.utc))
+    assert [item.url for item in filtered] == ["https://x/2"]
+    assert stats.matched == 1
+    assert stats.included_without_date == 0
+    assert stats.missing_published_at == 1
 
 
 def test_include_as_now_empty_list(monkeypatch):

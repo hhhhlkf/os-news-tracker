@@ -326,7 +326,7 @@
   main_category: OS跟踪来源
   fetch_cron: "0 */6 * * *"
   link_selector: ".release-list .release-item a, .release-entry h4 a, a[href*='releases/tag']"
-  date_selector: ".release-date, .time, time"
+  date_selector: ".release-time, .release-date, .time, time"
 - name: openEuler Gitee Community
   type: page_monitor
   url: https://gitee.com/openeuler/community/releases
@@ -335,7 +335,7 @@
   main_category: OS跟踪来源
   fetch_cron: "0 */6 * * *"
   link_selector: ".release-list .release-item a, .release-entry h4 a, a[href*='releases/tag']"
-  date_selector: ".release-date, .time, time"
+  date_selector: ".release-time, .release-date, .time, time"
 
 # =============================================
 # Structured stream: API

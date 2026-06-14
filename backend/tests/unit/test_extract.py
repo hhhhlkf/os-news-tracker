@@ -488,6 +488,29 @@ class TestExtractListItems:
         assert len(results) == 1
         assert results[0]["date_str"] == "2026-01-15T10:00:00Z"
 
+    def test_date_from_nearest_ancestor_container(self):
+        """date_selector can be found on a sibling within the nearest ancestor container."""
+        html = """<html><body><div class="releases">
+<div class="release-card">
+  <div class="d-flex-between">
+    <div class="release-time" data-commit-date="2024-04-17 06:13:28 +0000">2024-04-17 14:21</div>
+  </div>
+  <div class="release-body">
+    <div class="release-header">
+      <a class="title" href="/repo/releases/tag/v1">Release One</a>
+    </div>
+  </div>
+</div>
+</div></body></html>"""
+        extractor = ScraplingExtractor(fetcher=_FakeFetcher(html))
+        results = extractor.extract_list_items(
+            "https://example.com/repo/releases",
+            link_selector="a.title",
+            date_selector=".release-time",
+        )
+        assert len(results) == 1
+        assert results[0]["date_str"] == "2024-04-17 14:21"
+
 
 # ── Stealth mode (方案5) ───────────────────────────────────────────
 
