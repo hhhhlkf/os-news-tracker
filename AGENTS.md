@@ -151,6 +151,7 @@ This project follows **Subagent-Driven Development (SDD)** via the Superpowers m
 
 **Key rules:**
 - One commit per task; amend commits for fixes (clean history)
+- After making changes, run `git commit` to record them unless explicitly told not to commit.
 - Spec compliance review MUST pass before code quality review
 - TDD: red (failing test) → green (minimal implementation) → refactor
 - Pure logic (normalizer, dedup) is isolated and unit-tested without I/O

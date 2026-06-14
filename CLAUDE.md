@@ -199,6 +199,7 @@ This project uses **Subagent-Driven Development (SDD)**:
 **Key rules:**
 
 - One commit per task (iterate via `git commit --amend`)
+- After making changes, run `git commit` to record them unless explicitly told not to commit.
 - Spec review must pass before code quality review begins
 - Pure logic (normalizer, dedup) uses isolated unit tests with no I/O dependencies
 - Fetchers/extractors/search are all Protocol-based, pluggable and independently testable
