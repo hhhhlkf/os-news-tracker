@@ -2,21 +2,30 @@
 
 ## Project Overview
 
-An automated OS news intelligence tracker that collects technical news from multiple source types, enriches them with LLM-structured summaries (category, sub-tags, entities, impact), and presents results in a searchable React web UI with facet filtering, time-range filtering, and manual news run control.
+A group-based OS news intelligence platform that collects technical news from multiple source types, enriches them with LLM-structured summaries, and presents results in a personalized React web UI. V2 adds multi-user accounts, group subscriptions (shared crawl cost), AI-driven intelligent crawling, personalized scoring, trend digest reports, and real-time log streaming.
 
 **Two data streams:**
 
-1. **News stream** — RSS + page monitoring + keyword search → LLM structured summary (category, sub-tags, entities, summary)
+1. **News stream** — RSS + page monitoring + keyword search + AI agent crawl → LLM structured summary (category, sub-tags, entities, summary)
 2. **Structured facts stream** — Security advisories/CVE, lifecycle/EOL, image releases → parsed directly into DB, no LLM (adapters planned, not yet implemented)
 
 **Pipeline:** `fetch → normalize → [relevance-filter] → dedup → enrich → store`
+
+**V2 additions (in progress):**
+- User system (JWT auth, subscriber/system_admin roles)
+- Group subscription (group_admin manages sources; subscribers share crawl results)
+- Agent crawl engine (Handoff Chain: PlanAgent → CrawlDAG → QualityWorkerPool → SummaryWorkerPool)
+- Personalized scoring (user-defined Scoring Criteria JSONB → fast keyword score + optional LLM precision)
+- Digest / trend analysis (DigestAgent multi-step chain → hotspots + emerging topics)
+- Real-time log panel (SSE + ring buffer, all backend processes)
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-------------|
 | Backend | Python 3.11+, FastAPI, SQLAlchemy 2.0 + Alembic, Postgres, APScheduler |
-| Frontend | React 18, Vite, TypeScript, TanStack Query |
+| Auth | python-jose[cryptography] (JWT), passlib[bcrypt] |
+| Frontend | React 19, Vite, TypeScript, TanStack Query, react-router-dom |
 | Collection | feedparser, Scrapling, httpx |
 | AI/LLM | Configurable OpenAI-compatible client (internal LLM gateway) |
 | Testing | pytest, pytest-asyncio, respx, vitest |
@@ -32,30 +41,34 @@ os-news-tracker/
 ├── docker-compose.yml                     # Production Docker Compose
 ├── docker-compose.dev.yml                 # Development Docker Compose (hot-reload)
 ├── backend/
-│   ├── pyproject.toml                     # Python deps (FastAPI, SQLAlchemy, etc.)
+│   ├── pyproject.toml                     # Python deps (FastAPI, SQLAlchemy, python-jose, passlib, etc.)
 │   ├── alembic.ini                        # DB migrations config
 │   ├── Dockerfile.dev                     # Dev container
-│   ├── alembic/
-│   │   ├── env.py
-│   │   └── versions/                      # Migration scripts
-│   │       ├── ca363b702936_initial.py
-│   │       └── b8f1a2c3d4e5_add_item_source_unique_constraint.py
+│   ├── alembic/versions/                  # Migration scripts
 │   ├── app/
-│   │   ├── __init__.py
 │   │   ├── config.py                      # Settings (env-driven, pydantic-settings)
 │   │   ├── db.py                          # SQLAlchemy engine + SessionLocal
-│   │   ├── models.py                      # ORM models (Source, Item, Tag, Entity, SecurityAdvisory, ProductLifecycle, etc.)
-│   │   ├── schemas.py                     # Pydantic contracts (requests, responses, internal)
-│   │   ├── enums.py                       # InfoType, Importance, SourceType, ItemStatus, etc.
+│   │   ├── models.py                      # ORM models (V1 + V2: User, Group, Digest, Agent*, etc.)
+│   │   ├── schemas.py                     # Pydantic contracts
+│   │   ├── enums.py                       # InfoType, Importance, SourceType, ItemStatus, UserRole, GroupRole
+│   │   ├── auth.py                        # JWT helpers: create_access_token, verify_access_token, hash_password
+│   │   ├── log_stream.py                  # SSE log ring buffer + SseLogHandler (real-time log panel)
 │   │   ├── entry.py                       # App entrypoint (create_app + startup hooks)
 │   │   ├── pipeline.py                    # News-stream orchestration (fetch→store)
-│   │   ├── manual_news_run.py             # Target-driven manual news run (controller + runner, thread-safe)
+│   │   ├── manual_news_run.py             # Target-driven manual news run (thread-safe controller)
 │   │   ├── scheduler.py                   # APScheduler wiring (per-source cron jobs)
 │   │   ├── repository.py                  # DB read/write queries (idempotent writes)
 │   │   ├── api/
-│   │   │   ├── main.py                    # FastAPI app factory + CORS
-│   │   │   ├── routes.py                  # /items (sort+filter), /items/{id}, /facets, /news-run
-│   │   │   └── deps.py                    # DB session dependency
+│   │   │   ├── main.py                    # FastAPI app factory + CORS + router registration
+│   │   │   ├── routes.py                  # /items, /facets, /news-run (group-filtered in V2)
+│   │   │   ├── deps.py                    # get_db, get_current_user, require_system_admin
+│   │   │   ├── auth_routes.py             # /auth/register, /auth/login, /auth/me
+│   │   │   ├── profile_routes.py          # /users/me/profile, /users/me/interactions
+│   │   │   ├── digest_routes.py           # /digest CRUD + async generation
+│   │   │   ├── agent_routes.py            # /sources/agent CRUD + runs + site memory
+│   │   │   ├── admin_group_routes.py      # /admin/groups CRUD + admin assignment
+│   │   │   ├── group_routes.py            # /groups, /groups/{id}/members|sources|profile|join-requests
+│   │   │   └── group_digest_routes.py     # /groups/{id}/digest/schedule + trigger
 │   │   ├── sources/
 │   │   │   ├── registry.py                # Source registry (seed YAML → DB, idempotent)
 │   │   │   └── seed_sources.yaml          # 84 source definitions (RSS/page_monitor/api/search)
@@ -63,7 +76,18 @@ os-news-tracker/
 │   │   │   ├── base.py                    # Fetcher protocol + FetchResult
 │   │   │   ├── rss.py                     # RssFetcher
 │   │   │   ├── page_monitor.py            # PageMonitorFetcher
-│   │   │   └── search.py                  # SearchFetcher (keyword-based)
+│   │   │   ├── search.py                  # SearchFetcher (keyword-based)
+│   │   │   └── agent_crawl.py             # AgentCrawlFetcher (orchestrates app/agent/ pipeline)
+│   │   ├── agent/                         # V2: Agent crawl engine (Handoff Chain)
+│   │   │   ├── schemas.py                 # CrawlPlan, RawPage, QualifiedPage, AgentItem, AgentSourceConfig
+│   │   │   ├── plan_agent.py              # PlanAgent: Pre-Act + DFSDT, LLM URL planning
+│   │   │   ├── crawl_dag.py               # CrawlDAG: asyncio Semaphore parallel fetch (no LLM)
+│   │   │   ├── quality_pool.py            # QualityWorkerPool: Critic, parallel LLM quality scoring
+│   │   │   ├── summary_pool.py            # SummaryWorkerPool: Generator, adaptive summarization
+│   │   │   └── site_memory.py             # SiteMemory: DB-backed quality cache (7-day TTL for keep)
+│   │   ├── groups/                        # V2: Group subscription helpers
+│   │   │   ├── permissions.py             # is_group_member, is_group_admin, check_group_access
+│   │   │   └── feed_filter.py             # passes_group_filter, apply_group_filter_to_items
 │   │   ├── extract/
 │   │   │   ├── base.py                    # ContentExtractor protocol
 │   │   │   └── scrapling_extractor.py     # Scrapling-based extractor (default)
@@ -74,76 +98,69 @@ os-news-tracker/
 │   │   │   ├── normalizer.py              # RawItem → NormalizedItem (pure)
 │   │   │   ├── dedup.py                   # url_hash + simhash + near-dup
 │   │   │   ├── relevance.py               # LLM relevance gate for search hits
-│   │   │   └── enricher.py                # LLM enrich → EnrichedFields
+│   │   │   ├── enricher.py                # LLM enrich → EnrichedFields
+│   │   │   ├── scorer.py                  # V2: compute_fast_score + ScoringAgent (LLM precision)
+│   │   │   ├── profile_advisor.py         # V2: ProfileAdvisor Agent (AI criteria suggestions)
+│   │   │   └── digest_agent.py            # V2: DigestAgent 3-step chain (aggregate→hotspots→summary)
 │   │   └── llm/
 │   │       └── client.py                  # OpenAI-compatible client + cache
 │   └── tests/
 │       ├── conftest.py
-│       ├── fixtures/                      # Saved RSS/HTML samples + LLM responses
-│       ├── unit/
-│       │   ├── test_config.py
-│       │   ├── test_dedup.py
-│       │   ├── test_enricher.py
-│       │   ├── test_entry_import.py
-│       │   ├── test_extract.py
-│       │   ├── test_llm_client.py
-│       │   ├── test_manual_news_run.py    # Time filter stats, consistency, timezone safety
-│       │   ├── test_models.py
-│       │   ├── test_normalizer.py
-│       │   ├── test_page_monitor.py
-│       │   ├── test_rss_fetcher.py
-│       │   ├── test_scheduler.py
-│       │   ├── test_schemas.py
-│       │   ├── test_search_fetcher.py
-│       │   ├── test_search_provider.py
-│       │   └── test_source_link_dedup.py  # Idempotent merge_source_link, save_enriched
-│       └── integration/
-│           ├── test_api.py                # Sorting + time filtering + CRUD tests
-│           ├── test_api_source_dedup.py   # API-level source link dedup + order stability
-│           ├── test_pipeline.py
-│           ├── test_registry.py
-│           └── test_repository.py
+│       ├── fixtures/
+│       ├── unit/                          # Pure function + mock LLM tests
+│       └── integration/                   # API + pipeline integration tests
 ├── frontend/
-│   ├── package.json
-│   ├── vite.config.ts
-│   ├── tsconfig.json / tsconfig.app.json / tsconfig.node.json
-│   ├── index.html
-│   ├── Dockerfile.dev                     # Dev container
+│   ├── package.json                       # react-router-dom added in V2
+│   ├── index.html                         # Google Fonts: Inter + JetBrains Mono (V2)
 │   └── src/
-│       ├── main.tsx
-│       ├── App.tsx
-│       ├── App.css
-│       ├── index.css
-│       ├── types.ts                       # ItemSummary, ItemDetail, Facets, TimeFilterStats, etc.
-│       ├── vite-env.d.ts
-│       ├── demoData.ts                    # Demo/offline fallback data (4 items with fetched_at)
-│       ├── api/
-│       │   └── client.ts                  # fetchItems, fetchItemDetail, fetchFacets, news run APIs + ApiError
+│       ├── App.tsx                        # V2: BrowserRouter + RequireAuth guards
+│       ├── auth.ts                        # V2: getToken, setAuth, clearAuth, authHeaders
+│       ├── index.css                      # V2: CSS design tokens (--ink, --signal-high/mid/low, etc.)
+│       ├── types.ts                       # ItemSummary, Facets, User, Digest, AgentSource, LogEntry, etc.
+│       ├── api/client.ts                  # All API calls + auth headers injection
+│       ├── hooks/
+│       │   └── useLogStream.ts            # V2: EventSource hook for SSE log panel
 │       ├── components/
-│       │   ├── ItemList.tsx               # Paginated list with loading/empty/error states + sortBy prop
-│       │   ├── ItemCard.tsx               # Clickable list row (badges + title + date/fetched_at label)
-│       │   ├── ItemDetail.tsx             # Slide-out detail panel (7 sections + deduped source links)
-│       │   ├── FacetSidebar.tsx           # Facet filter sidebar (category/type/importance + time filter presets)
-│       │   ├── ImportanceBadge.tsx        # Color-coded badge: high=red, medium=yellow, low=gray
-│       │   ├── InfoTypeBadge.tsx          # Neutral outlined badge
-│       │   ├── NewsRunControl.tsx         # Manual news run control panel (start/stop, time range, stats)
-│       │   └── TimeRangePicker.tsx        # Relative vs absolute time range picker
+│       │   ├── ItemCard.tsx               # V2: left-border score badge (teal/amber/slate)
+│       │   ├── ItemList.tsx
+│       │   ├── ItemDetail.tsx
+│       │   ├── FacetSidebar.tsx           # V2: relevance threshold slider
+│       │   ├── ImportanceBadge.tsx
+│       │   ├── InfoTypeBadge.tsx
+│       │   ├── NewsRunControl.tsx
+│       │   ├── TimeRangePicker.tsx
+│       │   └── LogPanel.tsx               # V2: real-time log panel (JetBrains Mono, dark bg)
 │       └── pages/
-│           ├── HomePage.tsx               # Top-level layout (search + sort + sidebar + list + overlay + run control)
-│           ├── homeData.ts                # Demo/live data mode resolution + filtering (sort + time range)
-│           ├── homeData.test.ts           # Tests for demo data mode
-│           └── newsRunControl.test.ts     # Tests for NewsRunControl helpers
+│           ├── HomePage.tsx               # V2: user nav, relevance sort, group-filtered feed
+│           ├── LoginPage.tsx              # V2
+│           ├── RegisterPage.tsx           # V2
+│           ├── ProfileSettingsPage.tsx    # V2: Scoring Criteria management + AI suggestions
+│           ├── AgentSourcesPage.tsx       # V2: agent_crawl source CRUD
+│           ├── DigestPage.tsx             # V2: INTEL BRIEF header + hotspots + trends
+│           ├── MyGroupsPage.tsx           # V2: my groups + browse public groups + join request
+│           ├── GroupDetailPage.tsx        # V2: source management + group filter config
+│           ├── AdminGroupsPage.tsx        # V2: sysadmin group CRUD + join request review
+│           ├── homeData.ts
+│           ├── homeData.test.ts
+│           └── newsRunControl.test.ts
 └── docs/
     ├── code-review-reference.md
     └── superpowers/
-        ├── README.md
+        ├── agent-structure-design.md      # Agent paradigm reference (ReAct, Handoff Chain, DAG, etc.)
         ├── specs/
-        │   ├── 2026-06-09-os-news-tracker-design.md          # Original V1 design doc
-        │   └── 2026-06-11-manual-news-run-control-design.md  # Manual news run control design
+        │   ├── 2026-06-09-os-news-tracker-design.md
+        │   ├── 2026-06-11-manual-news-run-control-design.md
+        │   ├── 2026-06-13-prompt-and-display-redesign.md
+        │   ├── 2026-06-15-v2-complete-design.md          # Merged V2 spec (personalization + agent crawl)
+        │   ├── 2026-06-15-group-subscription-design.md   # Group subscription + 3-tier roles
+        │   └── 2026-06-15-realtime-log-panel-design.md   # SSE log panel
         └── plans/
-            ├── 2026-06-09-os-news-tracker-v1.md              # Implementation plan
-            ├── 2026-06-09-os-news-tracker-v1-zh.md           # Implementation plan (Chinese)
-            └── 2026-06-11-manual-news-run-control.md         # Manual news run control plan
+            ├── 2026-06-15-v2-db-and-user-system.md       # Tasks 1-7: DB + JWT auth
+            ├── 2026-06-15-v2-agent-crawl-engine.md       # Tasks 8-14: Agent engine
+            ├── 2026-06-15-v2-personalization-digest.md   # Tasks 15-19: Scoring + Digest
+            ├── 2026-06-15-v2-frontend.md                 # Tasks 20-26: Frontend
+            ├── 2026-06-15-v2-group-subscription.md       # Tasks 1-10: Group system
+            └── 2026-06-15-v2-implementation-schedule.md  # Management-facing schedule
 ```
 
 ## Common Commands
@@ -222,12 +239,21 @@ This project uses **Subagent-Driven Development (SDD)**:
 - **Sorting:** `SortBy = Literal["published_at", "fetched_at"]`, `SortDir = Literal["desc", "asc"]`. Default: `published_at` DESC with `nullslast()` (null published_at always last).
 - **Idempotent writes:** Junction-table inserts use `_add_source_link_if_new()` pattern — check existence before insert, return bool. All junction writes (`merge_source_link`, `save_enriched`) are safe to call repeatedly.
 - **Thread safety:** `ManualNewsRunController` uses `threading.Lock` protecting `_RuntimeState`; cooperative shutdown via `should_stop()`.
+- **JWT auth:** `app/auth.py` — `hash_password` / `verify_password` (passlib bcrypt), `create_access_token` / `verify_access_token` (python-jose HS256). Secret from `JWT_SECRET_KEY` env var.
+- **User roles:** `UserRole.SUBSCRIBER` = `"subscriber"`, `UserRole.SYSTEM_ADMIN` = `"system_admin"`. Group roles in `GroupRole`: `MEMBER` / `GROUP_ADMIN`. Use `check_group_access(db, group_id, user, require_admin=False)` for group permission enforcement.
+- **Agent async:** `AgentCrawlFetcher.fetch()` is synchronous (Fetcher Protocol). Uses `asyncio.run()` internally to drive the async Handoff Chain. Scrapling and LLM calls wrapped with `asyncio.to_thread()` for parallel execution.
+- **SiteMemory TTL:** `verdict=keep` expires after 7 days; `verdict=discard` is permanent. PlanAgent skips URLs with `discard, seen_count >= 2`.
+- **Group feed filter:** `apply_group_filter_to_items(items, group_filter_map)` uses OR logic — item passes if it passes ANY of its source's associated group filters.
+- **SSE log stream:** `SseLogHandler.emit()` called from any thread; appends to global `deque` (thread-safe). SSE generator polls every 100ms. Use `id: {seq_no}` in SSE format for auto-reconnect.
 
 ### TypeScript / React (Frontend)
 
 - **Inline styles:** All components use inline `style` props (no CSS modules, no Tailwind)
+- **CSS variables:** Design tokens in `index.css` as `--ink`, `--ground`, `--signal-high/mid/low`, `--font-body`, `--font-mono`. Use `var(--token)` in inline styles.
 - **@tanstack/react-query:** Data fetching uses `useQuery` (`queryKey` + `queryFn`); 2s polling during active run states
 - **ApiError pattern:** `api/client.ts` exports `ApiError` class (with HTTP status); error handling uses `instanceof ApiError`
+- **Auth:** `auth.ts` exports `getToken`, `setAuth`, `clearAuth`, `authHeaders()`. All API calls inject `authHeaders()`. Unauthenticated users redirect to `/login`.
+- **Routing:** `react-router-dom` v7. `RequireAuth` wrapper checks `getToken()` before rendering protected pages.
 - **Conditional rendering:** null guards (`&&`), empty array guards (`.length > 0`), truthy checks on nullable fields
 - **Type safety:** `keyof Facets` for type-safe facet group iteration
 - **Slide-out overlay:** Fixed-position detail panel, background click to close, `stopPropagation` prevents close on panel click
@@ -235,22 +261,33 @@ This project uses **Subagent-Driven Development (SDD)**:
 - **Defense-in-depth:** Frontend `Map`-based dedup on `source_links` as fallback (primary fix is in backend)
 - **Sort dropdown:** `<select>` in HomePage search bar with `value:key` format; `sortBy` prop threaded through ItemList → ItemCard
 - **Time filter presets:** `useMemo` computes `activePreset` from `published_after`/`published_before`; presets use `daysAgo(n)` helper. Custom range shows two `<input type="date">` fields.
+- **Score badge:** `ItemCard` shows 4px left-border color (teal ≥80 / amber 50-79 / slate <50) + JetBrains Mono score number. `personalized_score` is nullable — no badge when null.
+- **SSE log:** `useLogStream(enabled)` opens `EventSource('/api/logs/stream')`. Browser handles reconnect via `Last-Event-ID`. `LogPanel` fixed bottom-right, dark bg `#0d1117`, JetBrains Mono 13px.
 
 ## Architecture Decisions
 
 | Decision | Conclusion |
 |----------|------------|
-| Orchestration | **Deterministic pipeline + localized LLM** (not autonomous agent loops) |
-| Collection sources | 3 Fetcher types implemented: `rss` / `page_monitor` / `search`. `api` type planned for structured stream |
-| Source registry | 84 sources in `seed_sources.yaml` (23 RSS, 46 page_monitor, 15 api). 15 adapters referenced for structured stream (not yet implemented) |
+| Orchestration | **Deterministic pipeline + localized LLM** (not autonomous agent loops) for standard sources |
+| Agent crawl engine | **Handoff Chain** (PlanAgent → CrawlDAG → QualityWorkerPool → SummaryWorkerPool). Pre-Act inside PlanAgent only. CrawlDAG is pure-deterministic (no LLM). Stochastic-deterministic boundary enforced. |
+| Collection sources | 4 Fetcher types: `rss` / `page_monitor` / `search` / `agent_crawl`. `api` type planned for structured stream |
+| Agent crawl items | Bypass Enricher entirely; `status=agent_enriched`. SummaryWorkerPool owns summarization. |
+| Source registry | 84 sources in `seed_sources.yaml` (23 RSS, 46 page_monitor, 15 api). `agent_crawl` sources user-created per group. |
 | Extraction engine | Scrapling default + pluggable interface (Firecrawl as future option) |
 | Dedup strategy | url_hash + simhash + near-duplicate matching |
 | Search | Internal search capability preferred; interface is pluggable |
 | Manual news run | Target-driven, two-phase (collect→process) loop with up to 3 expansion rounds on search-type sources; thread-safe singleton controller |
+| User roles | System-level: `subscriber` / `system_admin`. Group-level: `member` / `group_admin` (stored in `group_members.role`). Independent axes. |
+| Group subscription | Groups own sources via `group_sources`. Shared crawl per group (cost-efficient). Feed = union of user's groups' sources → group filter_criteria (OR logic) → personal scoring. |
+| Group filter | `filter_criteria` JSONB: keyword_whitelist, keyword_blacklist, category_whitelist, min_importance. Applied at query time (soft filter, not at write time). |
+| Personalized scoring | User defines Scoring Criteria (JSONB list). Fast track: keyword/tag overlap, computed at query time (no LLM). Precision track: LLM ScoringAgent, stored in `user_item_scores`, opt-in. |
+| Digest generation | DigestAgent multi-step: aggregate → hotspot identification (LLM #1) → narrative synthesis (LLM #2). Async background thread + 2s polling. Per-group scheduled digest supported. |
+| Real-time logs | Custom `SseLogHandler` → global `deque(maxlen=2000)`. `GET /logs/stream` SSE endpoint with `id:` field for automatic Last-Event-ID reconnect. Frontend `useLogStream` hook + `LogPanel` component. |
 | Time semantics | All times UTC. `_as_utc()` backend, explicit `Z` suffix frontend. Relative ranges are open-ended (no upper bound); absolute ranges are bounded both sides. `published_at` null items: sorted last (nullslast), excluded from time-filtered queries |
 | Observability | `TimeFilterStats` (missing_published_at, before_start, after_end, matched) tallied per-source during collection, exposed in status, logs, and gap_reason |
 | Source link dedup | `UniqueConstraint(item_id, source_id, url)` on `item_sources` + `_add_source_link_if_new()` idempotent writes + API-level dedup + frontend fallback |
-| V1 scope | Collection + two-stream processing + searchable web UI + manual news run; no subscriptions, push notifications, or admin backend |
+| V1 scope | Collection + two-stream processing + searchable web UI + manual news run |
+| V2 scope | User system + group subscriptions + agent crawl + personalized scoring + digest + real-time logs |
 | Deployment | Internal network, normal external internet access |
 
 ## Reference URLs

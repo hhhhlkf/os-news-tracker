@@ -2,20 +2,24 @@
 
 ## Project Overview
 
-技术新闻追踪 Agent（OS News Tracker）— 自动从多类来源采集技术情报，用 LLM 整理归纳，汇总到可查询的 React 网页。支持分面筛选、时间范围过滤、排序切换和手动新闻采集运行控制。
+群组化技术新闻情报平台（OS News Tracker）— 支持多用户、群组订阅、AI 智能爬取、个性化推荐评分、趋势总结的 OS 技术情报系统。
+
+**Three-tier role model:** `system_admin` → `group_admin`（群内）→ `subscriber`（群内 `member`）
 
 **Two data streams:**
-1. **News stream** — RSS + page monitor + keyword search → LLM enrichment (category, sub-tags, entities, summary)
-2. **Structured stream** — Security advisories/CVE, lifecycle/EOL, image compatibility → direct parse to typed tables (no LLM). Adapters planned, not yet implemented.
+1. **News stream** — RSS + page monitor + keyword search + agent_crawl → LLM enrichment
+2. **Structured stream** — CVE/EOL/image → direct parse (planned)
 
 **Pipeline:** `fetch → normalize → [relevance-filter] → dedup → enrich → store`
+**Agent crawl pipeline (Handoff Chain):** `PlanAgent → CrawlDAG → QualityWorkerPool → SummaryWorkerPool`
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
 | Backend | Python 3.11+, FastAPI, SQLAlchemy 2.0 + Alembic, PostgreSQL, APScheduler |
-| Frontend | React 18, Vite, TypeScript, TanStack Query |
+| Auth | python-jose[cryptography], passlib[bcrypt] |
+| Frontend | React 19, Vite, TypeScript, TanStack Query, react-router-dom |
 | Ingestion | feedparser, Scrapling, httpx |
 | AI/LLM | Configurable OpenAI-compatible client (internal LLM gateway) |
 | Testing | pytest, pytest-asyncio, respx, vitest |
@@ -49,65 +53,59 @@ os-news-tracker/
 │   │   ├── sources/
 │   │   │   ├── registry.py           # seed_sources_from_yaml() — idempotent YAML→DB seeding
 │   │   │   └── seed_sources.yaml     # 84 source definitions (23 RSS, 46 page_monitor, 15 api)
+│   │   ├── auth.py                   # JWT helpers: create_access_token, verify_access_token, hash_password
+│   │   ├── log_stream.py             # SSE ring buffer + SseLogHandler
 │   │   ├── fetchers/
-│   │   │   ├── base.py               # Fetcher Protocol
-│   │   │   ├── rss.py
-│   │   │   ├── page_monitor.py
-│   │   │   └── search.py
-│   │   ├── extract/
-│   │   │   ├── base.py               # ContentExtractor Protocol
-│   │   │   └── scrapling_extractor.py
-│   │   ├── search/
-│   │   │   ├── base.py               # SearchProvider Protocol
-│   │   │   └── internal_gateway.py
+│   │   │   ├── base.py, rss.py, page_monitor.py, search.py
+│   │   │   └── agent_crawl.py        # AgentCrawlFetcher — Handoff Chain orchestrator
+│   │   ├── agent/                    # V2: Handoff Chain stages
+│   │   │   ├── plan_agent.py         # PlanAgent (Pre-Act + DFSDT)
+│   │   │   ├── crawl_dag.py          # CrawlDAG (async parallel, no LLM)
+│   │   │   ├── quality_pool.py       # QualityWorkerPool (Critic)
+│   │   │   ├── summary_pool.py       # SummaryWorkerPool (Generator)
+│   │   │   ├── site_memory.py        # SiteMemory (keep 7d TTL, discard permanent)
+│   │   │   └── schemas.py            # CrawlPlan, RawPage, QualifiedPage, AgentItem
+│   │   ├── groups/                   # V2: group permission + feed filter
+│   │   │   ├── permissions.py        # check_group_access, is_group_admin
+│   │   │   └── feed_filter.py        # passes_group_filter (OR logic across groups)
+│   │   ├── extract/, search/         # ContentExtractor + SearchProvider protocols
 │   │   ├── processing/
-│   │   │   ├── normalizer.py         # RawItem → NormalizedItem (pure function)
-│   │   │   ├── dedup.py              # url_hash + simhash + near-duplicate match
-│   │   │   ├── relevance.py          # LLM relevance gate
-│   │   │   └── enricher.py           # LLM enrich → EnrichedFields
-│   │   └── llm/
-│   │       └── client.py             # OpenAI-compatible client + cache
-│   └── tests/
-│       ├── conftest.py
-│       ├── fixtures/
-│       ├── unit/                     # 15 test files (config, dedup, enricher, extract, llm, models, normalizer, fetchers, etc.)
-│       │   ├── test_manual_news_run.py
-│       │   └── test_source_link_dedup.py
-│       └── integration/
-│           ├── test_api.py           # CRUD + sorting + time filtering (89 tests total)
-│           ├── test_api_source_dedup.py
-│           ├── test_pipeline.py
-│           ├── test_registry.py
-│           └── test_repository.py
-├── frontend/
-│   ├── package.json
-│   ├── vite.config.ts
-│   ├── index.html
-│   └── src/
-│       ├── main.tsx
-│       ├── App.tsx
-│       ├── types.ts                  # ItemSummary, ItemDetail, Facets, ManualNewsRunStatus, etc.
-│       ├── demoData.ts               # Demo/offline fallback (4 items, supports sort + time filter)
-│       ├── api/client.ts             # fetchItems, fetchItemDetail, fetchFacets, news run APIs, ApiError
-│       ├── components/
-│       │   ├── ItemList.tsx          # Paginated list (loading/empty/error states) + sortBy prop
-│       │   ├── ItemCard.tsx          # Clickable row: badges + title + date (or "入库" label)
-│       │   ├── ItemDetail.tsx        # Slide-out detail panel (7 sections, deduped source links)
-│       │   ├── FacetSidebar.tsx      # 4-group filter: category/type/importance + time presets
-│       │   ├── ImportanceBadge.tsx   # Color-coded: 高=red, 中=yellow, 低=gray
-│       │   ├── InfoTypeBadge.tsx     # Neutral outlined badge
-│       │   ├── NewsRunControl.tsx    # Manual news run: start/stop, time range, live stats
-│       │   └── TimeRangePicker.tsx   # Relative vs absolute time range selector
-│       └── pages/
-│           ├── HomePage.tsx          # Search + sort dropdown + sidebar + list + overlay + run control
-│           ├── homeData.ts           # Demo/live mode resolution + filterDemoItems (sort + time range)
-│           ├── homeData.test.ts
-│           └── newsRunControl.test.ts
-└── docs/
-    └── superpowers/
-        ├── specs/2026-06-09-os-news-tracker-design.md
-        ├── specs/2026-06-11-manual-news-run-control-design.md
-        └── plans/
+│   │   │   ├── normalizer.py, dedup.py, relevance.py, enricher.py
+│   │   │   ├── scorer.py             # V2: compute_fast_score + ScoringAgent
+│   │   │   ├── profile_advisor.py    # V2: ProfileAdvisor Agent
+│   │   │   └── digest_agent.py       # V2: DigestAgent 3-step chain
+│   │   ├── api/
+│   │   │   ├── main.py, routes.py, deps.py
+│   │   │   ├── auth_routes.py        # /auth/*
+│   │   │   ├── profile_routes.py     # /users/me/profile
+│   │   │   ├── digest_routes.py      # /digest
+│   │   │   ├── agent_routes.py       # /sources/agent
+│   │   │   ├── admin_group_routes.py # /admin/groups
+│   │   │   ├── group_routes.py       # /groups, /groups/{id}/*
+│   │   │   └── group_digest_routes.py # /groups/{id}/digest/*
+│   │   └── llm/client.py
+│   └── tests/unit/ + integration/
+├── frontend/src/
+│   ├── App.tsx                       # BrowserRouter + RequireAuth routes
+│   ├── auth.ts                       # Token storage + authHeaders()
+│   ├── index.css                     # CSS design tokens
+│   ├── api/client.ts                 # All API calls
+│   ├── hooks/useLogStream.ts         # EventSource SSE hook
+│   ├── components/
+│   │   ├── ItemCard.tsx              # Left-border score badge (teal/amber/slate)
+│   │   ├── LogPanel.tsx              # Real-time log panel (JetBrains Mono, dark)
+│   │   └── ... (existing V1 components)
+│   └── pages/
+│       ├── LoginPage, RegisterPage
+│       ├── ProfileSettingsPage       # Scoring Criteria + AI suggestions
+│       ├── AgentSourcesPage          # agent_crawl source management
+│       ├── DigestPage                # INTEL BRIEF + hotspots + trends
+│       ├── MyGroupsPage, GroupDetailPage, AdminGroupsPage
+│       └── ... (existing V1 pages)
+└── docs/superpowers/
+    ├── agent-structure-design.md
+    ├── specs/  (8 design docs)
+    └── plans/  (6 implementation plans + schedule)
 ```
 
 ## Common Commands
@@ -189,16 +187,17 @@ This project follows **Subagent-Driven Development (SDD)** via the Superpowers m
 
 | Decision | Resolution |
 |----------|-----------|
-| Orchestration | **Deterministic pipeline + local LLM** (NOT autonomous agent loop) |
-| Source types | 3 Fetcher types implemented: `rss`, `page_monitor`, `search`. `api` type (structured stream) planned |
-| Source count | 84 sources in seed_sources.yaml: 23 RSS, 46 page_monitor, 15 api. 15 adapter names referenced |
-| Extraction engine | Scrapling default + pluggable interface |
-| Dedup strategy | url_hash + simhash + near-duplicate matching |
-| Search | Internal search capability preferred; interface is pluggable |
-| Manual news run | Target-driven, two-phase loop; thread-safe singleton; up to 3 expansion rounds on search sources |
+| Orchestration | **Deterministic pipeline + local LLM** for standard sources. **Handoff Chain** for agent crawl. |
+| Agent crawl | PlanAgent (Pre-Act+DFSDT) → CrawlDAG (DAG parallel, no LLM) → QualityWorkerPool (Critic) → SummaryWorkerPool (Generator). Agent items bypass Enricher (`status=agent_enriched`). |
+| Source types | 4 types: `rss`, `page_monitor`, `search`, `agent_crawl`. `api` type (structured stream) planned. |
+| User roles | System: `subscriber` / `system_admin`. Group-level: `member` / `group_admin` (independent axis). |
+| Group feed | Items scoped to user's groups' sources → group filter_criteria (OR logic) → personal scoring. |
+| Personalization | User Scoring Criteria (JSONB). Fast: keyword overlap at query time. LLM: `user_item_scores` table, opt-in. |
+| Digest | DigestAgent 3-step chain. Per-group scheduled digest supported. Async background thread + 2s poll. |
+| Real-time logs | SSE + deque ring buffer. `id:` field for auto-reconnect. All backend processes covered. |
 | Time semantics | All UTC. `nullslast()` for null published_at. Inclusive `published_before`; invalid dates → 422 |
-| Sorting | `published_at` (default) or `fetched_at`, asc/desc. Null published_at always last |
-| V1 scope | Ingestion + two-stream processing + queryable web UI + manual news run. NO subscriptions, push, admin panel |
+| Sorting | `published_at` / `fetched_at` / `relevance` (V2, login required), asc/desc. Null published_at always last. |
+| V2 scope | User system + group subscriptions + agent crawl + personalized scoring + digest + real-time logs |
 | Deployment | Internal network, with normal external internet access |
 
 ## Reference URLs

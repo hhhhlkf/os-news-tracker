@@ -1,20 +1,34 @@
 # OS News Tracker
 
-技术新闻追踪 Agent，自动从多类来源采集技术情报，用 LLM 整理归纳成统一的结构化总结，汇总到可查询的 React 网页上，支持按分类、标签、实体、时间检索。
+群组化技术新闻情报平台，自动从多类来源采集 OS 技术情报，用 LLM 整理归纳，汇总到支持个性化推荐的 React 网页。支持群组订阅、AI 智能爬取、个性化评分、趋势总结和实时日志。
 
-## V1 范围
+## 版本状态
+
+### V1（已完成）
 
 - 从 4 类数据源采集（RSS、结构化 API、页面监控、关键词搜索）
 - 两条数据处理流：
-  - **新闻动态流** — RSS + 结构化 API + 页面监控 + 关键词搜索 → LLM 结构化摘要（分类、子标签、实体、摘要）
-  - **结构化事实流** — 安全公告/CVE、生命周期/EOL、镜像适配 → 直接解析入库，不走 LLM
+  - **新闻动态流** — LLM 结构化摘要（分类、子标签、实体、摘要）
+  - **结构化事实流** — 安全公告/CVE、生命周期/EOL → 直接解析入库
 - 统一流水线：`fetch → normalize → [relevance-filter] → dedup → enrich → store`
-- LLM 富化：分类、子标签、实体提取、摘要生成
-- 可查询 Web UI：搜索、分面筛选（分类/类型/重要度）、分页、条目详情侧滑面板
+- 可查询 Web UI：搜索、分面筛选、分页、条目详情侧滑面板、手动新闻运行控制
 - Docker Compose 一键部署
-- **V1 不包含：** 订阅推送、管理后台、用户认证
 
-详细设计文档见 [`docs/superpowers/specs/2026-06-09-os-news-tracker-design.md`](docs/superpowers/specs/2026-06-09-os-news-tracker-design.md)。
+### V2（开发中）
+
+| 功能 | 说明 |
+|------|------|
+| 用户账户系统 | 邮箱注册登录，JWT 认证，subscriber / system_admin 角色 |
+| AI 智能爬取引擎 | Handoff Chain（PlanAgent → CrawlDAG → QualityWorkerPool → SummaryWorkerPool），质量评估 + SiteMemory |
+| 群组订阅体系 | 三级权限（system_admin / group_admin / subscriber），群组共享爬取成本，群级内容过滤 |
+| 个性化推荐评分 | 用户自定义 Scoring Criteria，0-100 相关度分，快速通道 + LLM 精打分 |
+| 趋势总结（Digest） | DigestAgent 多步 Chain，热点识别 + 新兴趋势，按群定时生成 |
+| 实时日志面板 | SSE + 环形缓冲，JetBrains Mono 风格，覆盖所有后端进程 |
+
+详细设计文档：
+- V2 综合设计：[`docs/superpowers/specs/2026-06-15-v2-complete-design.md`](docs/superpowers/specs/2026-06-15-v2-complete-design.md)
+- 群组订阅设计：[`docs/superpowers/specs/2026-06-15-group-subscription-design.md`](docs/superpowers/specs/2026-06-15-group-subscription-design.md)
+- 管理层实施计划：[`docs/superpowers/plans/2026-06-15-v2-implementation-schedule.md`](docs/superpowers/plans/2026-06-15-v2-implementation-schedule.md)
 
 ## 快速开始
 
@@ -206,10 +220,11 @@ npm run dev
 | 层 | 技术 |
 |---|------|
 | 后端 | Python 3.11+, FastAPI, SQLAlchemy 2.0 + Alembic, PostgreSQL, APScheduler |
-| 前端 | React 18, Vite, TypeScript, TanStack Query |
+| 认证（V2）| python-jose[cryptography]（JWT），passlib[bcrypt] |
+| 前端 | React 19, Vite, TypeScript, TanStack Query, react-router-dom（V2）|
 | 采集 | feedparser, Scrapling, httpx |
 | AI/LLM | 可配置的 OpenAI 兼容 client（司内 LLM 网关） |
-| 测试 | pytest, pytest-asyncio, respx |
+| 测试 | pytest, pytest-asyncio, respx, vitest |
 | 部署 | Docker Compose |
 
 ## 项目结构
@@ -337,6 +352,7 @@ docker compose up --build
 | `FETCH_USER_AGENT` | `os-news-tracker/0.1 (+internal)` | 同左 | HTTP 请求 User-Agent |
 | `FETCH_PER_HOST_DELAY_SECONDS` | `2.0` | `2.0` | 同主机请求间隔（秒） |
 | `ENABLE_SCHEDULER` | `1` | `1` | 是否启用定时任务调度（测试时设为 `0`） |
+| `JWT_SECRET_KEY` | `change-me-in-production-use-32+-chars` | 32 位以上随机字符串 | JWT 签名密钥（V2，必须修改）|
 
 配置使用 pydantic-settings，自动从 `.env` 文件加载。
 
