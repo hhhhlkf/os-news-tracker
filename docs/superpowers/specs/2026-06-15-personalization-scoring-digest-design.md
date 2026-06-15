@@ -491,6 +491,282 @@ digests(id, trigger_type, created_by, time_range_start, time_range_end, scope, p
 
 ---
 
+## 12. 前端设计系统（V2）
+
+V2 新增三类页面（登录/注册、偏好设置、Digest），借此机会建立一套有辨识度的视觉语言，而不是延续现有通用 Dashboard 风格。
+
+---
+
+### 12.1 设计定位
+
+**受众**：OS maintainer、内核工程师、技术决策者——他们的日常是 terminal、kernel changelog、CVE 公告、patch 邮件。
+
+**视觉主题**：「技术情报终端」（Technical Signal Dashboard）
+
+不是通用 SaaS 面板，而是一个处理技术信号的工具。设计语言从开发者世界借鉴：monospace 数字精确感、冷静克制的颜色、information-dense 但不杂乱的布局。
+
+---
+
+### 12.2 设计 Token 系统
+
+#### 颜色
+
+```css
+/* ── 文字 ── */
+--ink:           #0d1117;  /* 主文字（比现有 #101828 更深，更接近 GitHub 深色） */
+--ink-secondary: #424a57;  /* 次级文字 */
+--ink-muted:     #7d8b9a;  /* 辅助/占位文字 */
+
+/* ── 背景/表面 ── */
+--ground:        #f0f2f7;  /* 页面底色（更冷、更蓝调，替换现有 #f5f7fb） */
+--surface:       #ffffff;  /* 卡片表面 */
+--surface-tint:  #f8f9fc;  /* 嵌套内容区的次级背景 */
+
+/* ── 边框 ── */
+--border:        #d4dae3;  /* 标准边框 */
+--border-subtle: #eaecf2;  /* 细分割线 */
+
+/* ── 信号色（个性化分数系统，替换现有 高=红/中=黄/低=灰） ── */
+--signal-high:    #0d9488;  /* teal-600：高相关度 ≥ 80 */
+--signal-high-bg: #f0fdfa;  /* teal-50 背景 */
+--signal-mid:     #d97706;  /* amber-600：中相关度 50–79 */
+--signal-mid-bg:  #fffbeb;  /* amber-50 背景 */
+--signal-low:     #94a3b8;  /* slate-400：低相关度 < 50 */
+--signal-low-bg:  #f8fafc;  /* slate-50 背景 */
+
+/* ── 交互色 ── */
+--accent:         #2563eb;  /* blue-600（比现有 #175cd3 更鲜活） */
+--accent-hover:   #1d4ed8;  /* blue-700 */
+--accent-subtle:  #eff6ff;  /* blue-50，选中状态 */
+
+/* ── 系统状态 ── */
+--danger:         #dc2626;  /* red-600，错误/高危 */
+--danger-bg:      #fef2f2;
+--warning:        #d97706;  /* amber-600，警告 */
+--success:        #0d9488;  /* teal（与 signal-high 统一） */
+```
+
+> **为什么选 teal 而不是绿色**：standard 绿色（#22c55e 或 #16a34a）是「状态正常」的通用符号，容易读成「OK」而非「高度相关」。Teal 更中性，在技术领域（终端颜色方案）是可信度而非成功状态的隐喻。
+
+#### 字体
+
+```css
+/* Google Fonts 引入，在 index.html <head> 添加 */
+/* <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"> */
+
+--font-body:    "Inter", system-ui, sans-serif;          /* 所有正文、UI */
+--font-mono:    "JetBrains Mono", "Fira Code", monospace; /* 数字、日期、分数、版本号、标签 */
+```
+
+**使用规则：**
+- `--font-mono` 专用场景：分数数字（如 `82`）、日期（`2026-06-15`）、版本号（`6.12.3`）、技术标签（`kernel`、`eBPF`）、Digest 页面顶栏的时间戳
+- 所有常规文字、按钮文字、标题仍用 `--font-body`
+- Mono 字体使用克制，只在数据型信息上出现，不超过屏幕文字的 15%
+
+#### 圆角 & 阴影
+
+```css
+--radius-sm: 6px;   /* 小型元素：badge、tag */
+--radius-md: 10px;  /* 卡片、输入框、按钮（与现有保持一致） */
+--radius-lg: 14px;  /* 模态框、面板 */
+
+--shadow-card: 0 1px 3px rgba(13, 17, 23, 0.06), 0 1px 2px rgba(13, 17, 23, 0.04);
+--shadow-overlay: -24px 0 48px rgba(13, 17, 23, 0.16);
+```
+
+---
+
+### 12.3 标志性元素：个性化分数徽章
+
+这是 V2 视觉系统中最核心的新增元素，出现在每条 item 卡片的左边缘 + 右上角。
+
+**设计语言**：左侧 4px 颜色竖条（signal 色）+ 右上角 Mono 字体分数数字
+
+```
+┌────────────────────────────────────────────────────────┐
+│                                                        │
+│  ● 高  发布  OS性能发展                          82 ── ← JetBrains Mono, teal
+│  Linux 6.12 内核正式发布，sched_ext 合入主线           │
+│                                              2026-06-10 ← mono date
+│                                                        │
+├─ ← 4px teal 左边框（score ≥ 80）──────────────────────┤
+```
+
+**三档分数样式：**
+
+| 分数 | 左边框色 | 分数字色 | 背景微调 |
+|------|---------|---------|---------|
+| ≥ 80 | `--signal-high` (#0d9488) | `--signal-high` | 卡片微带 `#f9fffe` tint |
+| 50–79 | `--signal-mid` (#d97706) | `--signal-mid` | 无特殊背景 |
+| < 50 | `--border` (#d4dae3) | `--ink-muted` | 无特殊背景 |
+
+分数数字使用 `JetBrains Mono weight 600`，18px，出现在卡片右上角与日期同行。未登录用户或未设置 criteria 时不显示分数。
+
+---
+
+### 12.4 页面设计规范
+
+#### 12.4.1 登录 / 注册页 `/login` `/register`
+
+**布局**：单列居中，宽 440px，垂直居中，全高页面背景 `--ground`。
+
+```
+页面背景 #f0f2f7
+           ┌──────────────────────────────────┐
+           │   ◆  OS Intelligence             │  ← 品牌标识行（小，克制）
+           │   ──────────────────────────     │
+           │                                  │
+           │   邮箱                            │
+           │   ┌──────────────────────────┐   │
+           │   └──────────────────────────┘   │
+           │                                  │
+           │   密码                            │
+           │   ┌──────────────────────────┐   │
+           │   └──────────────────────────┘   │
+           │                                  │
+           │   ┌──── 登录 ────────────────┐   │  ← 全宽 accent 按钮
+           │   └──────────────────────────┘   │
+           │                                  │
+           │   还没有账户？注册                  │  ← 下方文字链接
+           └──────────────────────────────────┘
+```
+
+**细节：**
+- 表单卡片：`border: 1px solid var(--border)`, `border-radius: var(--radius-lg)`, `padding: 36px`, `background: var(--surface)`, `box-shadow: var(--shadow-card)`
+- 品牌 logo 区域（`◆`符号 + 产品名）用 Inter 600，18px，不加彩色
+- 输入框 focus 状态：`border-color: var(--accent)`, `outline: 3px solid #eff6ff`（不用原生 outline）
+- 主按钮：`background: var(--accent)`, `height: 44px`, `font-weight: 600`, `border-radius: var(--radius-md)`
+- 错误提示：行内红色文字，无红色边框闪烁
+
+#### 12.4.2 偏好设置页 `/settings/profile`
+
+**布局**：两列，左侧主内容区（max-width 720px）+ 右侧 AI 建议区（宽 300px，可收起）
+
+```
+标题行: MY SCORING RULES ─────────────────  + 添加准则
+────────────────────────────────────────────────────────
+┌─────────────────────────────────────────┐  ┌──────────┐
+│ ┌─────── 准则卡片 ─────────────────────┐ │  │  AI 建议  │
+│ │  ◉ 内核性能关注                  2.0 │ │  │  3 条     │
+│ │  eBPF · scheduler · PREEMPT_RT     │ │  │           │
+│ │  OS性能发展                   [开启] │ │  │  [接受]   │
+│ └─────────────────────────────────────┘ │  │  [忽略]   │
+│ ┌─────────────────────────────────────┐ │  └──────────┘
+│ │  ◉ RHEL 生态安全               2.5  │ │
+│ └─────────────────────────────────────┘ │
+└─────────────────────────────────────────┘
+── LLM 精打分 ──────────────────────────────
+[ OFF ] 开启 LLM 智能打分
+        ┌────────────────────────────────┐
+        │ 关注 Linux 内核调度优化...      │  ← free_text textarea
+        └────────────────────────────────┘
+```
+
+**准则卡片细节：**
+- 卡片 `border-left: 3px solid var(--accent)`（与分数徽章呼应，activated 时变 teal）
+- 权重以 `JetBrains Mono weight 600` 显示，如 `2.0`，右对齐
+- 关键词以灰底小 chip 展示（`background: var(--surface-tint)`, `border: 1px solid var(--border-subtle)`, `font: var(--font-mono) 12px`）
+- 禁用状态：整卡片 opacity 0.5，左边框变 `--border`
+- 权重滑块用 accent 色轨道，thumb 4px 高度，简洁
+
+**LLM 精打分区块：**
+- 开关 toggle：宽 36px，高 20px，圆形 thumb，ON 时 `--accent` 底色
+- 文本框仅在 ON 时出现（CSS `display: none/block`，无动画），placeholder 为「描述你的关注方向，帮助 AI 更准确评分，如"关注 Linux 内核调度优化和 RHEL 安全公告"」
+
+#### 12.4.3 Digest 页面 `/digest`
+
+**标志性设计**：Digest 页面顶栏用 `JetBrains Mono` 的日期和状态标注，呈现「情报简报」气质。
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  ◆ INTEL BRIEF                      2026-06-15  ←mono  │
+│  技术情报周报                                            │
+│  ──────────────────────────────────────────────         │
+│  [ 本周 ▾ ]  [ 个性化 ·● ]  [ 全部 ○ ]   [⚡ 生成摘要] │
+└─────────────────────────────────────────────────────────┘
+```
+
+**两栏内容区：**
+```
+┌──────────────────────────────┐  ┌──────────────────────┐
+│  🔴 热点动向                  │  │  ↑ 新兴趋势          │
+│  ┌────────────────────────┐  │  │  RISC-V 服务器生态   │
+│  │ Linux 6.12 内核发布     │  │  │  +3 ↑  本周 4 次    │
+│  │ 8 条 →                 │  │  │                      │
+│  └────────────────────────┘  │  │  AI 推理工具链       │
+│  ...                          │  │  +2 ↑  本周 3 次    │
+└──────────────────────────────┘  └──────────────────────┘
+
+综合总结文字段
+───────────────────────────────────────────────
+
+历史 Digest 列表（3列网格）
+┌──────────┐  ┌──────────┐  ┌──────────┐
+│ 个性化    │  │ 全局      │  │ 全局      │
+│ 本周      │  │ 本周      │  │ 上周      │
+│ 82 条     │  │ 127 条    │  │ 108 条    │
+└──────────┘  └──────────┘  └──────────┘
+```
+
+**Digest 卡片细节：**
+- 热点卡片：左侧 4px `--danger` 红条，hover 变 `--signal-high` teal（暗示"可查看关联内容"）
+- 新兴趋势：左侧 4px `--signal-mid` amber 条，趋势数字 `+3 ↑` 用 `JetBrains Mono weight 600, --signal-mid` 颜色
+- 生成中状态：卡片内 3 个步骤的 progress 指示器（Step 1 / 2 / 3），用小圆点 + 线段连接，当前步骤 `--accent` 色
+
+**历史 Digest 卡片：**
+- `个性化` 标签：`background: #f0fdfa, color: #0d9488`（teal，个人相关）
+- `全局` 标签：`background: #f8fafc, color: #475467`（slate，共享内容）
+- 日期用 `JetBrains Mono 13px --ink-muted`
+- 条目数 `127 条` 用 `JetBrains Mono 20px --ink font-weight 600`，视觉上最突出
+
+---
+
+### 12.5 Feed 页面增强（在现有基础上叠加）
+
+**分数徽章集成到 ItemCard：**
+- ItemCard 添加左侧 4px border（根据分数决定颜色），未登录/无分数时 `--border` 默认色
+- 右上角区域：分数数字替代或紧跟日期显示
+
+**侧边栏新增「相关度」滑块：**
+- 紧贴「发布时间」区块上方
+- label：`最低相关度：${value}` 其中数字用 `JetBrains Mono`
+- 滑块轨道用渐变（teal → amber → gray，从左到右），不是单色
+
+**排序下拉新增「相关度优先」选项（登录后可见）：**
+```html
+<option value="relevance:desc">相关度 最高优先</option>
+```
+
+---
+
+### 12.6 动效规范
+
+**只在两处使用动效，其余保持静止：**
+
+1. **Digest 生成进度**（Step 1 → 2 → 3）
+   - 步骤圆点从灰 → accent 蓝，使用 `transition: background 0.3s ease`
+   - 连接线做从左到右的 `width: 0% → 100%` 展开动效，0.4s
+   
+2. **分数徽章首次出现**（从无分数 → 有分数）
+   - 分数数字 `opacity: 0 → 1`，`transform: translateY(4px) → 0`，0.25s，ease-out
+   - 左边框色过渡 `transition: border-color 0.3s ease`
+
+**`@media (prefers-reduced-motion: reduce)` 时所有 transition 设为 0s。**
+
+不在卡片 hover、侧边栏展开、页面路由切换上加动效——这是一个信息密集的工具，不是营销页面。
+
+---
+
+### 12.7 响应式考量
+
+所有新页面使用与现有系统相同的 `max-width: 1280px; margin: 0 auto; padding: 24px`。
+
+- `/login` `/register`：单列，不需要 breakpoint 处理
+- `/settings/profile`：移动端（< 768px）右侧 AI 建议区折叠为底部可展开抽屉
+- `/digest`：两栏热点/趋势在 < 768px 时变单列堆叠
+
+---
+
 ## 11. 待确认项
 
 - [ ] `display_name` 是否需要对其他用户可见（目前方案中 profile 是私有的）
