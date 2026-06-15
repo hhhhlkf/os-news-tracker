@@ -1,3 +1,4 @@
+import uuid as _uuid
 from datetime import datetime
 from sqlalchemy import (
     String, Text, Integer, DateTime, ForeignKey, Float, JSON, UniqueConstraint, func,
@@ -171,3 +172,107 @@ class CompatibilityEntry(Base):
     status: Mapped[str | None] = mapped_column(String(50), nullable=True)
     snapshot_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+
+# --- V2 tables: user system, personalised scoring, digest, agent crawl ---
+
+
+class User(Base):
+    __tablename__ = "users"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(_uuid.uuid4()))
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    role: Mapped[str] = mapped_column(String(20), default="user")   # user | admin
+    is_active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    profile: Mapped["UserProfile | None"] = relationship(back_populates="user", uselist=False)
+
+
+class UserProfile(Base):
+    __tablename__ = "user_profiles"
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), primary_key=True)
+    criteria: Mapped[list] = mapped_column(JSON, default=list)
+    free_text_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enable_llm_scoring: Mapped[bool] = mapped_column(default=False)
+    min_score_threshold: Mapped[int] = mapped_column(Integer, default=25)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    user: Mapped["User"] = relationship(back_populates="profile")
+
+
+class UserItemScore(Base):
+    __tablename__ = "user_item_scores"
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id"), primary_key=True)
+    score: Mapped[int] = mapped_column(Integer, nullable=False)
+    scoring_method: Mapped[str] = mapped_column(String(20), default="fast")   # fast | llm
+    score_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scored_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class UserItemInteraction(Base):
+    __tablename__ = "user_item_interactions"
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id"), primary_key=True)
+    action: Mapped[str] = mapped_column(String(20), primary_key=True)   # view | bookmark
+    interacted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Digest(Base):
+    __tablename__ = "digests"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(_uuid.uuid4()))
+    trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)   # manual | scheduled
+    created_by: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    time_range_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    time_range_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    scope: Mapped[str] = mapped_column(String(20), default="personalized")   # personalized | global
+    period_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hotspots: Mapped[list] = mapped_column(JSON, default=list)
+    emerging_topics: Mapped[list] = mapped_column(JSON, default=list)
+    stats: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(20), default="generating")   # generating | ready | failed
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AgentSourceConfig(Base):
+    __tablename__ = "agent_source_configs"
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id", ondelete="CASCADE"), primary_key=True)
+    focus_areas: Mapped[list] = mapped_column(JSON, default=list)
+    topic_groups: Mapped[list] = mapped_column(JSON, default=list)
+    crawl_depth: Mapped[int] = mapped_column(Integer, default=1)
+    max_urls_per_run: Mapped[int] = mapped_column(Integer, default=20)
+    quality_threshold: Mapped[int] = mapped_column(Integer, default=4)
+    crawl_workers: Mapped[int] = mapped_column(Integer, default=5)
+    quality_workers: Mapped[int] = mapped_column(Integer, default=3)
+    summary_workers: Mapped[int] = mapped_column(Integer, default=3)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AgentSiteMemory(Base):
+    __tablename__ = "agent_site_memory"
+    __table_args__ = (UniqueConstraint("source_id", "url_pattern", name="uq_agent_memory_source_url"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id", ondelete="CASCADE"))
+    url_pattern: Mapped[str] = mapped_column(String(2000), nullable=False)
+    quality_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quality_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verdict: Mapped[str] = mapped_column(String(20), nullable=False)   # keep | discard
+    relevant_topic: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    seen_count: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class AgentCrawlRun(Base):
+    __tablename__ = "agent_crawl_runs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    plan_urls_count: Mapped[int] = mapped_column(Integer, default=0)
+    fetched_count: Mapped[int] = mapped_column(Integer, default=0)
+    quality_passed: Mapped[int] = mapped_column(Integer, default=0)
+    items_created: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(20), default="running")   # running | completed | failed | plan_failed
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
