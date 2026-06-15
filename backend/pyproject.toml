@@ -16,6 +16,8 @@ dependencies = [
     "scrapling[fetchers]>=0.4",
     "python-dateutil>=2.9",
     "pyyaml>=6.0",
+    "python-jose[cryptography]>=3.3",
+    "passlib[bcrypt]>=1.7",
 ]
 
 [project.optional-dependencies]
