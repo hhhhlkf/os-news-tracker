@@ -305,9 +305,72 @@ Step 3: 个人打分
 
 ---
 
-## 10. 待确认项
+## 10. 设计决策记录
 
-- [ ] 用户申请加群的流程：是 group_admin 主动邀请，还是用户能看到群列表并申请加入？（当前设计：仅 group_admin 主动邀请）
-- [ ] 一个 source（尤其 RSS）是否允许被多个群订阅？（当前设计：允许，group_sources 无此限制）
-- [ ] 未加群的新用户是否应该被 sysadmin 自动加入某个默认群？
-- [ ] Digest 的全局定时总结：是按群分别生成，还是依然全量生成一份？（建议：按群生成，每个群有自己的定时 Digest）
+以下已与用户确认，不再是待确认项：
+
+| 问题 | 决策 |
+|------|------|
+| 加群流程 | 用户可查看公开群列表并提交申请，group_admin 审批通过后加入（双向：group_admin 也可主动邀请） |
+| RSS source 是否可被多群订阅 | 允许，`group_sources` 无唯一约束限制 |
+| 新用户是否自动加入默认群 | 否，新用户默认无群，Feed 为空，显示引导提示「联系管理员加入群组」 |
+| Digest 定时生成范围 | 按群分别生成，每个群有独立的定时 Digest；全局 Digest（sysadmin 视角）作为可选功能 |
+
+### 加群流程补充设计
+
+因此需要新增「入群申请」相关数据结构：
+
+```sql
+group_join_requests(
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  group_id    UUID REFERENCES groups(id) ON DELETE CASCADE,
+  user_id     UUID REFERENCES users(id) ON DELETE CASCADE,
+  status      VARCHAR(20) DEFAULT 'pending',   -- pending | approved | rejected
+  message     TEXT,                             -- 用户的申请理由（可选）
+  reviewed_by UUID REFERENCES users(id),
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(group_id, user_id)    -- 同一用户对同一群只能有一条待处理申请
+)
+```
+
+新增 API：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/groups` | 查看所有公开群列表（任意已登录用户）|
+| POST | `/groups/{id}/join-requests` | 提交入群申请（body: message 可选）|
+| GET | `/groups/{id}/join-requests` | 查看待审批申请列表（group_admin + sysadmin）|
+| PUT | `/groups/{id}/join-requests/{request_id}` | 审批（body: status=approved\|rejected）（group_admin）|
+
+**入群流程**：
+```
+用户申请 → pending 状态 → group_admin 审批
+  → approved → 自动写入 group_members（role=member）
+  → rejected → 申请记录保留，用户可重新申请（需等待冷却期或管理员删除旧申请）
+```
+
+### Digest 按群生成补充设计
+
+每个群有独立的 Digest 配置，新增：
+
+```sql
+group_digest_schedule(
+  group_id         UUID PRIMARY KEY REFERENCES groups(id) ON DELETE CASCADE,
+  enabled          BOOLEAN DEFAULT FALSE,
+  frequency        VARCHAR(20) DEFAULT 'weekly',   -- daily | weekly
+  day_of_week      INT,                             -- 0-6，weekly 时有效（0=周一）
+  hour_utc         INT DEFAULT 8,                   -- UTC 几点触发
+  updated_by       UUID REFERENCES users(id),
+  updated_at       TIMESTAMPTZ DEFAULT NOW()
+)
+```
+
+API：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/groups/{id}/digest/schedule` | 查看群 Digest 定时配置（成员可查）|
+| PUT | `/groups/{id}/digest/schedule` | 更新配置（group_admin）|
+| POST | `/groups/{id}/digest` | 手动触发群 Digest 生成（group_admin）|
+| GET | `/groups/{id}/digests` | 查看本群的历史 Digest 列表 |
