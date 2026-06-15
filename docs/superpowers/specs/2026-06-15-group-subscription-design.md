@@ -47,9 +47,10 @@ V2 设计中，agent_crawl 来源是每个用户独立配置的，个性化需�
 ```
 system_admin
   ├─ 对所有群组拥有 group_admin 权限
-  └─ 系统级独占权限：创建/删除群组、任命群管、管理全局来源池
+  └─ 系统级独占权限：删除群组、任命群管、管理全局来源池
 
 group_admin（群内）
+  ├─ 创建新群组（自动成为新群的 group_admin）
   ├─ 选配全局来源给本群
   ├─ 创建 agent_crawl 来源（归属本群）
   ├─ 邀请/移除群成员
@@ -74,7 +75,7 @@ groups(
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name        VARCHAR(200) UNIQUE NOT NULL,
   description TEXT,
-  created_by  UUID REFERENCES users(id),   -- 创建者（sysadmin）
+  created_by  UUID REFERENCES users(id),   -- 创建者（sysadmin 或 group_admin）
   is_active   BOOLEAN DEFAULT TRUE,
   created_at  TIMESTAMPTZ DEFAULT NOW()
 )
@@ -209,7 +210,7 @@ Step 3: 个人打分
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/admin/groups` | 创建群组（body: name, description, admin_user_id）|
+| POST | `/admin/groups` | 创建群组（body: name, description, admin_user_id — sysadmin 可指定任意用户为初始 group_admin）|
 | GET | `/admin/groups` | 列出所有群组 |
 | GET | `/admin/groups/{id}` | 查看群组详情（含成员数、来源数）|
 | PUT | `/admin/groups/{id}` | 更新群组信息（name, description, is_active）|
@@ -222,6 +223,7 @@ Step 3: 个人打分
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| POST | `/groups` | 创建群组（body: name, description — 创建者自动成为初始 group_admin）|
 | GET | `/groups/{id}/members` | 查看成员列表 |
 | POST | `/groups/{id}/members` | 邀请用户加入（body: user_id）|
 | DELETE | `/groups/{id}/members/{user_id}` | 移除成员 |
@@ -264,7 +266,8 @@ Step 3: 个人打分
 | 关联全局来源到群 | ❌ | ✅ | ✅ |
 | 创建 agent_crawl 来源 | ❌ | ✅ | ✅ |
 | 邀请/移除成员 | ❌ | ✅（本群）| ✅（所有群）|
-| 创建/删除群组 | ❌ | ❌ | ✅ |
+| 创建群组 | ❌ | ✅ | ✅ |
+| 删除群组 | ❌ | ❌ | ✅ |
 | 任命/撤销群管理员 | ❌ | ❌ | ✅ |
 | 管理全局来源池 | ❌ | ❌ | ✅ |
 
