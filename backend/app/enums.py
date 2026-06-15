@@ -6,6 +6,7 @@ class SourceType(StrEnum):
     API = "api"
     PAGE_MONITOR = "page_monitor"
     SEARCH = "search"
+    AGENT_CRAWL = "agent_crawl"
 
 
 class Stream(StrEnum):
@@ -18,6 +19,7 @@ class ItemStatus(StrEnum):
     ENRICHED = "enriched"
     ENRICH_FAILED = "enrich_failed"
     NEEDS_REVIEW = "needs_review"
+    AGENT_ENRICHED = "agent_enriched"
 
 
 class InfoType(StrEnum):
