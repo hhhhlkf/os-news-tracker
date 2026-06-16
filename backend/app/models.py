@@ -1,5 +1,6 @@
 import uuid as _uuid
 from datetime import datetime
+from typing import Any
 from sqlalchemy import (
     String, Text, Integer, DateTime, ForeignKey, Float, JSON, UniqueConstraint, func,
 )
@@ -18,6 +19,7 @@ class Source(Base):
     url: Mapped[str] = mapped_column(String(1000))
     keywords: Mapped[str | None] = mapped_column(Text, nullable=True)
     adapter: Mapped[str | None] = mapped_column(String(100), nullable=True)   # api adapter name
+    api_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     stream: Mapped[str] = mapped_column(String(20), default="news")           # news | structured
     vendor: Mapped[str | None] = mapped_column(String(50), nullable=True)
     fetch_cron: Mapped[str | None] = mapped_column(String(100), nullable=True)

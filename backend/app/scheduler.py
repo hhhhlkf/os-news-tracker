@@ -7,6 +7,7 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.enums import SourceType, Stream
 from app.extract.scrapling_extractor import ScraplingExtractor
+from app.fetchers.json_api import GenericJsonApiFetcher
 from app.fetchers.page_monitor import PageMonitorFetcher
 from app.fetchers.rss import RssFetcher
 from app.fetchers.search import SearchFetcher
@@ -21,6 +22,7 @@ SUPPORTED_NEWS_SOURCE_TYPES = (
     SourceType.RSS,
     SourceType.PAGE_MONITOR,
     SourceType.SEARCH,
+    SourceType.API,
 )
 
 
@@ -31,6 +33,8 @@ def build_fetcher(source: Source, extractor, search):
         return PageMonitorFetcher(extractor=extractor)
     if source.type == SourceType.SEARCH:
         return SearchFetcher(search=search, extractor=extractor)
+    if source.type == SourceType.API and source.adapter == "generic_json_list":
+        return GenericJsonApiFetcher()
     raise ValueError(f"unknown source type {source.type}")
 
 
@@ -41,6 +45,7 @@ def list_enabled_news_sources(session) -> list[Source]:
                 Source.enabled.is_(True),
                 Source.stream == Stream.NEWS,
                 Source.type.in_(SUPPORTED_NEWS_SOURCE_TYPES),
+                (Source.type != SourceType.API) | (Source.adapter == "generic_json_list"),
             )
         )
     )

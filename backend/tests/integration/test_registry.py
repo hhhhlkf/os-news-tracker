@@ -56,6 +56,33 @@ def test_seed_reads_list_mode_fields(session, tmp_path):
     assert src.stealth is True
 
 
+def test_seed_reads_api_config(session, tmp_path):
+    yaml_text = (
+        "- name: JsonApiNews\n"
+        "  type: api\n"
+        "  url: https://example.com/news.json\n"
+        "  adapter: generic_json_list\n"
+        "  stream: news\n"
+        "  main_category: OS跟踪来源\n"
+        "  api_config:\n"
+        "    items_path: data.items\n"
+        "    fields:\n"
+        "      title: title\n"
+        "      content: body\n"
+    )
+    f = tmp_path / "seed_api.yaml"
+    f.write_text(yaml_text, encoding="utf-8")
+
+    seed_sources_from_yaml(session, str(f))
+
+    src = session.scalar(select(Source).where(Source.name == "JsonApiNews"))
+    assert src is not None
+    assert src.api_config == {
+        "items_path": "data.items",
+        "fields": {"title": "title", "content": "body"},
+    }
+
+
 def test_seed_defaults_stealth_to_false(session, tmp_path):
     """When stealth is not specified, it defaults to False."""
     yaml_text = (
@@ -157,3 +184,12 @@ def test_project_seed_manifest_loads_all_sources(session):
     assert "ANAS Errata" in names
     assert "ANAS CVE" in names
     assert "Ubuntu Packages" in names
+
+    openanolis_news = session.scalar(
+        select(Source).where(Source.name == "OpenAnolis News")
+    )
+    assert openanolis_news is not None
+    assert openanolis_news.type == "api"
+    assert openanolis_news.adapter == "generic_json_list"
+    assert openanolis_news.enabled is True
+    assert openanolis_news.api_config["items_path"] == "data.items"

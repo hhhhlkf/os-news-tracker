@@ -3,6 +3,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.enums import SourceType, Stream
+from app.fetchers.json_api import GenericJsonApiFetcher
 from app.fetchers.page_monitor import PageMonitorFetcher
 from app.fetchers.rss import RssFetcher
 from app.fetchers.search import SearchFetcher
@@ -27,6 +28,14 @@ def test_build_fetcher_by_type():
     assert isinstance(build_fetcher(Source(type=SourceType.RSS), ext, search), RssFetcher)
     assert isinstance(build_fetcher(Source(type=SourceType.PAGE_MONITOR), ext, search), PageMonitorFetcher)
     assert isinstance(build_fetcher(Source(type=SourceType.SEARCH), ext, search), SearchFetcher)
+    assert isinstance(
+        build_fetcher(
+            Source(type=SourceType.API, adapter="generic_json_list"),
+            ext,
+            search,
+        ),
+        GenericJsonApiFetcher,
+    )
 
 
 def test_run_startup_backfill_only_runs_enabled_news_sources(monkeypatch):
@@ -46,6 +55,15 @@ def test_run_startup_backfill_only_runs_enabled_news_sources(monkeypatch):
             Source(id=2, name="page news", type=SourceType.PAGE_MONITOR, url="u2", stream=Stream.NEWS, enabled=True),
             Source(id=3, name="search news", type=SourceType.SEARCH, url="u3", stream=Stream.NEWS, enabled=False),
             Source(id=4, name="structured api", type=SourceType.API, url="u4", stream=Stream.STRUCTURED, enabled=True),
+            Source(
+                id=5,
+                name="json api news",
+                type=SourceType.API,
+                adapter="generic_json_list",
+                url="u5",
+                stream=Stream.NEWS,
+                enabled=True,
+            ),
         ]
     )
     session.commit()
@@ -58,8 +76,8 @@ def test_run_startup_backfill_only_runs_enabled_news_sources(monkeypatch):
 
     count = run_startup_backfill()
 
-    assert count == 2
-    assert triggered == [1, 2]
+    assert count == 3
+    assert triggered == [1, 2, 5]
 
 
 def test_list_enabled_news_sources_filters_to_enabled_news_types():
@@ -79,10 +97,28 @@ def test_list_enabled_news_sources_filters_to_enabled_news_types():
             Source(id=2, name="page news", type=SourceType.PAGE_MONITOR, url="u2", stream=Stream.NEWS, enabled=True),
             Source(id=3, name="search news", type=SourceType.SEARCH, url="u3", stream=Stream.NEWS, enabled=False),
             Source(id=4, name="structured api", type=SourceType.API, url="u4", stream=Stream.STRUCTURED, enabled=True),
+            Source(
+                id=5,
+                name="json api news",
+                type=SourceType.API,
+                adapter="generic_json_list",
+                url="u5",
+                stream=Stream.NEWS,
+                enabled=True,
+            ),
+            Source(
+                id=6,
+                name="unsupported api news",
+                type=SourceType.API,
+                adapter="custom_adapter",
+                url="u6",
+                stream=Stream.NEWS,
+                enabled=True,
+            ),
         ]
     )
     session.commit()
 
     sources = list_enabled_news_sources(session)
 
-    assert [source.id for source in sources] == [1, 2]
+    assert [source.id for source in sources] == [1, 2, 5]

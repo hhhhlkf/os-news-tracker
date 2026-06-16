@@ -103,13 +103,43 @@
 
 # --- OpenAnolis --- #已筛选
 - name: OpenAnolis News
-  type: page_monitor
-  url: https://openanolis.cn/news/
+  type: api
+  url: https://openanolis.cn/api/news/list.json
+  adapter: generic_json_list
   vendor: openanolis
   stream: news
   main_category: OS跟踪来源
-  enabled: false  # Dynamic news list; needs API adapter or reliable article selector.
+  enabled: true
   fetch_cron: "0 9 * * *"
+  api_config:
+    endpoints:
+      - url: https://openanolis.cn/api/news/197349276443918351/list.json
+      - url: https://openanolis.cn/api/news/242833432723031025/list.json
+    headers:
+      Referer: https://openanolis.cn/news/
+      User-Agent: Mozilla/5.0
+      Accept-Language: zh-CN,zh;q=0.9
+    params:
+      internationalized: false
+    pagination:
+      page_param: currentPage
+      start_page: 1
+      has_more_path: data.hasMore
+      max_pages: 3
+    items_path: data.items
+    fields:
+      title:
+        - title
+        - titleEn
+      url_template: "https://openanolis.cn/news/{no}"
+      published_at: happenDate
+      content:
+        - content
+        - contentEn
+        - abstracts
+        - abstractsEn
+    content_format: html
+    min_content_len: 500
 - name: ANAS Errata
   type: page_monitor
   url: https://anas.openanolis.cn/errata
