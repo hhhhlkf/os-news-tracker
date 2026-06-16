@@ -1,4 +1,7 @@
 import logging
+from pathlib import Path
+from typing import Any
+
 import yaml
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -27,13 +30,46 @@ _SYNC_FIELDS = [
 ]
 
 
-def seed_sources_from_yaml(session: Session, path: str) -> dict:
+def _read_yaml_file(path: Path) -> Any:
+    with path.open(encoding="utf-8") as fh:
+        return yaml.safe_load(fh) or []
+
+
+def _load_source_entries(path: Path) -> list[dict[str, Any]]:
+    data = _read_yaml_file(path)
+    if isinstance(data, list):
+        return data
+
+    if isinstance(data, dict) and isinstance(data.get("includes"), list):
+        entries: list[dict[str, Any]] = []
+        for include in data["includes"]:
+            include_path = path.parent / include
+            entries.extend(_load_source_entries(include_path))
+        return entries
+
+    raise ValueError(f"Unsupported source seed YAML format: {path}")
+
+
+def _ensure_unique_source_names(entries: list[dict[str, Any]]) -> None:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for entry in entries:
+        name = entry["name"]
+        if name in seen:
+            duplicates.add(name)
+        seen.add(name)
+    if duplicates:
+        duplicate_list = ", ".join(sorted(duplicates))
+        raise ValueError(f"Duplicate source name(s) in seed YAML: {duplicate_list}")
+
+
+def seed_sources_from_yaml(session: Session, path: str) -> dict[str, int]:
     """Idempotent seed: insert new sources, sync changed fields, delete removed.
 
     Returns ``{added, updated, deleted}`` so callers can log a summary.
     """
-    with open(path, encoding="utf-8") as fh:
-        entries = yaml.safe_load(fh) or []
+    entries = _load_source_entries(Path(path))
+    _ensure_unique_source_names(entries)
 
     yaml_names: set[str] = set()
     added = 0

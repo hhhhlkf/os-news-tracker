@@ -1,0 +1,57 @@
+# =============================================
+# 软件包适配
+# =============================================
+
+# --- OpenAnolis ---
+- name: OpenAnolis 兼容性列表平台
+  type: page_monitor
+  url: https://eco.openanolis.cn/
+  vendor: openanolis
+  stream: news
+  main_category: 软件包适配
+  enabled: false  # Compatibility catalog landing page; structured adapter needed.
+  fetch_cron: "0 11 * * *"
+- name: OpenAnolis 硬件兼容性 SIG (HCT)
+  type: page_monitor
+  url: https://openanolis.cn/sig/HCT
+  vendor: openanolis
+  stream: news
+  main_category: 软件包适配
+  enabled: false  # SIG landing page, not a news/article feed.
+  fetch_cron: "0 11 * * 1"
+
+# --- Red Hat ---
+- name: Red Hat Ecosystem Catalog
+  type: page_monitor
+  url: https://catalog.redhat.com/
+  vendor: redhat
+  stream: news
+  main_category: 软件包适配
+  enabled: false
+  fetch_cron: "0 11 * * *"
+- name: Red Hat Package Browser
+  type: page_monitor
+  url: https://access.redhat.com/downloads/content/package-browser
+  vendor: redhat
+  stream: news
+  main_category: 软件包适配
+  enabled: false
+  fetch_cron: "0 11 * * *"
+
+# --- Ubuntu ---
+- name: Ubuntu Certified Hardware & Software
+  type: page_monitor
+  url: https://ubuntu.com/certified
+  vendor: ubuntu
+  stream: news
+  main_category: 软件包适配
+  enabled: false
+  fetch_cron: "0 11 * * *"
+- name: Ubuntu Packages
+  type: page_monitor
+  url: https://packages.ubuntu.com/
+  vendor: ubuntu
+  stream: news
+  main_category: 软件包适配
+  enabled: false
+  fetch_cron: "0 11 * * *"

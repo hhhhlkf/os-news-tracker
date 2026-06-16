@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -70,3 +72,88 @@ def test_seed_defaults_stealth_to_false(session, tmp_path):
     assert src.link_selector is None
     assert src.title_selector is None
     assert src.date_selector is None
+
+
+def test_seed_reads_manifest_includes_in_order(session, tmp_path):
+    first = tmp_path / "first.yaml"
+    first.write_text(
+        "- name: FirstSource\n"
+        "  type: rss\n"
+        "  url: https://example.com/first.xml\n"
+        "  main_category: OS跟踪来源\n",
+        encoding="utf-8",
+    )
+    second_dir = tmp_path / "nested"
+    second_dir.mkdir()
+    second = second_dir / "second.yaml"
+    second.write_text(
+        "- name: SecondSource\n"
+        "  type: page_monitor\n"
+        "  url: https://example.com/second\n"
+        "  main_category: OS性能发展\n"
+        "  link_selector: a.article\n",
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "seed_sources.yaml"
+    manifest.write_text(
+        "includes:\n"
+        "  - first.yaml\n"
+        "  - nested/second.yaml\n",
+        encoding="utf-8",
+    )
+
+    result = seed_sources_from_yaml(session, str(manifest))
+
+    sources = session.scalars(select(Source).order_by(Source.id)).all()
+    assert result == {"added": 2, "updated": 0, "deleted": 0}
+    assert [source.name for source in sources] == ["FirstSource", "SecondSource"]
+    assert sources[1].link_selector == "a.article"
+
+
+def test_seed_manifest_rejects_duplicate_source_names(session, tmp_path):
+    first = tmp_path / "first.yaml"
+    first.write_text(
+        "- name: DuplicateSource\n"
+        "  type: rss\n"
+        "  url: https://example.com/first.xml\n"
+        "  main_category: OS跟踪来源\n",
+        encoding="utf-8",
+    )
+    second = tmp_path / "second.yaml"
+    second.write_text(
+        "- name: DuplicateSource\n"
+        "  type: rss\n"
+        "  url: https://example.com/second.xml\n"
+        "  main_category: OS性能发展\n",
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "seed_sources.yaml"
+    manifest.write_text(
+        "includes:\n"
+        "  - first.yaml\n"
+        "  - second.yaml\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Duplicate source name"):
+        seed_sources_from_yaml(session, str(manifest))
+
+
+def test_project_seed_manifest_loads_all_sources(session):
+    seed_path = (
+        Path(__file__).resolve().parents[2]
+        / "app"
+        / "sources"
+        / "seed_sources.yaml"
+    )
+
+    result = seed_sources_from_yaml(session, str(seed_path))
+
+    sources = session.scalars(select(Source)).all()
+    names = {source.name for source in sources}
+    assert result == {"added": 78, "updated": 0, "deleted": 0}
+    assert len(sources) == 78
+    assert "OpenAnolis News" in names
+    assert "ANAS Errata" in names
+    assert "ANAS CVE" in names
+    assert "Ubuntu Packages" in names

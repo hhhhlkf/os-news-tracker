@@ -1,0 +1,181 @@
+# --- OS性能发展: RSS ---
+- name: Phoronix (news)
+  type: rss
+  url: https://www.phoronix.com/rss.php
+  vendor: phoronix
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 */12 * * *"
+- name: Phoronix (full)
+  type: rss
+  url: https://www.phoronix.com/phoronix-rss.php
+  vendor: phoronix
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 */12 * * *"
+  relevance_filter: true
+  relevance_keywords: "benchmark, kernel, scheduler, IO, performance, GPU, EPYC, AI, ML"
+- name: LWN headlines
+  type: rss
+  url: https://lwn.net/headlines/rss
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 8 * * *"
+- name: LWN Features
+  type: rss
+  url: https://lwn.net/headlines/Features
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 8 * * *"
+- name: ServeTheHome
+  type: rss
+  url: https://www.servethehome.com/feed
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 8 * * *"
+- name: Linux Kernel Releases
+  type: rss
+  url: https://www.kernel.org/feeds/kdist.xml
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 6 * * *"
+- name: CachyOS Kernel Releases
+  type: rss
+  url: https://github.com/CachyOS/linux-cachyos/releases.atom
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 6 * * *"
+- name: LKML Latest Topics
+  type: rss
+  url: https://lore.kernel.org/lkml/new.atom
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  relevance_filter: true
+  relevance_keywords: "scheduler, sched, io_uring, BPF, performance, latency, throughput, NUMA, cgroup"
+  fetch_cron: "0 6 * * *"
+- name: arXiv OS/PF/DC/AR
+  type: rss
+  url: https://rss.arxiv.org/rss/cs.OS+cs.PF+cs.DC+cs.AR
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  relevance_filter: true
+  relevance_keywords: "operating system, scheduler, kernel, IO, performance, benchmark, virtualization"
+  fetch_cron: "0 1 * * *"
+
+# --- OS性能发展: 顶会论文 (DBLP RSS) ---
+- name: OSDI Papers (DBLP)
+  type: rss
+  url: "https://www.monperrus.net/martin/dblp-rss.py?search=venue:OSDI:"
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 2 * * 1"
+- name: SOSP Papers (DBLP)
+  type: rss
+  url: "https://www.monperrus.net/martin/dblp-rss.py?search=venue:SOSP:"
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 2 * * 1"
+- name: EuroSys Papers (DBLP)
+  type: rss
+  url: "https://www.monperrus.net/martin/dblp-rss.py?search=venue:EuroSys:"
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 2 * * 1"
+- name: ASPLOS Papers (DBLP)
+  type: rss
+  url: "https://www.monperrus.net/martin/dblp-rss.py?search=venue:ASPLOS:"
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 2 * * 1"
+- name: MLSys Papers (DBLP)
+  type: rss
+  url: "https://www.monperrus.net/martin/dblp-rss.py?search=venue:MLSys:"
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 2 * * 1"
+
+# --- OS性能发展: 页面监控 ---
+- name: OpenBenchmarking ML Suite
+  type: page_monitor
+  url: https://openbenchmarking.org/suite/pts/machine-learning
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 12 * * *"
+- name: OpenBenchmarking All Suites
+  type: page_monitor
+  url: https://openbenchmarking.org/suites/pts
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 12 * * 1"
+- name: Phoronix Test Suite
+  type: page_monitor
+  url: https://www.phoronix-test-suite.com/
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 12 * * 1"
+- name: CachyOS Blog
+  type: page_monitor
+  url: https://cachyos.org/blog/
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 12 * * *"
+- name: USENIX OSDI
+  type: page_monitor
+  url: https://www.usenix.org/conferences/byname/179
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 12 * * 1"
+- name: USENIX ATC
+  type: page_monitor
+  url: https://www.usenix.org/conferences/byname/131
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 12 * * 1"
+- name: USENIX FAST
+  type: page_monitor
+  url: https://www.usenix.org/conferences/byname/137
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 12 * * 1"
+- name: ACM SOSP
+  type: page_monitor
+  url: https://sosp.org/
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 12 * * 1"
+- name: ACM EuroSys
+  type: page_monitor
+  url: https://www.eurosys.org/
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 12 * * 1"
+- name: MLSys Conference
+  type: page_monitor
+  url: https://mlsys.org/
+  stream: news
+  main_category: OS性能发展
+  enabled: false
+  fetch_cron: "0 12 * * 1"

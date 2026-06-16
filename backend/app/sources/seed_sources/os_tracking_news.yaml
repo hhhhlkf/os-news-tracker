@@ -1,0 +1,265 @@
+# =============================================
+# News stream: RSS
+# =============================================
+
+# --- Red Hat ---
+- name: Red Hat Blog
+  type: rss
+  url: https://www.redhat.com/en/rss/blog
+  vendor: redhat
+  stream: news
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 8 * * *"
+- name: RHEL Blog
+  type: rss
+  url: https://www.redhat.com/en/rss/blog/channel/red-hat-enterprise-linux
+  vendor: redhat
+  stream: news
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 8 * * *"
+- name: OpenShift Blog
+  type: rss
+  url: https://www.redhat.com/en/rss/blog/channel/red-hat-openshift
+  vendor: redhat
+  stream: news
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 8 * * *"
+- name: Red Hat AI Blog
+  type: rss
+  url: https://www.redhat.com/en/rss/blog/channel/red-hat-ai
+  vendor: redhat
+  stream: news
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 8 * * *"
+
+# --- Ubuntu / Canonical ---
+- name: Ubuntu Blog
+  type: rss
+  url: https://ubuntu.com/blog/feed
+  vendor: ubuntu
+  stream: news
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 8 * * *"
+- name: Canonical Blog
+  type: rss
+  url: https://canonical.com/blog/feed
+  vendor: ubuntu
+  stream: news
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 8 * * *"
+- name: Ubuntu Community Release (Discourse)
+  type: rss
+  url: https://discourse.ubuntu.com/c/project/release/38.rss
+  vendor: ubuntu
+  stream: news
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 9 * * *"
+# =============================================
+# News stream: fixed page monitoring
+# =============================================
+
+# --- Red Hat ---
+- name: RHEL Release Notes
+  type: page_monitor
+  url: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/
+  vendor: redhat
+  stream: news
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 9 * * *"
+- name: OpenShift Release Notes
+  type: page_monitor
+  url: https://docs.redhat.com/en/documentation/openshift_container_platform/
+  vendor: redhat
+  stream: news
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 9 * * *"
+- name: RHEL Release Dates
+  type: page_monitor
+  url: https://access.redhat.com/articles/red-hat-enterprise-linux-release-dates
+  vendor: redhat
+  stream: news
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 9 * * 1"
+
+# --- Ubuntu ---
+- name: Ubuntu Release Notes
+  type: page_monitor
+  url: https://documentation.ubuntu.com/release-notes/
+  vendor: ubuntu
+  stream: news
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 9 * * *"
+
+# --- OpenAnolis --- #已筛选
+- name: OpenAnolis News
+  type: page_monitor
+  url: https://openanolis.cn/news/
+  vendor: openanolis
+  stream: news
+  main_category: OS跟踪来源
+  enabled: false  # Dynamic news list; needs API adapter or reliable article selector.
+  fetch_cron: "0 9 * * *"
+- name: ANAS Errata
+  type: page_monitor
+  url: https://anas.openanolis.cn/errata
+  vendor: openanolis
+  stream: news
+  main_category: OS跟踪来源
+  enabled: false  # Dynamic advisory list; structured adapter is safer than legacy page mode.
+  fetch_cron: "0 9 * * *"
+- name: ANAS CVE
+  type: page_monitor
+  url: https://anas.openanolis.cn/cves
+  vendor: openanolis
+  stream: news
+  main_category: OS跟踪来源
+  enabled: false  # Dynamic CVE list; structured adapter is safer than legacy page mode.
+  fetch_cron: "0 9 * * *"
+
+- name: openEuler Gitee Kernel Releases
+  type: page_monitor
+  url: https://gitee.com/openeuler/kernel/releases
+  vendor: openeuler
+  stream: news
+  main_category: OS跟踪来源
+  fetch_cron: "0 */6 * * *"
+  link_selector: ".release-list .release-item a, .release-entry h4 a, a[href*='releases/tag']"
+  date_selector: ".release-time, .release-date, .time, time"
+- name: openEuler Gitee Community
+  type: page_monitor
+  url: https://gitee.com/openeuler/community/releases
+  vendor: openeuler
+  stream: news
+  main_category: OS跟踪来源
+  fetch_cron: "0 */6 * * *"
+  link_selector: ".release-list .release-item a, .release-entry h4 a, a[href*='releases/tag']"
+  date_selector: ".release-time, .release-date, .time, time"
+
+# =============================================
+# Structured stream: API
+# =============================================
+
+# --- Red Hat ---
+- name: Red Hat Security Data
+  type: api
+  url: https://access.redhat.com/hydra/rest/securitydata
+  adapter: redhat_securitydata
+  vendor: redhat
+  stream: structured
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 7 * * *"
+- name: Red Hat Product Life Cycle
+  type: api
+  url: https://access.redhat.com/product-life-cycles/api/v1/
+  adapter: redhat_lifecycle
+  vendor: redhat
+  stream: structured
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 6 * * 1"
+- name: Red Hat Container Catalog (Pyxis)
+  type: api
+  url: https://catalog.redhat.com/api/containers/v1
+  adapter: redhat_pyxis
+  vendor: redhat
+  stream: structured
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 6 * * 1"
+
+# --- Ubuntu ---
+- name: Ubuntu Security Notices
+  type: api
+  url: https://ubuntu.com/security/notices.json
+  adapter: ubuntu_security
+  vendor: ubuntu
+  stream: structured
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 7 * * *"
+- name: Ubuntu CVE
+  type: api
+  url: https://ubuntu.com/security/cves.json
+  adapter: ubuntu_cve
+  vendor: ubuntu
+  stream: structured
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 7 * * *"
+- name: Ubuntu Releases
+  type: api
+  url: https://ubuntu.com/security/releases.json
+  adapter: ubuntu_releases
+  vendor: ubuntu
+  stream: structured
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 6 * * 1"
+- name: Ubuntu OVAL Security Data
+  type: api
+  url: https://security-metadata.canonical.com/oval/
+  adapter: ubuntu_oval
+  vendor: ubuntu
+  stream: structured
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 6 * * 1"
+- name: Launchpad Ubuntu Packages
+  type: api
+  url: https://api.launchpad.net/1.0/
+  adapter: launchpad
+  vendor: ubuntu
+  stream: structured
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 6 * * 1"
+- name: Ubuntu Cloud Images (SimpleStreams)
+  type: api
+  url: https://cloud-images.ubuntu.com/releases/streams/v1/
+  adapter: ubuntu_cloud_images
+  vendor: ubuntu
+  stream: structured
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 6 * * 1"
+- name: Ubuntu releases.yaml
+  type: api
+  url: https://raw.githubusercontent.com/canonical/ubuntu.com/main/releases.yaml
+  adapter: ubuntu_releases_yaml
+  vendor: ubuntu
+  stream: structured
+  main_category: OS跟踪来源
+  enabled: false
+  fetch_cron: "0 6 * * 1"
+
+# --- openEuler ---
+- name: openEuler CSAF Advisories
+  type: api
+  url: https://repo.openeuler.org/security/data/csaf/advisories/
+  adapter: openeuler_csaf
+  vendor: openeuler
+  stream: structured
+  main_category: OS跟踪来源
+  fetch_cron: "0 7 * * *"
+
+# --- OpenAnolis ---
+- name: Anolis Repo Metadata
+  type: api
+  url: https://mirrors.openanolis.cn/anolis/
+  adapter: anolis_repo
+  vendor: openanolis
+  stream: structured
+  main_category: OS跟踪来源
+  fetch_cron: "0 6 * * 1"

@@ -1,0 +1,174 @@
+# =============================================
+# 友商产品信息
+# =============================================
+
+# --- openEuler (友商) ---
+- name: openEuler Forum
+  type: rss
+  url: https://forum.openeuler.org/latest.rss
+  vendor: openeuler
+  stream: news
+  main_category: 友商产品信息
+  fetch_cron: "0 */4 * * *"
+- name: openEuler Release 邮件列表
+  type: page_monitor
+  url: https://mailweb.openeuler.org/archives/list/release@openeuler.org/
+  vendor: openeuler
+  stream: news
+  main_category: 友商产品信息
+  fetch_cron: "0 9 * * *"
+  link_selector: "a[href*='/thread/']"
+- name: openEuler Dev 邮件列表
+  type: page_monitor
+  url: https://mailweb.openeuler.org/archives/list/dev@openeuler.org/
+  vendor: openeuler
+  stream: news
+  main_category: 友商产品信息
+  fetch_cron: "0 9 * * *"
+  link_selector: "a[href*='/thread/']"
+- name: openEuler TC 邮件列表
+  type: page_monitor
+  url: https://mailweb.openeuler.org/archives/list/tc@openeuler.org/
+  vendor: openeuler
+  stream: news
+  main_category: 友商产品信息
+  fetch_cron: "0 9 * * *"
+  link_selector: "a[href*='/thread/']"
+- name: openEuler Kernel 邮件列表
+  type: page_monitor
+  url: https://mailweb.openeuler.org/archives/list/kernel@openeuler.org/
+  vendor: openeuler
+  stream: news
+  main_category: 友商产品信息
+  fetch_cron: "0 9 * * *"
+  link_selector: "a[href*='/thread/']"
+- name: openEuler Repo Metadata
+  type: api
+  url: https://repo.openeuler.org/
+  adapter: openeuler_repo
+  vendor: openeuler
+  stream: structured
+  main_category: 友商产品信息
+  fetch_cron: "0 6 * * 1"
+
+# --- OpenAnolis (友商) ---
+- name: OpenAnolis Bugzilla
+  type: page_monitor
+  url: https://bugzilla.openanolis.cn/
+  vendor: openanolis
+  stream: news
+  main_category: 友商产品信息
+  enabled: false  # Bug tracker landing page; no article/news list selector.
+  fetch_cron: "0 10 * * *"
+- name: OpenAnolis Mailing Lists
+  type: page_monitor
+  url: https://lists.openanolis.cn/postorius/lists/
+  vendor: openanolis
+  stream: news
+  main_category: 友商产品信息
+  enabled: false  # Mailing-list index page; monitor concrete archives instead.
+  fetch_cron: "0 10 * * *"
+- name: OpenAnolis SIG
+  type: page_monitor
+  url: https://openanolis.org/sig
+  vendor: openanolis
+  stream: news
+  main_category: 友商产品信息
+  enabled: false  # SIG directory page, not a news/article feed.
+  fetch_cron: "0 10 * * 1"
+# Disabled: organization portal, not a news/article feed.
+- name: OpenAnolis Gitee
+  type: page_monitor
+  url: https://gitee.com/openanolis
+  vendor: openanolis
+  stream: news
+  main_category: 友商产品信息
+  enabled: false
+  fetch_cron: "0 10 * * 1"
+# Disabled: repository documentation index, not a news/article feed.
+- name: Anolis Developer Docs
+  type: page_monitor
+  url: https://gitee.com/anolis/docs
+  vendor: openanolis
+  stream: news
+  main_category: 友商产品信息
+  enabled: false
+  fetch_cron: "0 10 * * 1"
+
+# --- Red Hat (友商) ---
+- name: Red Hat Security Data Portal
+  type: page_monitor
+  url: https://access.redhat.com/security/data
+  vendor: redhat
+  stream: news
+  main_category: 友商产品信息
+  enabled: false
+  fetch_cron: "0 10 * * *"
+- name: Red Hat Docs
+  type: page_monitor
+  url: https://docs.redhat.com/
+  vendor: redhat
+  stream: news
+  main_category: 友商产品信息
+  enabled: false
+  fetch_cron: "0 10 * * 1"
+- name: Red Hat GitHub
+  type: page_monitor
+  url: https://github.com/RedHatOfficial
+  vendor: redhat
+  stream: news
+  main_category: 友商产品信息
+  enabled: false
+  fetch_cron: "0 10 * * 1"
+
+# --- Ubuntu / Canonical (友商) ---
+- name: Planet Ubuntu
+  type: rss
+  url: https://planet.ubuntu.com/feed.xml
+  vendor: ubuntu
+  stream: news
+  main_category: 友商产品信息
+  enabled: false
+  fetch_cron: "0 10 * * *"
+- name: Ubuntu News (The Fridge)
+  type: rss
+  url: https://ubuntu-news.org/feed
+  vendor: ubuntu
+  stream: news
+  main_category: 友商产品信息
+  enabled: false
+  fetch_cron: "0 10 * * *"
+- name: Ubuntu Discourse
+  type: page_monitor
+  url: https://discourse.ubuntu.com/
+  vendor: ubuntu
+  stream: news
+  main_category: 友商产品信息
+  enabled: false
+  fetch_cron: "0 10 * * *"
+- name: Canonical GitHub
+  type: page_monitor
+  url: https://github.com/canonical
+  vendor: ubuntu
+  stream: news
+  main_category: 友商产品信息
+  enabled: false
+  fetch_cron: "0 10 * * 1"
+- name: Ubuntu OSV Security Notices
+  type: api
+  url: https://github.com/canonical/ubuntu-security-notices
+  adapter: ubuntu_osv
+  vendor: ubuntu
+  stream: structured
+  main_category: 友商产品信息
+  enabled: false
+  fetch_cron: "0 7 * * *"
+- name: Canonical Security Metadata
+  type: api
+  url: https://security-metadata.canonical.com/
+  adapter: canonical_security_meta
+  vendor: ubuntu
+  stream: structured
+  main_category: 友商产品信息
+  enabled: false
+  fetch_cron: "0 6 * * 1"
