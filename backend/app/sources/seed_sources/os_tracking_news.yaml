@@ -149,13 +149,36 @@
   enabled: false  # Dynamic advisory list; structured adapter is safer than legacy page mode.
   fetch_cron: "0 9 * * *"
 - name: ANAS CVE
-  type: page_monitor
-  url: https://anas.openanolis.cn/cves
+  type: api
+  url: https://anas.openanolis.cn/api/portal/v1/cves/
+  adapter: generic_json_list
   vendor: openanolis
   stream: news
   main_category: OS跟踪来源
-  enabled: false  # Dynamic CVE list; structured adapter is safer than legacy page mode.
+  enabled: true
   fetch_cron: "0 9 * * *"
+  api_config:
+    headers:
+      Referer: https://anas.openanolis.cn/cves
+      User-Agent: Mozilla/5.0
+    params:
+      page_size: 50
+    pagination:
+      page_param: page_num
+      start_page: 1
+      next_url_path: data.next
+      max_pages: 3
+    items_path: data.data
+    fields:
+      title: cve_id
+      url_template: "https://anas.openanolis.cn/cves/detail/{cve_id}/"
+      published_at: publish_date
+      content:
+        - abstract
+        - description
+        - mitigation
+        - statement
+    min_content_len: 80
 
 - name: openEuler Gitee Kernel Releases
   type: page_monitor

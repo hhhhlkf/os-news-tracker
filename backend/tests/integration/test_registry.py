@@ -193,3 +193,10 @@ def test_project_seed_manifest_loads_all_sources(session):
     assert openanolis_news.adapter == "generic_json_list"
     assert openanolis_news.enabled is True
     assert openanolis_news.api_config["items_path"] == "data.items"
+
+    anas_cve = session.scalar(select(Source).where(Source.name == "ANAS CVE"))
+    assert anas_cve is not None
+    assert anas_cve.type == "api"
+    assert anas_cve.adapter == "generic_json_list"
+    assert anas_cve.enabled is True
+    assert anas_cve.api_config["items_path"] == "data.data"
