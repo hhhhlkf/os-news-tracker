@@ -1,57 +1,80 @@
 # =============================================
-# 软件包适配
+# 软件包适配 — RPM/YUM 包生态跟踪
 # =============================================
+# 原 6 个源（OpenAnolis 兼容性列表/HCT SIG、Red Hat Catalog/Package Browser、
+# Ubuntu Certified/Packages）全部为 SPA/登录墙/搜索工具，无法爬取。
+# 已替换为 Fedora Bodhi + COPR + AlmaLinux + LinuxCompatible。
 
-# --- OpenAnolis ---
-- name: OpenAnolis 兼容性列表平台
-  type: page_monitor
-  url: https://eco.openanolis.cn/
-  vendor: openanolis
+# --- Fedora Bodhi (包更新跟踪) ---
+- name: Fedora Bodhi — 全部包更新
+  type: rss
+  url: https://bodhi.fedoraproject.org/rss/updates/
+  vendor: fedora
   stream: news
   main_category: 软件包适配
-  enabled: false  # Compatibility catalog landing page; structured adapter needed.
-  fetch_cron: "0 11 * * *"
-- name: OpenAnolis 硬件兼容性 SIG (HCT)
-  type: page_monitor
-  url: https://openanolis.cn/sig/HCT
-  vendor: openanolis
-  stream: news
-  main_category: 软件包适配
-  enabled: false  # SIG landing page, not a news/article feed.
-  fetch_cron: "0 11 * * 1"
+  fetch_cron: "0 */4 * * *"
+  # Bodhi 是 Fedora 官方包更新系统，跟踪 Fedora + EPEL 所有包的
+  # newpackage / bugfix / enhancement / security 变更。
+  # Fedora 是 RHEL/CentOS Stream/Rocky/Alma 的上游，包生态的风向标。
+  # 覆盖全部 10 个分类：系统基础、编程开发、网络服务、数据存储、
+  # 安全、运维监控、桌面多媒体、科学计算与AI、云虚拟化、行业应用。
 
-# --- Red Hat ---
-- name: Red Hat Ecosystem Catalog
-  type: page_monitor
-  url: https://catalog.redhat.com/
-  vendor: redhat
+- name: Fedora Bodhi — 新包上架
+  type: rss
+  url: https://bodhi.fedoraproject.org/rss/updates/?type=newpackage
+  vendor: fedora
   stream: news
   main_category: 软件包适配
-  enabled: false
-  fetch_cron: "0 11 * * *"
-- name: Red Hat Package Browser
-  type: page_monitor
-  url: https://access.redhat.com/downloads/content/package-browser
-  vendor: redhat
-  stream: news
-  main_category: 软件包适配
-  enabled: false
-  fetch_cron: "0 11 * * *"
+  fetch_cron: "0 9 * * *"
+  # 仅 newpackage 类型 — 首次进入 Fedora/EPEL 仓库的新软件包。
+  # 这是发现"新兴软件包"的最佳渠道。
 
-# --- Ubuntu ---
-- name: Ubuntu Certified Hardware & Software
-  type: page_monitor
-  url: https://ubuntu.com/certified
-  vendor: ubuntu
+- name: Fedora Bodhi — 安全更新
+  type: rss
+  url: https://bodhi.fedoraproject.org/rss/updates/?type=security
+  vendor: fedora
   stream: news
   main_category: 软件包适配
-  enabled: false
-  fetch_cron: "0 11 * * *"
-- name: Ubuntu Packages
-  type: page_monitor
-  url: https://packages.ubuntu.com/
-  vendor: ubuntu
+  fetch_cron: "0 */4 * * *"
+  # 仅 security 类型 — Fedora/EPEL 安全补丁。
+  # 与 RHSA/Ubuntu USN 互补，覆盖社区发行版安全动态。
+
+# --- COPR (Fedora 社区构建，类似 Ubuntu PPA) ---
+- name: Fedora COPR — 社区构建
+  type: rss
+  url: https://copr.fedorainfracloud.org/rss/
+  vendor: fedora
   stream: news
   main_category: 软件包适配
-  enabled: false
-  fetch_cron: "0 11 * * *"
+  fetch_cron: "0 10 * * *"
+  # COPR 是 Fedora 的社区包构建服务（类似 Ubuntu PPA）。
+  # 这里能看到正式仓库尚未收录的实验性/前沿软件包，
+  # 是发现"新兴技术栈"的早期信号源。
+
+# --- AlmaLinux (企业级 RHEL 兼容发行版) ---
+- name: AlmaLinux Blog
+  type: rss
+  url: https://almalinux.org/blog/index.xml
+  vendor: almalinux
+  stream: news
+  main_category: 软件包适配
+  fetch_cron: "0 8 * * *"
+  # AlmaLinux 官方博客，227 篇，活跃。内容：
+  # - 版本 GA 公告 (AlmaLinux 9.8/10.2)
+  # - CVE 补丁发布 (CIFSwitch, ssh-keysign-pwn, Fragnesia 等)
+  # - 社区/治理新闻
+  # Rocky Linux errata 网站为 SPA 不可用，AlmaLinux Blog 是
+  # RHEL 兼容发行版生态的最佳替代。
+
+# --- LinuxCompatible (跨发行版包更新聚合) ---
+- name: LinuxCompatible — 跨发行版包更新
+  type: rss
+  url: https://www.linuxcompatible.org/rss.xml
+  vendor: linuxcompatible
+  stream: news
+  main_category: 软件包适配
+  fetch_cron: "0 */6 * * *"
+  # 第三方聚合站，覆盖 Ubuntu/SUSE/Rocky Linux 的包更新新闻。
+  # 示例：CUPS/nginx/tmux/Mesa updates for Ubuntu,
+  # OpenSSL/Java/Python/Chromium updates for SUSE。
+  # 作为 Bodhi（RPM 生态）+ Planet Ubuntu（Deb 生态）的补充。

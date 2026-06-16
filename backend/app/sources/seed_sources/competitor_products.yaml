@@ -11,37 +11,23 @@
   main_category: 友商产品信息
   fetch_cron: "0 */4 * * *"
 - name: openEuler Release 邮件列表
-  type: page_monitor
-  url: https://mailweb.openeuler.org/archives/list/release@openeuler.org/
+  type: rss
+  url: https://mailweb.openeuler.org/archives/list/release@openeuler.org/feed/
   vendor: openeuler
   stream: news
   main_category: 友商产品信息
   fetch_cron: "0 9 * * *"
-  link_selector: "a[href*='/thread/']"
-- name: openEuler Dev 邮件列表
-  type: page_monitor
-  url: https://mailweb.openeuler.org/archives/list/dev@openeuler.org/
-  vendor: openeuler
-  stream: news
-  main_category: 友商产品信息
-  fetch_cron: "0 9 * * *"
-  link_selector: "a[href*='/thread/']"
-- name: openEuler TC 邮件列表
-  type: page_monitor
-  url: https://mailweb.openeuler.org/archives/list/tc@openeuler.org/
-  vendor: openeuler
-  stream: news
-  main_category: 友商产品信息
-  fetch_cron: "0 9 * * *"
-  link_selector: "a[href*='/thread/']"
+  # HyperKitty 页面为 JS 渲染，page_monitor 无法抓取。改用 /feed/ RSS 端点。
+  # 内容：版本 release 公告 (RC/update)，质量高。
 - name: openEuler Kernel 邮件列表
-  type: page_monitor
-  url: https://mailweb.openeuler.org/archives/list/kernel@openeuler.org/
+  type: rss
+  url: https://mailweb.openeuler.org/archives/list/kernel@openeuler.org/feed/
   vendor: openeuler
   stream: news
   main_category: 友商产品信息
   fetch_cron: "0 9 * * *"
-  link_selector: "a[href*='/thread/']"
+  # HyperKitty 页面为 JS 渲染，page_monitor 无法抓取。改用 /feed/ RSS 端点。
+  # 内容：内核补丁 (OLK-6.6)，技术质量极高。
 - name: openEuler Repo Metadata
   type: api
   url: https://repo.openeuler.org/
@@ -49,77 +35,25 @@
   vendor: openeuler
   stream: structured
   main_category: 友商产品信息
+  enabled: false  # adapter 待实现
   fetch_cron: "0 6 * * 1"
 
-# --- OpenAnolis (友商) ---
-- name: OpenAnolis Bugzilla
-  type: page_monitor
-  url: https://bugzilla.openanolis.cn/
-  vendor: openanolis
-  stream: news
-  main_category: 友商产品信息
-  enabled: false  # Bug tracker landing page; no article/news list selector.
-  fetch_cron: "0 10 * * *"
-- name: OpenAnolis Mailing Lists
-  type: page_monitor
-  url: https://lists.openanolis.cn/postorius/lists/
-  vendor: openanolis
-  stream: news
-  main_category: 友商产品信息
-  enabled: false  # Mailing-list index page; monitor concrete archives instead.
-  fetch_cron: "0 10 * * *"
-- name: OpenAnolis SIG
-  type: page_monitor
-  url: https://openanolis.org/sig
-  vendor: openanolis
-  stream: news
-  main_category: 友商产品信息
-  enabled: false  # SIG directory page, not a news/article feed.
-  fetch_cron: "0 10 * * 1"
-# Disabled: organization portal, not a news/article feed.
-- name: OpenAnolis Gitee
-  type: page_monitor
-  url: https://gitee.com/openanolis
-  vendor: openanolis
-  stream: news
-  main_category: 友商产品信息
-  enabled: false
-  fetch_cron: "0 10 * * 1"
-# Disabled: repository documentation index, not a news/article feed.
-- name: Anolis Developer Docs
-  type: page_monitor
-  url: https://gitee.com/anolis/docs
-  vendor: openanolis
-  stream: news
-  main_category: 友商产品信息
-  enabled: false
-  fetch_cron: "0 10 * * 1"
-
 # --- Red Hat (友商) ---
-- name: Red Hat Security Data Portal
-  type: page_monitor
-  url: https://access.redhat.com/security/data
+- name: Red Hat Security Errata (RHSA)
+  type: rss
+  url: https://security.access.redhat.com/data/meta/v1/rhsa.rss
   vendor: redhat
   stream: news
   main_category: 友商产品信息
-  enabled: false
-  fetch_cron: "0 10 * * *"
-- name: Red Hat Docs
-  type: page_monitor
-  url: https://docs.redhat.com/
-  vendor: redhat
-  stream: news
-  main_category: 友商产品信息
-  enabled: false
-  fetch_cron: "0 10 * * 1"
-- name: Red Hat GitHub
-  type: page_monitor
-  url: https://github.com/RedHatOfficial
-  vendor: redhat
-  stream: news
-  main_category: 友商产品信息
-  enabled: false
-  fetch_cron: "0 10 * * 1"
+  fetch_cron: "0 */4 * * *"
+  # 原 page_monitor 改为 RSS。RSS 每天发布 ~26 条 RHSA 公告 (Important/Moderate/Critical)，
+  # 含 CVSS 评分 + CVE 链接，覆盖 RHEL 8/9/10。质量极高，友商安全跟踪核心源。
+  # 额外结构化数据端点（待实现 adapter）：
+  #   OVAL v2: https://security.access.redhat.com/data/oval/v2/
+  #   CSAF v2: https://security.access.redhat.com/data/csaf/v2/
+  #   OSV:    https://security.access.redhat.com/data/osv/
+  # Red Hat Docs (docs.redhat.com) 返回 403，无法使用。
+  # Red Hat GitHub (github.com/RedHatOfficial) 仅为 org 主页，无新闻价值。
 
 # --- Ubuntu / Canonical (友商) ---
 - name: Planet Ubuntu
@@ -128,32 +62,9 @@
   vendor: ubuntu
   stream: news
   main_category: 友商产品信息
-  enabled: false
-  fetch_cron: "0 10 * * *"
-- name: Ubuntu News (The Fridge)
-  type: rss
-  url: https://ubuntu-news.org/feed
-  vendor: ubuntu
-  stream: news
-  main_category: 友商产品信息
-  enabled: false
-  fetch_cron: "0 10 * * *"
-- name: Ubuntu Discourse
-  type: page_monitor
-  url: https://discourse.ubuntu.com/
-  vendor: ubuntu
-  stream: news
-  main_category: 友商产品信息
-  enabled: false
-  fetch_cron: "0 10 * * *"
-- name: Canonical GitHub
-  type: page_monitor
-  url: https://github.com/canonical
-  vendor: ubuntu
-  stream: news
-  main_category: 友商产品信息
-  enabled: false
-  fetch_cron: "0 10 * * 1"
+  fetch_cron: "0 */6 * * *"
+  # Ubuntu 社区博客聚合，130 条，覆盖 Ubuntu 生态（PackageKit, Incus, LXD, Ubuntu on IBM Z 等）。
+  # 内容由社区/Canonical 员工发布，质量中高，是 Ubuntu 生态信息的最佳入口。
 - name: Ubuntu OSV Security Notices
   type: api
   url: https://github.com/canonical/ubuntu-security-notices
@@ -161,8 +72,11 @@
   vendor: ubuntu
   stream: structured
   main_category: 友商产品信息
-  enabled: false
+  enabled: false  # adapter 待实现
   fetch_cron: "0 7 * * *"
+  # GitHub 仓库，每日 CI 自动更新。3 种格式：USN/LSN JSON, OSV JSON, OpenVEX JSON。
+  # USN 含人类可读漏洞描述 + 受影响包 + 修复版本 + CVE 链接，可直接总结为安全新闻。
+  # 与 os_tracking_news.yaml 中的 ubuntu.com/security/notices.json 内容相同，多格式冗余。
 - name: Canonical Security Metadata
   type: api
   url: https://security-metadata.canonical.com/
@@ -170,5 +84,8 @@
   vendor: ubuntu
   stream: structured
   main_category: 友商产品信息
-  enabled: false
+  enabled: false  # adapter 待实现
   fetch_cron: "0 6 * * 1"
+  # OVAL 数据门户。112 个 .oval.xml.bz2 文件，覆盖 Ubuntu 14.04-25.10 全系 + FIPS/实时内核/OCI 变体。
+  # 3 种 OVAL 类型: cve.oval, pkg.oval, usn.oval。活跃版本每日更新（jammy 8.6MB, noble 7.2MB）。
+  # 与 USN JSON API 内容同源，OVAL 格式更适合合规/扫描工具集成。

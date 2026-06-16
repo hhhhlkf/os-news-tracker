@@ -1,181 +1,122 @@
-# --- OS性能发展: RSS ---
-- name: Phoronix (news)
+# =============================================
+# OS性能发展 — 内核、性能、系统研究
+# =============================================
+# 原 25 个源（9 RSS + 5 DBLP + 10 page_monitor + 1 Atom）经实测评估：
+#   保留 6 个高价值 RSS → 已启用
+#   删除 19 个（详见底部删除清单）
+#
+# 覆盖矩阵：
+#   Phoronix       → 内核开发 + 性能评测 + GPU/CPU 新闻
+#   LWN headlines  → 内核 + 安全 + 发行版动态
+#   LWN Features   → 深度技术文章（文件系统/内存管理/调度器）
+#   ServeTheHome   → 服务器硬件/AI 芯片/DPU
+#   LKML           → 内核子系统讨论（sched/io_uring/BPF）
+#   arXiv          → 学术论文预印本（OS/PF/DC/AR）
+
+# --- Phoronix ---
+- name: Phoronix
   type: rss
   url: https://www.phoronix.com/rss.php
   vendor: phoronix
   stream: news
   main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 */12 * * *"
-- name: Phoronix (full)
-  type: rss
-  url: https://www.phoronix.com/phoronix-rss.php
-  vendor: phoronix
-  stream: news
-  main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 */12 * * *"
-  relevance_filter: true
-  relevance_keywords: "benchmark, kernel, scheduler, IO, performance, GPU, EPYC, AI, ML"
+  fetch_cron: "0 */6 * * *"
+  # Linux 性能评测第一站。每天 ~15 篇原创，覆盖：
+  #   内核新特性（scheduler/fs/mm/arch）、编译器优化（GCC/LLVM）、
+  #   GPU 驱动（AMD/NVIDIA/Intel）、CPU 评测（EPYC/Xeon）、
+  #   Wayland/Wine 等桌面栈进展。
+  # 全部原创内容，每条 500-2000 字，质量极高，可直接总结为新闻。
+  # 原有两个 feed（rss.php / phoronix-rss.php），后者已 302 跳转到前者，合并为一个。
+
+# --- LWN.net ---
 - name: LWN headlines
   type: rss
   url: https://lwn.net/headlines/rss
   stream: news
   main_category: OS性能发展
-  enabled: false
   fetch_cron: "0 8 * * *"
+  # Linux Weekly News 每日头条。~15 条/周，覆盖：
+  #   内核开发、安全公告、发行版动态、新版本发布。
+  # 混合免费文章（即时）和订阅者文章（$ 标记，7 天后解锁）。
+  # 与 Phoronix 互补：Phoronix=性能评测，LWN=社区/开发视角。
+
 - name: LWN Features
   type: rss
   url: https://lwn.net/headlines/Features
   stream: news
   main_category: OS性能发展
-  enabled: false
   fetch_cron: "0 8 * * *"
+  # LWN 深度技术文章。~20 条/周，覆盖：
+  #   内核子系统详解（overlayfs, mTHP, splice）、开发统计、
+  #   安全分析（AI agent 在 Fedora 的滥用等）。
+  # 大部分为订阅者内容（$ 标记），7 天后免费解锁。
+  # 技术深度远超 Phoronix，适合深入理解技术趋势。
+
+# --- 服务器/基础设施 ---
 - name: ServeTheHome
   type: rss
-  url: https://www.servethehome.com/feed
+  url: https://www.servethehome.com/feed/
   stream: news
   main_category: OS性能发展
-  enabled: false
   fetch_cron: "0 8 * * *"
-- name: Linux Kernel Releases
-  type: rss
-  url: https://www.kernel.org/feeds/kdist.xml
-  stream: news
-  main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 6 * * *"
-- name: CachyOS Kernel Releases
-  type: rss
-  url: https://github.com/CachyOS/linux-cachyos/releases.atom
-  stream: news
-  main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 6 * * *"
+  # 服务器硬件评测与基础设施新闻。~6 条/周，覆盖：
+  #   AI 加速器（Tensordyne/Anthropic）、Intel/AMD 服务器 CPU、
+  #   DPU/SmartNIC、mini PC 评测。
+  # 硬件视角——OS 性能的底层基础设施。
+
+# --- 内核邮件列表 ---
 - name: LKML Latest Topics
   type: rss
   url: https://lore.kernel.org/lkml/new.atom
   stream: news
   main_category: OS性能发展
-  enabled: false
   relevance_filter: true
-  relevance_keywords: "scheduler, sched, io_uring, BPF, performance, latency, throughput, NUMA, cgroup"
-  fetch_cron: "0 6 * * *"
+  relevance_keywords: "scheduler, sched, io_uring, BPF, eBPF, XDP, performance, latency, throughput, NUMA, cgroup, EEVDF, NUMA, mmap, RCU, ftrace, perf, KVM, virtualization, overlayfs, xfs, btrfs, ext4, f2fs, dm, nvme, pmem, DAX, hugepages, THP, mTHP"
+  fetch_cron: "0 */4 * * *"
+  # Linux 内核邮件列表。~25 条/小时，内核子系统实时讨论：
+  #   调度器（EEVDF/sched_ext）、io_uring、BPF、文件系统、
+  #   内存管理、虚拟化、网络协议栈。
+  # 极其高频，必须配合 relevance_filter 使用。
+  # 原 frequency 每天 1 次太少（25 条），改为每 4 小时，匹配邮件列表节奏。
+  # 注意：lore.kernel.org 为 Atom 格式，fetcher 需支持 Atom namespace。
+
+# --- 学术论文 ---
 - name: arXiv OS/PF/DC/AR
   type: rss
   url: https://rss.arxiv.org/rss/cs.OS+cs.PF+cs.DC+cs.AR
   stream: news
   main_category: OS性能发展
-  enabled: false
   relevance_filter: true
-  relevance_keywords: "operating system, scheduler, kernel, IO, performance, benchmark, virtualization"
+  relevance_keywords: "operating system, kernel, scheduler, filesystem, IO, storage, memory management, virtualization, container, BPF, eBPF, RDMA, GPU, NUMA, cache, page table, TLB, microarchitecture, FPGA, ASIC, interconnect, disaggregated, rack-scale"
   fetch_cron: "0 1 * * *"
+  # arXiv 预印本，4 个分类：cs.OS + cs.PF + cs.DC + cs.AR。
+  # ~100 条/天，大量 AI/ML 论文会淹没 OS 相关内容，
+  # 必须配合 relevance_filter 才能筛选出真正的 OS 性能论文。
+  # 与 Phoronix/LWN 互补：arXiv 是最早的信号（论文预印本），
+  # 比会议 proceedings 早 6-12 个月。
 
-# --- OS性能发展: 顶会论文 (DBLP RSS) ---
-- name: OSDI Papers (DBLP)
-  type: rss
-  url: "https://www.monperrus.net/martin/dblp-rss.py?search=venue:OSDI:"
-  stream: news
-  main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 2 * * 1"
-- name: SOSP Papers (DBLP)
-  type: rss
-  url: "https://www.monperrus.net/martin/dblp-rss.py?search=venue:SOSP:"
-  stream: news
-  main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 2 * * 1"
-- name: EuroSys Papers (DBLP)
-  type: rss
-  url: "https://www.monperrus.net/martin/dblp-rss.py?search=venue:EuroSys:"
-  stream: news
-  main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 2 * * 1"
-- name: ASPLOS Papers (DBLP)
-  type: rss
-  url: "https://www.monperrus.net/martin/dblp-rss.py?search=venue:ASPLOS:"
-  stream: news
-  main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 2 * * 1"
-- name: MLSys Papers (DBLP)
-  type: rss
-  url: "https://www.monperrus.net/martin/dblp-rss.py?search=venue:MLSys:"
-  stream: news
-  main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 2 * * 1"
 
-# --- OS性能发展: 页面监控 ---
-- name: OpenBenchmarking ML Suite
-  type: page_monitor
-  url: https://openbenchmarking.org/suite/pts/machine-learning
-  stream: news
-  main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 12 * * *"
-- name: OpenBenchmarking All Suites
-  type: page_monitor
-  url: https://openbenchmarking.org/suites/pts
-  stream: news
-  main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 12 * * 1"
-- name: Phoronix Test Suite
-  type: page_monitor
-  url: https://www.phoronix-test-suite.com/
-  stream: news
-  main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 12 * * 1"
-- name: CachyOS Blog
-  type: page_monitor
-  url: https://cachyos.org/blog/
-  stream: news
-  main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 12 * * *"
-- name: USENIX OSDI
-  type: page_monitor
-  url: https://www.usenix.org/conferences/byname/179
-  stream: news
-  main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 12 * * 1"
-- name: USENIX ATC
-  type: page_monitor
-  url: https://www.usenix.org/conferences/byname/131
-  stream: news
-  main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 12 * * 1"
-- name: USENIX FAST
-  type: page_monitor
-  url: https://www.usenix.org/conferences/byname/137
-  stream: news
-  main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 12 * * 1"
-- name: ACM SOSP
-  type: page_monitor
-  url: https://sosp.org/
-  stream: news
-  main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 12 * * 1"
-- name: ACM EuroSys
-  type: page_monitor
-  url: https://www.eurosys.org/
-  stream: news
-  main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 12 * * 1"
-- name: MLSys Conference
-  type: page_monitor
-  url: https://mlsys.org/
-  stream: news
-  main_category: OS性能发展
-  enabled: false
-  fetch_cron: "0 12 * * 1"
+# ============================================================
+# 已删除的源（19 个）及删除理由：
+# ============================================================
+#
+# [RSS 重复/无内容]
+# ✗ Phoronix (full)    → 302 跳转到 Phoronix (news)，内容完全重复
+# ✗ Linux Kernel Releases → kernel.org/feeds/kdist.xml 只有版本号，无新闻内容
+# ✗ CachyOS Kernel Releases → 最后更新 2025-12-01，已停更 6 个月
+#
+# [DBLP 第三方服务不可靠]
+# ✗ OSDI Papers   → Timeout
+# ✗ SOSP Papers   → 503 Service Unavailable
+# ✗ EuroSys Papers → 503 Service Unavailable
+# ✗ ASPLOS Papers → 能用但无 pubDate，且 arXiv 已覆盖论文预印本
+# ✗ MLSys Papers  → XML Parse Error（返回非 XML 内容）
+#
+# [Page Monitor — 403 / 静态 / SPA]
+# ✗ OpenBenchmarking ML Suite    → 403 Forbidden
+# ✗ OpenBenchmarking All Suites  → 403 Forbidden
+# ✗ Phoronix Test Suite          → 纯静态 Landing Page（12KB），年更
+# ✗ CachyOS Blog                 → 无 RSS，HTML 两月一更，频率太低
+# ✗ USENIX OSDI / ATC / FAST     → Drupal 静态会议列表，年更
+# ✗ ACM SOSP / EuroSys           → 纯静态介绍页，两年一更
+# ✗ MLSys Conference             → Timeout

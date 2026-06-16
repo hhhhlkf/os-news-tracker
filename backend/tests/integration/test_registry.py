@@ -178,12 +178,14 @@ def test_project_seed_manifest_loads_all_sources(session):
 
     sources = session.scalars(select(Source)).all()
     names = {source.name for source in sources}
-    assert result == {"added": 78, "updated": 0, "deleted": 0}
-    assert len(sources) == 78
+    assert result == {"added": 28, "updated": 0, "deleted": 0}
+    assert len(sources) == 28
     assert "OpenAnolis News" in names
-    assert "ANAS Errata" in names
-    assert "ANAS CVE" in names
-    assert "Ubuntu Packages" in names
+    assert "Phoronix" in names
+    assert "Red Hat Security Errata (RHSA)" in names
+    assert "Fedora Bodhi — 全部包更新" in names
+    assert "LKML Latest Topics" in names
+    assert "Planet Ubuntu" in names
 
     openanolis_news = session.scalar(
         select(Source).where(Source.name == "OpenAnolis News")
@@ -194,9 +196,10 @@ def test_project_seed_manifest_loads_all_sources(session):
     assert openanolis_news.enabled is True
     assert openanolis_news.api_config["items_path"] == "data.items"
 
-    anas_cve = session.scalar(select(Source).where(Source.name == "ANAS CVE"))
-    assert anas_cve is not None
-    assert anas_cve.type == "api"
-    assert anas_cve.adapter == "generic_json_list"
-    assert anas_cve.enabled is True
-    assert anas_cve.api_config["items_path"] == "data.data"
+    ubuntu_security = session.scalar(
+        select(Source).where(Source.name == "Ubuntu Security Notices")
+    )
+    assert ubuntu_security is not None
+    assert ubuntu_security.type == "api"
+    assert ubuntu_security.adapter == "ubuntu_security"
+    assert ubuntu_security.enabled is False
