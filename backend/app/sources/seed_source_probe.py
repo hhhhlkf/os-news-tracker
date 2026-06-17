@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.enums import SourceType
 from app.extract.scrapling_extractor import ScraplingExtractor
+from app.fetchers.api_adapters import ApiAdapterFetcher, supported_api_adapters
 from app.fetchers.base import Fetcher
 from app.fetchers.json_api import GenericJsonApiFetcher
 from app.fetchers.page_monitor import PageMonitorFetcher
@@ -63,7 +64,11 @@ def probe_route_for_entry(entry: dict[str, Any]) -> ProbeRoute:
     status = ProbeStatus.SUPPORTED
     reason: str | None = None
 
-    if source_type == SourceType.API and adapter != "generic_json_list":
+    if (
+        source_type == SourceType.API
+        and adapter != "generic_json_list"
+        and adapter not in supported_api_adapters()
+    ):
         status = ProbeStatus.UNIMPLEMENTED
         reason = f"api adapter {adapter!r} is not implemented for seed probing"
     elif source_type not in {
@@ -99,6 +104,8 @@ def build_probe_fetcher(
         return RssFetcher()
     if source.type == SourceType.API and source.adapter == "generic_json_list":
         return GenericJsonApiFetcher()
+    if source.type == SourceType.API and source.adapter in supported_api_adapters():
+        return ApiAdapterFetcher()
     if source.type == SourceType.PAGE_MONITOR:
         return PageMonitorFetcher(
             extractor=extractor or ScraplingExtractor(use_stealth=source.stealth)

@@ -36,6 +36,13 @@ def test_every_seed_source_has_deterministic_probe_route(entry):
         assert route.reason
 
 
+def test_all_project_seed_sources_are_supported_by_probe_routes():
+    routes = probe_routes_for_manifest(SEED_PATH)
+
+    assert routes
+    assert {route.status for route in routes.values()} == {ProbeStatus.SUPPORTED}
+
+
 def test_probe_fetcher_builds_for_supported_news_adapters():
     rss = Source(name="rss", type="rss", url="https://example.com/feed.xml")
     api = Source(
@@ -50,7 +57,7 @@ def test_probe_fetcher_builds_for_supported_news_adapters():
     assert build_probe_fetcher(api) is not None
 
 
-def test_probe_fetcher_returns_none_for_unimplemented_adapter():
+def test_probe_fetcher_builds_for_supported_api_adapters():
     source = Source(
         name="structured",
         type="api",
@@ -59,7 +66,7 @@ def test_probe_fetcher_returns_none_for_unimplemented_adapter():
         stream="structured",
     )
 
-    assert build_probe_fetcher(source) is None
+    assert build_probe_fetcher(source) is not None
 
 
 def test_validate_sample_items_keeps_three_valid_unique_items():
