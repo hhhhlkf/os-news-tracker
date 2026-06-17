@@ -26,6 +26,10 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "respx>=0.21"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "live: tests that call external services or public internet sources",
+    "slow: tests that are too slow or noisy for default CI runs",
+]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
