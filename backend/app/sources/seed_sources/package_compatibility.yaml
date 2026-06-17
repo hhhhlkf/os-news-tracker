@@ -12,6 +12,7 @@
   vendor: fedora
   stream: news
   main_category: 软件包适配
+  enabled: true
   fetch_cron: "0 */4 * * *"
   # Bodhi 是 Fedora 官方包更新系统，跟踪 Fedora + EPEL 所有包的
   # newpackage / bugfix / enhancement / security 变更。
@@ -25,6 +26,7 @@
   vendor: fedora
   stream: news
   main_category: 软件包适配
+  enabled: true
   fetch_cron: "0 9 * * *"
   # 仅 newpackage 类型 — 首次进入 Fedora/EPEL 仓库的新软件包。
   # 这是发现"新兴软件包"的最佳渠道。
@@ -35,6 +37,7 @@
   vendor: fedora
   stream: news
   main_category: 软件包适配
+  enabled: true
   fetch_cron: "0 */4 * * *"
   # 仅 security 类型 — Fedora/EPEL 安全补丁。
   # 与 RHSA/Ubuntu USN 互补，覆盖社区发行版安全动态。
@@ -46,6 +49,7 @@
   vendor: fedora
   stream: news
   main_category: 软件包适配
+  enabled: true
   fetch_cron: "0 10 * * *"
   # COPR 是 Fedora 的社区包构建服务（类似 Ubuntu PPA）。
   # 这里能看到正式仓库尚未收录的实验性/前沿软件包，
@@ -58,6 +62,7 @@
   vendor: almalinux
   stream: news
   main_category: 软件包适配
+  enabled: true
   fetch_cron: "0 8 * * *"
   # AlmaLinux 官方博客，227 篇，活跃。内容：
   # - 版本 GA 公告 (AlmaLinux 9.8/10.2)
@@ -73,6 +78,7 @@
   vendor: linuxcompatible
   stream: news
   main_category: 软件包适配
+  enabled: true
   fetch_cron: "0 */6 * * *"
   # 第三方聚合站，覆盖 Ubuntu/SUSE/Rocky Linux 的包更新新闻。
   # 示例：CUPS/nginx/tmux/Mesa updates for Ubuntu,

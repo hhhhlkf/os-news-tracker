@@ -9,6 +9,7 @@
   vendor: openeuler
   stream: news
   main_category: 友商产品信息
+  enabled: true
   fetch_cron: "0 */4 * * *"
 - name: openEuler Release 邮件列表
   type: rss
@@ -16,6 +17,7 @@
   vendor: openeuler
   stream: news
   main_category: 友商产品信息
+  enabled: true
   fetch_cron: "0 9 * * *"
   # HyperKitty 页面为 JS 渲染，page_monitor 无法抓取。改用 /feed/ RSS 端点。
   # 内容：版本 release 公告 (RC/update)，质量高。
@@ -25,6 +27,7 @@
   vendor: openeuler
   stream: news
   main_category: 友商产品信息
+  enabled: true
   fetch_cron: "0 9 * * *"
   # HyperKitty 页面为 JS 渲染，page_monitor 无法抓取。改用 /feed/ RSS 端点。
   # 内容：内核补丁 (OLK-6.6)，技术质量极高。
