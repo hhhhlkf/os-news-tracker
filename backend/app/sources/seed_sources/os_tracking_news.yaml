@@ -9,7 +9,7 @@
   vendor: redhat
   stream: news
   main_category: OS跟踪来源
-  enabled: false
+  enabled: true
   fetch_cron: "0 8 * * *"
 - name: RHEL Blog
   type: rss
@@ -17,7 +17,7 @@
   vendor: redhat
   stream: news
   main_category: OS跟踪来源
-  enabled: false
+  enabled: true
   fetch_cron: "0 8 * * *"
 - name: OpenShift Blog
   type: rss
@@ -125,5 +125,5 @@
   vendor: ubuntu
   stream: news
   main_category: OS跟踪来源
-  enabled: false
+  enabled: true
   fetch_cron: "0 8 * * *"
