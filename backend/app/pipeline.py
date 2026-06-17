@@ -18,6 +18,17 @@ INTERNAL_AI_HOSTS = {"km.woa.com", "iwiki.woa.com"}
 # Legacy whole-page monitors need enough article-like content before LLM enrichment.
 MIN_CONTENT_LEN = 500
 
+BOT_CHALLENGE_MARKERS = (
+    "making sure you're not a bot",
+    "确保您不是机器人",
+    "anubis",
+    "proof-of-work",
+    "hashcash",
+    "please enable javascript",
+    "enable javascript",
+    "browser verification",
+)
+
 
 class Pipeline:
     def __init__(self, session: Session, extractor, enricher):
@@ -69,6 +80,13 @@ class Pipeline:
             )
         if self._repo.exists_by_canonical(normalized.canonical_url):
             self._repo.merge_source_link(normalized.canonical_url, source.id, raw.url)
+            return False
+        if self._is_bot_challenge_page(normalized):
+            logger.info(
+                "bot challenge page filtered out %s (source=%s)",
+                normalized.canonical_url,
+                source.name,
+            )
             return False
         if self._is_legacy_page_monitor_item(source, raw):
             if not self._passes_legacy_page_quality_gate(source, normalized):
@@ -130,6 +148,11 @@ class Pipeline:
             clean_content=raw.raw_content or "",
             published_at=raw.published_at,
         )
+
+    def _is_bot_challenge_page(self, item: NormalizedItem) -> bool:
+        text = f"{item.title}\n{item.clean_content}".lower()
+        marker_count = sum(1 for marker in BOT_CHALLENGE_MARKERS if marker in text)
+        return marker_count >= 2
 
     def _apply_category_constraints(self, source: Source, fields):
         if fields.main_category != INTERNAL_AI_CATEGORY:

@@ -34,6 +34,10 @@ _RELATIVE_RANGE_TO_DELTA = {
 # Maximum expansion rounds when candidates fall short of target_count.
 _MAX_EXPANSION_ROUNDS = 3
 
+# Per source/link, each collection round should contribute only the freshest
+# candidates so one noisy feed cannot dominate the manual run.
+MAX_CANDIDATES_PER_SOURCE_PER_ROUND = 5
+
 logger = logging.getLogger(__name__)
 
 
@@ -274,6 +278,15 @@ class ManualNewsRunController:
             now=now,
         )
 
+    def limit_candidates_per_source(self, items: list[RawItem]) -> list[RawItem]:
+        """Keep at most the newest candidates from one source fetch."""
+        ordered = sorted(
+            items,
+            key=lambda item: item.published_at or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        return ordered[:MAX_CANDIDATES_PER_SOURCE_PER_ROUND]
+
     # -- status -----------------------------------------------------------
 
     def status(self) -> ManualNewsRunStatus:
@@ -449,7 +462,8 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
                     included_without_date=acc_stats.included_without_date,
                 )
 
-                new_items = [c for c in time_filtered if c.url not in seen_urls]
+                limited_candidates = _controller.limit_candidates_per_source(time_filtered)
+                new_items = [c for c in limited_candidates if c.url not in seen_urls]
                 for c in new_items:
                     seen_urls.add(c.url)
                 all_candidates.extend(new_items)

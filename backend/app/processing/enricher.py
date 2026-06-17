@@ -5,11 +5,13 @@ from app.enums import MAIN_CATEGORIES
 from app.llm.client import LlmClient
 from app.schemas import EnrichedFields, NormalizedItem
 
-_PROMPT_TEMPLATE = """你是操作系统维护工程师的技术情报分析师。阅读下面的技术文章，为 OS maintainer 提取结构化情报。
+_PROMPT_TEMPLATE = """你是操作系统维护工程师的关键技术新闻与技术情报分析师。阅读下面的技术文章，为 OS maintainer 提取结构化情报。
 
-只收录有专业价值的技术内容：版本发布、安全公告、新技术/工具发布、AI agent/LLM 工具链进展、性能基准测试、技术架构分析。
-不收录：社区活动通知、招聘信息、用户入门教程、市场营销材料、非技术性公告。
+只收录关键技术新闻：新兴技术/工具/架构进入可观察阶段，操作系统、内核、发行版、编译器、包管理、云原生基础设施、AI agent/LLM 工具链出现重要发布、重大更新、性能基准、兼容性变化或技术路线变化。
+安全内容只收录会影响多个社区、多个发行版、上游项目或广泛生态的严重漏洞/供应链问题；厂商自身的小范围漏洞、普通 CVE 罗列、只影响单一产品的常规安全公告，应拒收，除非正文明确说明跨社区影响。
+不收录：社区活动通知、招聘信息、用户入门教程、市场营销材料、非技术性公告、单纯文档页、仓库首页、SIG 介绍页、列表页、登录页、验证码页、反爬挑战页。
 如果正文为空、只有站点导航、只是文档首页/仓库首页/SIG 介绍页，或者信息不足以支撑真实技术摘要，则不要收录。
+如果页面标题或正文出现“确保您不是机器人 / Making sure you're not a bot / Anubis / Proof-of-Work / Hashcash / enable JavaScript / browser verification”等反爬挑战页特征，必须 should_store=false；不要把反爬工具或挑战页本身当作技术新闻总结。
 
 输出严格 JSON（不要多余文字）。
 

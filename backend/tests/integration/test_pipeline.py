@@ -173,9 +173,53 @@ class _RejectingEnricher:
         )
 
 
+class _CountingEnricher(_StubEnricher):
+    def __init__(self):
+        self.calls = 0
+
+    def enrich(self, item):
+        self.calls += 1
+        return super().enrich(item)
+
+
 def test_pipeline_skips_non_newsworthy_items_rejected_by_enricher(session):
     src = session.get(Source, 1)
     pipeline = Pipeline(session=session, extractor=_StubExtractor(), enricher=_RejectingEnricher())
 
     assert pipeline.run_source(src, fetcher=_StubFetcher()) == 0
+    assert session.query(Source).get(1).items == []
+
+
+def test_pipeline_skips_bot_challenge_pages_before_enrichment(session):
+    src = session.get(Source, 1)
+    challenge = (
+        "确保您不是机器人！ Making sure you're not a bot! "
+        "Anubis uses a Proof-of-Work scheme based on Hashcash to protect "
+        "the website from large-scale scraping. Please enable JavaScript."
+    )
+
+    class _ChallengeFetcher:
+        def fetch(self, source):
+            return [
+                RawItem(
+                    source_id=1,
+                    title="Making sure you're not a bot!",
+                    url="https://x/anubis",
+                    raw_content=challenge,
+                )
+            ]
+
+    class _ChallengeExtractor:
+        def extract(self, url):
+            return ExtractedDoc(
+                url=url,
+                title="Making sure you're not a bot!",
+                clean_content=challenge,
+            )
+
+    enricher = _CountingEnricher()
+    pipeline = Pipeline(session=session, extractor=_ChallengeExtractor(), enricher=enricher)
+
+    assert pipeline.run_source(src, fetcher=_ChallengeFetcher()) == 0
+    assert enricher.calls == 0
     assert session.query(Source).get(1).items == []

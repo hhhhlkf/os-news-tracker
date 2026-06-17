@@ -118,6 +118,31 @@ def test_enricher_prompt_requires_aggregated_tagging_rules():
     assert "同义写法" in prompt
 
 
+def test_enricher_prompt_requires_key_technology_news_filtering():
+    prompts_sent: list[str] = []
+
+    class _CaptureLlm:
+        def complete(self, prompt, **kw):
+            prompts_sent.append(prompt)
+            return _valid_payload()
+
+    n = NormalizedItem(
+        source_id=1,
+        title="Making sure you're not a bot",
+        url="https://x/a",
+        canonical_url="https://x/a",
+        clean_content="Anubis uses Proof-of-Work to protect the website.",
+    )
+    Enricher(llm=_CaptureLlm()).enrich(n)
+    prompt = prompts_sent[0]
+    assert "关键技术新闻" in prompt
+    assert "新兴技术" in prompt
+    assert "跨社区影响" in prompt
+    assert "厂商自身的小范围漏洞" in prompt
+    assert "反爬挑战页" in prompt
+    assert "Anubis" in prompt
+
+
 def test_enricher_allows_rejection_payload():
     n = NormalizedItem(
         source_id=1,

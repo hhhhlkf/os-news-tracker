@@ -132,6 +132,33 @@ def test_filter_candidates_applies_time_window_only_does_not_truncate():
     assert [item.title for item in filtered] == ["newest", "middle", "also-recent"]
 
 
+def test_limit_candidates_per_source_keeps_newest_five_items():
+    from app.manual_news_run import ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    items = [
+        RawItem(
+            source_id=1,
+            title=f"item-{idx}",
+            url=f"https://x/{idx}",
+            published_at=now - timedelta(minutes=idx),
+        )
+        for idx in range(8)
+    ]
+
+    limited = controller.limit_candidates_per_source(items)
+
+    assert len(limited) == 5
+    assert [item.title for item in limited] == [
+        "item-0",
+        "item-1",
+        "item-2",
+        "item-3",
+        "item-4",
+    ]
+
+
 def test_filter_candidates_excludes_out_of_window():
     from app.manual_news_run import ManualNewsRunController
 
