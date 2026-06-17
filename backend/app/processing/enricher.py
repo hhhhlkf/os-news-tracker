@@ -22,11 +22,19 @@ _PROMPT_TEMPLATE = """你是操作系统维护工程师的技术情报分析师�
 - info_type: 从 [发布, 更新, 性能数据, 适配, 观点/分析, 其他] 选一个
 - importance: 从 [高, 中, 低] 选一个。高=版本发布/安全公告/重大新工具；中=技术更新/AI工具链；低=性能测试/架构分析
 - main_category: 从可选主分类里选一个
-- sub_tags: 细粒度子标签（字符串数组，如厂商名/产品名/技术名）
-- keywords: 扁平关键词数组，列出文中的关键技术术语（如 ["Linux 6.12", "RHEL 10", "systemd 256", "eBPF"]）
+- sub_tags: 可聚合的规范标签（字符串数组）
+- keywords: 扁平关键词数组，列出文中的关键技术术语和版本细节（如 ["Linux 6.12", "RHEL 10", "systemd 256", "eBPF"]）
 - confidence: 0~1 的浮点，表示你对归类与摘要的把握
 - should_store: 布尔值。若页面不是新闻/热点/技术更新，或信息不足，则必须为 false
 - reject_reason: 当 should_store=false 时必填，简要说明拒收原因；当 should_store=true 时可为 null
+
+标签聚合规则：
+- sub_tags 控制在 3-6 个，优先选择能跨多篇文章复用的 canonical 名称；把一次性细节放入 keywords。
+- 使用稳定、短小的标签：厂商/发行版/项目/组件/包名/主题，如 openEuler、OpenAnolis、Fedora、RHEL、Ubuntu、Linux Kernel、RPM、Koji、glibc、systemd、CVE、安全更新、性能优化、软件包更新。
+- 合并同义写法和大小写变体，例如 OpenEuler/openEuler/欧拉 统一写作 openEuler；OpenAnolis/Anolis/龙蜥 统一写作 OpenAnolis；kernel/Linux kernel/内核 统一写作 Linux Kernel。
+- 不要把完整版本号、补丁号、CVE 编号、公告编号、日期、URL 片段、过长短语放入 sub_tags；这些细节放入 keywords。
+- 避免近义重复：同一篇文章不要同时输出 openEuler 和 欧拉、Linux Kernel 和 kernel、RPM 和 rpm package。
+- keywords 可以保留更细的原文术语、版本、包名组合和 CVE 编号，但仍应去重，避免同义写法重复。
 
 标题：{title}
 正文：

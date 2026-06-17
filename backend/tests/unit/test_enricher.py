@@ -93,6 +93,31 @@ def test_enricher_prompt_contains_role_and_exclusions():
     assert "entities" not in prompt
 
 
+def test_enricher_prompt_requires_aggregated_tagging_rules():
+    prompts_sent: list[str] = []
+
+    class _CaptureLlm:
+        def complete(self, prompt, **kw):
+            prompts_sent.append(prompt)
+            return _valid_payload()
+
+    n = NormalizedItem(
+        source_id=1,
+        title="openEuler kernel update",
+        url="https://x/a",
+        canonical_url="https://x/a",
+        clean_content="body",
+    )
+    Enricher(llm=_CaptureLlm()).enrich(n)
+    prompt = prompts_sent[0]
+    assert "标签聚合规则" in prompt
+    assert "canonical" in prompt
+    assert "sub_tags 控制在 3-6 个" in prompt
+    assert "不要把完整版本号" in prompt
+    assert "OpenEuler/openEuler/欧拉" in prompt
+    assert "同义写法" in prompt
+
+
 def test_enricher_allows_rejection_payload():
     n = NormalizedItem(
         source_id=1,
