@@ -60,12 +60,15 @@ class ProbeResult:
 def probe_route_for_entry(entry: dict[str, Any]) -> ProbeRoute:
     source_type = str(entry.get("type", ""))
     adapter = entry.get("adapter")
+    api_config = entry.get("api_config") if isinstance(entry.get("api_config"), dict) else {}
+    has_probe_config = isinstance(api_config.get("probe"), dict)
     url = str(entry.get("url") or "")
     status = ProbeStatus.SUPPORTED
     reason: str | None = None
 
     if (
         source_type == SourceType.API
+        and not has_probe_config
         and adapter != "generic_json_list"
         and adapter not in supported_api_adapters()
     ):
@@ -102,6 +105,8 @@ def build_probe_fetcher(
 ) -> Fetcher | None:
     if source.type == SourceType.RSS:
         return RssFetcher()
+    if source.type == SourceType.API and (source.api_config or {}).get("probe"):
+        return ApiAdapterFetcher()
     if source.type == SourceType.API and source.adapter == "generic_json_list":
         return GenericJsonApiFetcher()
     if source.type == SourceType.API and source.adapter in supported_api_adapters():

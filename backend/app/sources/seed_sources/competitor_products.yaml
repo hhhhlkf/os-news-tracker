@@ -35,8 +35,20 @@
   vendor: openeuler
   stream: structured
   main_category: 友商产品信息
-  enabled: false  # adapter 待实现
+  enabled: false
   fetch_cron: "0 6 * * 1"
+  api_config:
+    probe:
+      mode: html_table
+      fields:
+        title_template: "openEuler repo {cell[0]}"
+        url_from_link: 0
+        strip_cell_suffix: "/"
+        exclude_href_contains:
+          - "?"
+          - "mailto:"
+        content_template: "openEuler repository entry {cell[0]}; modified {cell[2]}"
+        published_at_cell: 2
 
 # --- Red Hat (友商) ---
 - name: Red Hat Security Errata (RHSA)
@@ -72,8 +84,12 @@
   vendor: ubuntu
   stream: structured
   main_category: 友商产品信息
-  enabled: false  # adapter 待实现
+  enabled: false
   fetch_cron: "0 7 * * *"
+  api_config:
+    probe:
+      mode: text
+      url: https://raw.githubusercontent.com/canonical/ubuntu-security-notices/main/README.md
   # GitHub 仓库，每日 CI 自动更新。3 种格式：USN/LSN JSON, OSV JSON, OpenVEX JSON。
   # USN 含人类可读漏洞描述 + 受影响包 + 修复版本 + CVE 链接，可直接总结为安全新闻。
   # 与 os_tracking_news.yaml 中的 ubuntu.com/security/notices.json 内容相同，多格式冗余。
@@ -84,8 +100,18 @@
   vendor: ubuntu
   stream: structured
   main_category: 友商产品信息
-  enabled: false  # adapter 待实现
+  enabled: false
   fetch_cron: "0 6 * * 1"
+  api_config:
+    probe:
+      mode: html_table
+      url: https://security-metadata.canonical.com/oval/
+      fields:
+        title_template: "Ubuntu OVAL {cell[1]}"
+        url_from_link: 2
+        include_href_suffix: ".bz2"
+        content_template: "Ubuntu OVAL metadata file {cell[2]}; release {cell[1]}; modified {cell[3]}"
+        published_at_cell: 3
   # OVAL 数据门户。112 个 .oval.xml.bz2 文件，覆盖 Ubuntu 14.04-25.10 全系 + FIPS/实时内核/OCI 变体。
   # 3 种 OVAL 类型: cve.oval, pkg.oval, usn.oval。活跃版本每日更新（jammy 8.6MB, noble 7.2MB）。
   # 与 USN JSON API 内容同源，OVAL 格式更适合合规/扫描工具集成。

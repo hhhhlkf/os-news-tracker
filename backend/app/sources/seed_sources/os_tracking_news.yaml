@@ -86,6 +86,17 @@
   main_category: OS跟踪来源
   enabled: false
   fetch_cron: "0 7 * * *"
+  api_config:
+    probe:
+      mode: json_list
+      items_path: notices
+      fields:
+        title_template: "{id}: {title}"
+        url_template: "https://ubuntu.com/security/notices/{id}"
+        content:
+          - summary
+          - description
+        published_at: published
 - name: Ubuntu CVE
   type: api
   url: https://ubuntu.com/security/cves.json
@@ -95,6 +106,19 @@
   main_category: OS跟踪来源
   enabled: false
   fetch_cron: "0 7 * * *"
+  api_config:
+    probe:
+      mode: json_list
+      query:
+        limit: 20
+      items_path: cves
+      fields:
+        title_template: "{id}: {priority} {status}"
+        url_template: "https://ubuntu.com/security/{id}"
+        content:
+          - ubuntu_description
+          - description
+        published_at: published
 - name: Ubuntu Blog
   type: rss
   url: https://ubuntu.com/blog/feed

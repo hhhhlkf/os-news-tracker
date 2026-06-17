@@ -16,7 +16,7 @@ class FakeTextRequester:
         return self.responses[url]
 
 
-def test_ubuntu_security_adapter_maps_notices_to_raw_items() -> None:
+def test_configurable_json_probe_supports_title_templates_and_content_fallbacks() -> None:
     requester = FakeTextRequester(
         {
             "https://ubuntu.com/security/notices.json": """
@@ -40,6 +40,18 @@ def test_ubuntu_security_adapter_maps_notices_to_raw_items() -> None:
         type="api",
         url="https://ubuntu.com/security/notices.json",
         adapter="ubuntu_security",
+        api_config={
+            "probe": {
+                "mode": "json_list",
+                "items_path": "notices",
+                "fields": {
+                    "title_template": "{id}: {title}",
+                    "url_template": "https://ubuntu.com/security/notices/{id}",
+                    "content": ["summary", "description"],
+                    "published_at": "published",
+                },
+            }
+        },
     )
 
     items = ApiAdapterFetcher(requester=requester).fetch(source)
@@ -52,7 +64,7 @@ def test_ubuntu_security_adapter_maps_notices_to_raw_items() -> None:
     assert items[0].published_at is not None
 
 
-def test_ubuntu_cve_adapter_maps_cves_to_raw_items() -> None:
+def test_configurable_json_probe_adds_query_params() -> None:
     requester = FakeTextRequester(
         {
             "https://ubuntu.com/security/cves.json?limit=20": """
@@ -76,6 +88,19 @@ def test_ubuntu_cve_adapter_maps_cves_to_raw_items() -> None:
         type="api",
         url="https://ubuntu.com/security/cves.json",
         adapter="ubuntu_cve",
+        api_config={
+            "probe": {
+                "mode": "json_list",
+                "query": {"limit": 20},
+                "items_path": "cves",
+                "fields": {
+                    "title_template": "{id}: {priority} {status}",
+                    "url_template": "https://ubuntu.com/security/{id}",
+                    "content": "description",
+                    "published_at": "published",
+                },
+            }
+        },
     )
 
     items = ApiAdapterFetcher(requester=requester).fetch(source)
@@ -87,7 +112,7 @@ def test_ubuntu_cve_adapter_maps_cves_to_raw_items() -> None:
     assert items[0].raw_content == "A parser vulnerability."
 
 
-def test_openeuler_repo_adapter_maps_html_index_rows() -> None:
+def test_configurable_html_table_probe_filters_sort_links() -> None:
     requester = FakeTextRequester(
         {
             "https://repo.openeuler.org/": """
@@ -104,6 +129,19 @@ def test_openeuler_repo_adapter_maps_html_index_rows() -> None:
         type="api",
         url="https://repo.openeuler.org/",
         adapter="openeuler_repo",
+        api_config={
+            "probe": {
+                "mode": "html_table",
+                "fields": {
+                    "title_template": "openEuler repo {cell[0]}",
+                    "url_from_link": 0,
+                    "strip_cell_suffix": "/",
+                    "exclude_href_contains": ["?"],
+                    "content_template": "openEuler repository entry {cell[0]}; modified {cell[2]}",
+                    "published_at_cell": 2,
+                },
+            }
+        },
     )
 
     items = ApiAdapterFetcher(requester=requester).fetch(source)
@@ -115,7 +153,7 @@ def test_openeuler_repo_adapter_maps_html_index_rows() -> None:
     assert items[0].published_at is not None
 
 
-def test_canonical_security_meta_adapter_maps_oval_index_rows() -> None:
+def test_configurable_html_table_probe_can_require_link_suffix() -> None:
     requester = FakeTextRequester(
         {
             "https://security-metadata.canonical.com/oval/": """
@@ -137,6 +175,19 @@ def test_canonical_security_meta_adapter_maps_oval_index_rows() -> None:
         type="api",
         url="https://security-metadata.canonical.com/",
         adapter="canonical_security_meta",
+        api_config={
+            "probe": {
+                "mode": "html_table",
+                "url": "https://security-metadata.canonical.com/oval/",
+                "fields": {
+                    "title_template": "Ubuntu OVAL {cell[1]}",
+                    "url_from_link": 2,
+                    "include_href_suffix": ".bz2",
+                    "content_template": "Ubuntu OVAL metadata file {cell[2]}; release {cell[1]}; modified {cell[3]}",
+                    "published_at_cell": 3,
+                },
+            }
+        },
     )
 
     items = ApiAdapterFetcher(requester=requester).fetch(source)
@@ -147,7 +198,7 @@ def test_canonical_security_meta_adapter_maps_oval_index_rows() -> None:
     assert "com.ubuntu.jammy.cve.oval.xml.bz2" in (items[0].raw_content or "")
 
 
-def test_ubuntu_osv_adapter_maps_repository_readme() -> None:
+def test_configurable_text_probe_maps_repository_readme() -> None:
     requester = FakeTextRequester(
         {
             "https://raw.githubusercontent.com/canonical/ubuntu-security-notices/main/README.md": """
@@ -164,6 +215,12 @@ def test_ubuntu_osv_adapter_maps_repository_readme() -> None:
         type="api",
         url="https://github.com/canonical/ubuntu-security-notices",
         adapter="ubuntu_osv",
+        api_config={
+            "probe": {
+                "mode": "text",
+                "url": "https://raw.githubusercontent.com/canonical/ubuntu-security-notices/main/README.md",
+            }
+        },
     )
 
     items = ApiAdapterFetcher(requester=requester).fetch(source)
@@ -172,3 +229,92 @@ def test_ubuntu_osv_adapter_maps_repository_readme() -> None:
     assert items[0].title == "Ubuntu Vulnerability Data"
     assert items[0].url == "https://github.com/canonical/ubuntu-security-notices"
     assert "OSV JSON format" in (items[0].raw_content or "")
+
+
+def test_configurable_json_probe_maps_new_source_without_python_adapter() -> None:
+    requester = FakeTextRequester(
+        {
+            "https://example.com/releases.json?limit=3": """
+            {
+              "items": [
+                {
+                  "id": "v1",
+                  "name": "ExampleOS 1.0",
+                  "body": "Release notes for ExampleOS.",
+                  "date": "2026-06-17"
+                }
+              ]
+            }
+            """
+        }
+    )
+    source = Source(
+        id=15,
+        name="Example Releases",
+        type="api",
+        url="https://example.com/releases.json",
+        adapter="anything_new",
+        api_config={
+            "probe": {
+                "mode": "json_list",
+                "query": {"limit": 3},
+                "items_path": "items",
+                "fields": {
+                    "title": "name",
+                    "url_template": "https://example.com/releases/{id}",
+                    "content": "body",
+                    "published_at": "date",
+                },
+            }
+        },
+    )
+
+    items = ApiAdapterFetcher(requester=requester).fetch(source)
+
+    assert len(items) == 1
+    assert requester.calls == ["https://example.com/releases.json?limit=3"]
+    assert items[0].title == "ExampleOS 1.0"
+    assert items[0].url == "https://example.com/releases/v1"
+    assert items[0].raw_content == "Release notes for ExampleOS."
+    assert items[0].published_at is not None
+
+
+def test_configurable_html_table_probe_maps_new_source_without_python_adapter() -> None:
+    requester = FakeTextRequester(
+        {
+            "https://example.com/index/": """
+            <table>
+              <tr>
+                <td>release</td>
+                <td><a href="example-os-2/">ExampleOS 2</a></td>
+                <td>2026-06-17 10:30</td>
+              </tr>
+            </table>
+            """
+        }
+    )
+    source = Source(
+        id=16,
+        name="Example HTML Index",
+        type="api",
+        url="https://example.com/index/",
+        adapter="another_new_adapter",
+        api_config={
+            "probe": {
+                "mode": "html_table",
+                "fields": {
+                    "title_template": "Example {cell[1]}",
+                    "url_from_link": 1,
+                    "content_template": "kind={cell[0]}; modified={cell[2]}",
+                    "published_at_cell": 2,
+                },
+            }
+        },
+    )
+
+    items = ApiAdapterFetcher(requester=requester).fetch(source)
+
+    assert len(items) == 1
+    assert items[0].title == "Example ExampleOS 2"
+    assert items[0].url == "https://example.com/index/example-os-2/"
+    assert items[0].raw_content == "kind=release; modified=2026-06-17 10:30"

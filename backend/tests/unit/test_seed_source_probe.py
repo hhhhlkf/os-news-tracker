@@ -8,6 +8,7 @@ from app.sources.registry import _load_source_entries
 from app.sources.seed_source_probe import (
     ProbeStatus,
     build_probe_fetcher,
+    probe_route_for_entry,
     probe_routes_for_manifest,
     validate_sample_items,
 )
@@ -64,9 +65,24 @@ def test_probe_fetcher_builds_for_supported_api_adapters():
         url="https://example.com/cves.json",
         adapter="ubuntu_cve",
         stream="structured",
+        api_config={"probe": {"mode": "json_list", "items_path": "cves"}},
     )
 
     assert build_probe_fetcher(source) is not None
+
+
+def test_probe_route_supports_api_source_with_probe_config_without_python_adapter():
+    route = probe_route_for_entry(
+        {
+            "name": "Example API",
+            "type": "api",
+            "url": "https://example.com/data.json",
+            "adapter": "new_site",
+            "api_config": {"probe": {"mode": "json_list", "items_path": "items"}},
+        }
+    )
+
+    assert route.status == ProbeStatus.SUPPORTED
 
 
 def test_validate_sample_items_keeps_three_valid_unique_items():

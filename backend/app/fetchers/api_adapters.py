@@ -43,131 +43,116 @@ class ApiAdapterFetcher(Fetcher):
         self._adapters = adapters if adapters is not None else _ADAPTERS
 
     def fetch(self, source: Source) -> list[RawItem]:
+        probe = _probe_config(source)
+        if probe:
+            return ConfigurableApiProbeAdapter().fetch(source, self._requester)
         if not source.adapter or source.adapter not in self._adapters:
             raise ValueError(f"unsupported api adapter {source.adapter!r}")
         return self._adapters[source.adapter].fetch(source, self._requester)
 
 
-class UbuntuSecurityAdapter:
+class ConfigurableApiProbeAdapter:
     def fetch(self, source: Source, requester: TextRequester) -> list[RawItem]:
-        payload = json.loads(requester(source.url))
-        items: list[RawItem] = []
-        for notice in payload.get("notices", []):
-            notice_id = str(notice.get("id") or "").strip()
-            title = str(notice.get("title") or notice_id).strip()
-            if not notice_id or not title:
-                continue
-            content = _join_content(
-                notice.get("summary"),
-                notice.get("description"),
-                _packages_summary(notice.get("release_packages")),
-            )
-            items.append(
-                RawItem(
-                    source_id=source.id,
-                    title=f"{notice_id}: {title}",
-                    url=f"https://ubuntu.com/security/notices/{notice_id}",
-                    raw_content=content,
-                    published_at=_parse_datetime(notice.get("published")),
-                )
-            )
-        return items
+        probe = _probe_config(source)
+        if not probe:
+            raise ValueError(f"missing api_config.probe for {source.name}")
+        mode = str(probe.get("mode") or "")
+        if mode == "json_list":
+            return self._fetch_json_list(source, requester, probe)
+        if mode == "html_table":
+            return self._fetch_html_table(source, requester, probe)
+        if mode == "text":
+            return self._fetch_text(source, requester, probe)
+        raise ValueError(f"unsupported probe mode {mode!r}")
 
-
-class UbuntuCveAdapter:
-    def fetch(self, source: Source, requester: TextRequester) -> list[RawItem]:
-        url = _url_with_default_query(source.url, {"limit": "20"})
+    def _fetch_json_list(
+        self, source: Source, requester: TextRequester, probe: dict
+    ) -> list[RawItem]:
+        url = _probe_url(source, probe)
         payload = json.loads(requester(url))
+        raw_items = _get_path(payload, probe.get("items_path"))
+        if not isinstance(raw_items, list):
+            return []
+        fields = probe.get("fields") or {}
         items: list[RawItem] = []
-        for cve in payload.get("cves", []):
-            cve_id = str(cve.get("id") or "").strip()
-            if not cve_id:
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
                 continue
-            priority = str(cve.get("priority") or "unknown").strip()
-            status = str(cve.get("status") or "unknown").strip()
-            description = _join_content(
-                cve.get("ubuntu_description"),
-                cve.get("description"),
-                _packages_summary(cve.get("packages")),
+            ctx = {**raw_item, "item": raw_item}
+            title = _render_config_template(fields.get("title_template"), ctx)
+            if not title:
+                title = _field_value(raw_item, fields.get("title"))
+            url_value = _json_item_url(raw_item, fields)
+            content = _join_content(
+                *[
+                    _field_value(raw_item, field)
+                    for field in _field_list(fields.get("content"))
+                ]
             )
+            if not title or not url_value:
+                continue
             items.append(
                 RawItem(
                     source_id=source.id,
-                    title=f"{cve_id}: {priority} {status}",
-                    url=f"https://ubuntu.com/security/{cve_id}",
-                    raw_content=description,
-                    published_at=_parse_datetime(cve.get("published")),
+                    title=str(title),
+                    url=str(url_value),
+                    raw_content=content,
+                    published_at=_parse_datetime(
+                        _field_value(raw_item, fields.get("published_at"))
+                    ),
                 )
             )
         return items
 
+    def _fetch_html_table(
+        self, source: Source, requester: TextRequester, probe: dict
+    ) -> list[RawItem]:
+        url = _probe_url(source, probe)
+        rows = _parse_table_rows(requester(url))
+        fields = probe.get("fields") or {}
+        items: list[RawItem] = []
+        for row in rows:
+            ctx = _row_context(row, fields)
+            if _is_header_or_sort_row(row):
+                continue
+            title = _render_config_template(fields.get("title_template"), ctx)
+            content = _render_config_template(fields.get("content_template"), ctx)
+            url_value = _html_row_url(url, row, fields)
+            if not _html_row_link_allowed(row, fields):
+                continue
+            published_at = _parse_datetime(_cell_text(row, fields.get("published_at_cell")))
+            if not title or not url_value:
+                continue
+            items.append(
+                RawItem(
+                    source_id=source.id,
+                    title=title,
+                    url=url_value,
+                    raw_content=content,
+                    published_at=published_at,
+                )
+            )
+        return items
 
-class UbuntuOsvAdapter:
-    def fetch(self, source: Source, requester: TextRequester) -> list[RawItem]:
-        readme_url = (
-            "https://raw.githubusercontent.com/canonical/"
-            "ubuntu-security-notices/main/README.md"
-        )
-        readme = requester(readme_url)
-        title = _markdown_title(readme) or "Ubuntu Vulnerability Data"
+    def _fetch_text(
+        self, source: Source, requester: TextRequester, probe: dict
+    ) -> list[RawItem]:
+        url = _probe_url(source, probe)
+        value = requester(url)
+        fields = probe.get("fields") or {}
+        title = _render_config_template(fields.get("title_template"), {"source": source})
+        if not title:
+            title = _markdown_title(value) or source.name
+        item_url = fields.get("url") or source.url
         return [
             RawItem(
                 source_id=source.id,
                 title=title,
-                url=source.url,
-                raw_content=readme,
+                url=str(item_url),
+                raw_content=value,
                 published_at=None,
             )
         ]
-
-
-class OpenEulerRepoAdapter:
-    def fetch(self, source: Source, requester: TextRequester) -> list[RawItem]:
-        rows = _parse_table_rows(requester(source.url))
-        items: list[RawItem] = []
-        for row in rows:
-            link = row.first_link()
-            if link is None or not link.href or "?" in link.href:
-                continue
-            name = link.text.rstrip("/")
-            if not name or name.lower() in {"file name", "here", "mirror list", "contact us"}:
-                continue
-            published = _parse_datetime(row.last_date_text())
-            url = urllib.parse.urljoin(source.url, link.href)
-            items.append(
-                RawItem(
-                    source_id=source.id,
-                    title=f"openEuler repo {name}",
-                    url=url,
-                    raw_content=f"openEuler repository entry {name}; modified {row.last_date_text() or 'unknown'}",
-                    published_at=published,
-                )
-            )
-        return items
-
-
-class CanonicalSecurityMetaAdapter:
-    def fetch(self, source: Source, requester: TextRequester) -> list[RawItem]:
-        index_url = urllib.parse.urljoin(source.url.rstrip("/") + "/", "oval/")
-        rows = _parse_table_rows(requester(index_url))
-        items: list[RawItem] = []
-        for row in rows:
-            link = row.first_link()
-            if link is None or not link.href.endswith(".bz2"):
-                continue
-            release = row.cells[1].text if len(row.cells) > 1 else ""
-            published = _parse_datetime(row.last_date_text())
-            url = urllib.parse.urljoin(index_url, link.href)
-            items.append(
-                RawItem(
-                    source_id=source.id,
-                    title=f"Ubuntu OVAL {release}",
-                    url=url,
-                    raw_content=f"Ubuntu OVAL metadata file {link.text}; release {release}; modified {row.last_date_text() or 'unknown'}",
-                    published_at=published,
-                )
-            )
-        return items
 
 
 @dataclass
@@ -254,6 +239,146 @@ def _parse_table_rows(value: str) -> list[_Row]:
     return parser.rows
 
 
+def _probe_config(source: Source) -> dict | None:
+    config = source.api_config or {}
+    probe = config.get("probe")
+    return probe if isinstance(probe, dict) else None
+
+
+def _probe_url(source: Source, probe: dict) -> str:
+    url = str(probe.get("url") or source.url)
+    query = probe.get("query") or {}
+    if isinstance(query, dict) and query:
+        return _url_with_default_query(url, {str(k): str(v) for k, v in query.items()})
+    return url
+
+
+def _get_path(data: object, path: object) -> object:
+    if path in (None, ""):
+        return data
+    current = data
+    for part in str(path).split("."):
+        if isinstance(current, dict):
+            current = current.get(part)
+            continue
+        if isinstance(current, list) and part.isdigit():
+            index = int(part)
+            current = current[index] if index < len(current) else None
+            continue
+        return None
+    return current
+
+
+def _field_list(value: object) -> list[object]:
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def _field_value(item: dict, field: object) -> object:
+    for path in _field_list(field):
+        value = _get_path(item, path)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _json_item_url(item: dict, fields: dict) -> str:
+    value = _field_value(item, fields.get("url"))
+    if value:
+        return str(value)
+    template = fields.get("url_template")
+    if template:
+        return _render_config_template(str(template), {**item, "item": item})
+    return ""
+
+
+def _html_row_url(base_url: str, row: _Row, fields: dict) -> str:
+    link_index = fields.get("url_from_link")
+    if link_index is None:
+        link = row.first_link()
+    else:
+        cell = _cell(row, link_index)
+        link = cell.links[0] if cell and cell.links else None
+    if link is None:
+        return ""
+    return urllib.parse.urljoin(base_url, link.href)
+
+
+def _html_row_link_allowed(row: _Row, fields: dict) -> bool:
+    link_index = fields.get("url_from_link")
+    if link_index is None:
+        link = row.first_link()
+    else:
+        cell = _cell(row, link_index)
+        link = cell.links[0] if cell and cell.links else None
+    if link is None:
+        return False
+    for needle in _field_list(fields.get("exclude_href_contains")):
+        if str(needle) in link.href:
+            return False
+    suffix = fields.get("include_href_suffix")
+    if suffix and not link.href.endswith(str(suffix)):
+        return False
+    return True
+
+
+def _cell(row: _Row, index: object) -> _Cell | None:
+    try:
+        i = int(index)
+    except (TypeError, ValueError):
+        return None
+    return row.cells[i] if 0 <= i < len(row.cells) else None
+
+
+def _cell_text(row: _Row, index: object) -> str | None:
+    cell = _cell(row, index)
+    return cell.text if cell else None
+
+
+def _row_context(row: _Row, fields: dict | None = None) -> dict:
+    fields = fields or {}
+    strip_suffix = str(fields.get("strip_cell_suffix") or "")
+    cells = [cell.text for cell in row.cells]
+    if strip_suffix:
+        cells = [cell.removesuffix(strip_suffix) for cell in cells]
+    return {
+        "cell": cells,
+        "link": [
+            {"href": link.href, "text": link.text}
+            for cell in row.cells
+            for link in cell.links
+        ],
+    }
+
+
+def _is_header_or_sort_row(row: _Row) -> bool:
+    values = {cell.text.lower() for cell in row.cells}
+    return bool(values & {"file name", "modified", "size"}) and not row.first_link()
+
+
+def _render_config_template(template: object, context: dict) -> str:
+    if not template:
+        return ""
+    try:
+        return str(template).format_map(_TemplateContext(context))
+    except (KeyError, IndexError, TypeError, ValueError):
+        return ""
+
+
+class _TemplateContext(dict):
+    def __missing__(self, key: str) -> object:
+        if key == "item":
+            return self.get("item", {})
+        if key == "cell":
+            return self.get("cell", [])
+        if key == "link":
+            return self.get("link", [])
+        if key == "source":
+            return self.get("source")
+        raise KeyError(key)
+
+
 def _parse_datetime(value: object) -> datetime | None:
     if value in (None, ""):
         return None
@@ -276,32 +401,9 @@ def _compact(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
-def _packages_summary(value: object) -> str:
-    if isinstance(value, dict):
-        names = sorted(
-            {
-                str(pkg.get("name"))
-                for packages in value.values()
-                if isinstance(packages, list)
-                for pkg in packages
-                if isinstance(pkg, dict) and pkg.get("name")
-            }
-        )
-        return "Packages: " + ", ".join(names[:20]) if names else ""
-    if isinstance(value, list):
-        names = sorted(
-            {
-                str(pkg.get("name"))
-                for pkg in value
-                if isinstance(pkg, dict) and pkg.get("name")
-            }
-        )
-        return "Packages: " + ", ".join(names[:20]) if names else ""
-    return ""
-
-
 def _markdown_title(value: str) -> str | None:
     for line in value.splitlines():
+        line = line.strip()
         if line.startswith("# "):
             return line.removeprefix("# ").strip()
     return None
@@ -322,10 +424,4 @@ def _url_with_default_query(url: str, defaults: dict[str, str]) -> str:
     )
 
 
-_ADAPTERS: dict[str, ApiRawItemAdapter] = {
-    "ubuntu_security": UbuntuSecurityAdapter(),
-    "ubuntu_cve": UbuntuCveAdapter(),
-    "ubuntu_osv": UbuntuOsvAdapter(),
-    "openeuler_repo": OpenEulerRepoAdapter(),
-    "canonical_security_meta": CanonicalSecurityMetaAdapter(),
-}
+_ADAPTERS: dict[str, ApiRawItemAdapter] = {}
