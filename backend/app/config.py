@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     fetch_user_agent: str = "os-news-tracker/0.1 (+internal)"
     fetch_per_host_delay_seconds: float = 2.0
     missing_date_policy: str = "include_as_now"
+    manual_fetch_max_workers: int = 4
 
 
 @lru_cache

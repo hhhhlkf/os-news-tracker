@@ -453,6 +453,50 @@ def test_discovered_and_queued_counters_are_independent():
     assert status.queued_count == 8
 
 
+def test_ledger_derived_counts_keep_status_numbers_aligned():
+    from app.manual_news_run import CandidateRunLedger
+
+    ledger = CandidateRunLedger()
+    ledger.mark_discovered(10)
+    ledger.add_queued("https://x/1")
+    ledger.add_queued("https://x/2")
+    ledger.add_queued("https://x/3")
+    ledger.mark_processing("https://x/1")
+    ledger.mark_saved("https://x/1")
+    ledger.mark_processing("https://x/2")
+    ledger.mark_rejected("https://x/2")
+    ledger.mark_processing("https://x/3")
+
+    counts = ledger.counts()
+
+    assert counts.discovered == 10
+    assert counts.queued == 3
+    assert counts.processed == 2
+    assert counts.saved == 1
+
+
+def test_ledger_fulfillment_depends_only_on_saved_count():
+    from app.manual_news_run import CandidateRunLedger
+
+    ledger = CandidateRunLedger()
+    ledger.mark_discovered(50)
+    for idx in range(30):
+        url = f"https://x/{idx}"
+        ledger.add_queued(url)
+        ledger.mark_processing(url)
+        if idx < 4:
+            ledger.mark_saved(url)
+        else:
+            ledger.mark_failed(url)
+
+    counts = ledger.counts()
+
+    assert counts.queued == 30
+    assert counts.processed == 30
+    assert counts.saved == 4
+    assert counts.saved < 30
+
+
 # ── Fulfilment ──────────────────────────────────────────────────────
 
 
