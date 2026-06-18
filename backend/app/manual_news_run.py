@@ -3,8 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from threading import Lock
+import json
 import logging
+import re
 import threading
+from typing import Protocol
 
 from app.enums import MissingDatePolicy
 from app.schemas import (
@@ -38,73 +41,99 @@ _MAX_EXPANSION_ROUNDS = 3
 # quality candidates so one noisy feed cannot dominate the manual run.
 MAX_CANDIDATES_PER_SOURCE_PER_ROUND = 5
 
-_QUALITY_TERMS = (
-    "linux kernel",
-    "kernel",
-    "scheduler",
-    "ebpf",
-    "bpf",
-    "systemd",
-    "glibc",
-    "gcc",
-    "llvm",
-    "compiler",
-    "rpm",
-    "package",
-    "koji",
-    "bodhi",
-    "cve",
-    "vulnerability",
-    "security",
-    "advisory",
-    "release",
-    "released",
-    "performance",
-    "benchmark",
-    "regression",
-    "compatibility",
-    "abi",
-    "api",
-    "container",
-    "kubernetes",
-    "cloud native",
-    "ai agent",
-    "llm",
-    "openeuler",
-    "openanolis",
-    "fedora",
-    "rhel",
-    "ubuntu",
-)
-
-_LOW_QUALITY_TERMS = (
-    "event",
-    "webinar",
-    "conference",
-    "meetup",
-    "newsletter",
-    "podcast",
-    "hiring",
-    "job",
-    "career",
-    "tutorial",
-    "how to",
-    "beginner",
-    "marketing",
-    "community activity",
-    "reminder",
-)
-
-_BOT_CHALLENGE_TERMS = (
-    "making sure you're not a bot",
-    "anubis",
-    "proof-of-work",
-    "hashcash",
-    "enable javascript",
-    "browser verification",
-)
-
 logger = logging.getLogger(__name__)
+
+
+class _Completer(Protocol):
+    def complete(self, prompt: str, **kw) -> str: ...
+
+
+_CANDIDATE_SCORE_PROMPT = """你是操作系统维护团队的关键技术新闻候选排序器。请给下面同一个 source/link 抓到的候选打质量分，用于只保留最值得进入后续摘要流程的最多 5 条。
+
+评分目标：优先选择关键技术新闻，而不是最新但低价值的信息。
+
+高分标准：
+- 新兴技术/工具/架构进入可观察阶段
+- OS、内核、发行版、编译器、包管理、云原生基础设施、AI agent/LLM 工具链的重要发布、重大更新、性能基准、兼容性变化或技术路线变化
+- 会影响多个社区、多个发行版、上游项目或广泛生态的严重漏洞/供应链问题
+
+低分或 should_keep=false：
+- 社区活动、会议、播客、招聘、营销、入门教程、普通公告
+- 普通 CVE 罗列、只影响单一厂商/单一产品的小范围漏洞
+- 文档首页、仓库首页、列表页、登录页、验证码页、反爬挑战页
+- “Making sure you're not a bot / Anubis / Proof-of-Work / Hashcash / enable JavaScript / browser verification”等页面
+
+输出严格 JSON，不要多余文字。格式：
+{{
+  "scores": [
+    {{"url": "候选URL", "score": 0-100, "reason": "一句中文原因", "should_keep": true}}
+  ]
+}}
+
+要求：
+- 每个输入候选都必须返回一条 score，url 必须原样复制
+- score 是整数，0=完全无价值或反爬页，100=非常关键的技术新闻
+- should_keep=false 的候选即使分数较高也不能排入前 5
+- 不要因为发布时间新就给高分；发布时间只能作为同分时的次要因素
+
+候选列表：
+{candidates}
+"""
+
+
+def _extract_json_object(text: str) -> dict:
+    fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+    if fenced:
+        return json.loads(fenced.group(1))
+    brace = re.search(r"\{.*\}", text, re.DOTALL)
+    if brace:
+        return json.loads(brace.group(0))
+    raise ValueError(f"No JSON object found in LLM output: {text[:200]}")
+
+
+class CandidateQualityScorer:
+    def __init__(self, llm: _Completer | None = None):
+        if llm is None:
+            from app.llm.client import LlmClient
+
+            llm = LlmClient()
+        self._llm = llm
+
+    def score(self, items: list[RawItem]) -> dict[str, tuple[int, bool]]:
+        if not items:
+            return {}
+        prompt = _CANDIDATE_SCORE_PROMPT.format(
+            candidates=json.dumps(
+                [self._candidate_payload(item) for item in items],
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        raw = self._llm.complete(prompt, temperature=0.0)
+        data = _extract_json_object(raw)
+
+        scores: dict[str, tuple[int, bool]] = {}
+        for row in data.get("scores", []):
+            url = row.get("url")
+            if not isinstance(url, str):
+                continue
+            raw_score = row.get("score", 0)
+            try:
+                score = int(raw_score)
+            except (TypeError, ValueError):
+                score = 0
+            score = max(0, min(100, score))
+            should_keep = bool(row.get("should_keep", True))
+            scores[url] = (score, should_keep)
+        return scores
+
+    def _candidate_payload(self, item: RawItem) -> dict[str, str | None]:
+        return {
+            "title": item.title,
+            "url": item.url,
+            "published_at": item.published_at.isoformat() if item.published_at else None,
+            "snippet": (item.raw_content or "")[:800],
+        }
 
 
 def _resolve_missing_date_policy() -> MissingDatePolicy:
@@ -344,41 +373,36 @@ class ManualNewsRunController:
             now=now,
         )
 
-    def limit_candidates_per_source(self, items: list[RawItem]) -> list[RawItem]:
-        """Keep at most the highest-quality candidates from one source fetch."""
+    def limit_candidates_per_source(
+        self,
+        items: list[RawItem],
+        *,
+        scorer: CandidateQualityScorer | None = None,
+    ) -> list[RawItem]:
+        """Keep at most the LLM highest-scored candidates from one source fetch."""
+        if not items:
+            return items
+        if scorer is None:
+            scorer = CandidateQualityScorer()
+        try:
+            scores = scorer.score(items)
+        except Exception:
+            logger.exception("candidate quality scoring failed; falling back to recency")
+            scores = {}
+
+        rankable_items = [
+            item for item in items
+            if scores.get(item.url, (0, True))[1]
+        ]
         ordered = sorted(
-            items,
+            rankable_items,
             key=lambda item: (
-                self._candidate_quality_score(item),
+                scores.get(item.url, (0, True))[0],
                 item.published_at or datetime.min.replace(tzinfo=timezone.utc),
             ),
             reverse=True,
         )
         return ordered[:MAX_CANDIDATES_PER_SOURCE_PER_ROUND]
-
-    def _candidate_quality_score(self, item: RawItem) -> int:
-        text = f"{item.title}\n{item.raw_content or ''}".lower()
-        score = 0
-
-        for term in _QUALITY_TERMS:
-            if term in text:
-                score += 3 if term in item.title.lower() else 1
-
-        for term in _LOW_QUALITY_TERMS:
-            if term in text:
-                score -= 4
-
-        challenge_hits = sum(1 for term in _BOT_CHALLENGE_TERMS if term in text)
-        if challenge_hits >= 2:
-            score -= 100
-
-        if item.raw_content:
-            score += min(len(item.raw_content) // 300, 5)
-
-        if item.published_at is not None:
-            score += 1
-
-        return score
 
     # -- status -----------------------------------------------------------
 
@@ -488,6 +512,7 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
     collection_round = 0
     # Accumulated time-filter stats across all sources / rounds.
     acc_stats = TimeFilterStats()
+    candidate_scorer = CandidateQualityScorer()
 
     # Discover sources once.
     discover_session = SessionLocal()
@@ -555,7 +580,10 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
                     included_without_date=acc_stats.included_without_date,
                 )
 
-                limited_candidates = _controller.limit_candidates_per_source(time_filtered)
+                limited_candidates = _controller.limit_candidates_per_source(
+                    time_filtered,
+                    scorer=candidate_scorer,
+                )
                 new_items = [c for c in limited_candidates if c.url not in seen_urls]
                 for c in new_items:
                     seen_urls.add(c.url)

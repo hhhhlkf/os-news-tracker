@@ -132,8 +132,8 @@ def test_filter_candidates_applies_time_window_only_does_not_truncate():
     assert [item.title for item in filtered] == ["newest", "middle", "also-recent"]
 
 
-def test_limit_candidates_per_source_keeps_highest_quality_five_items():
-    from app.manual_news_run import ManualNewsRunController
+def test_limit_candidates_per_source_keeps_llm_highest_scored_five_items():
+    from app.manual_news_run import CandidateQualityScorer, ManualNewsRunController
 
     controller = ManualNewsRunController()
     now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
@@ -160,11 +160,33 @@ def test_limit_candidates_per_source_keeps_highest_quality_five_items():
         )
         for idx in range(5)
     ]
+    llm_payload = {
+        "scores": [
+            {"url": f"https://x/low-{idx}", "score": 15, "reason": "community event", "should_keep": False}
+            for idx in range(3)
+        ] + [
+            {"url": f"https://x/high-{idx}", "score": 90 - idx, "reason": "key kernel update", "should_keep": True}
+            for idx in range(5)
+        ]
+    }
 
-    limited = controller.limit_candidates_per_source([
-        *low_quality_new_items,
-        *high_quality_old_items,
-    ])
+    class _StubLlm:
+        def __init__(self):
+            self.prompts: list[str] = []
+
+        def complete(self, prompt, **kw):
+            import json
+
+            self.prompts.append(prompt)
+            return json.dumps(llm_payload)
+
+    llm = _StubLlm()
+    scorer = CandidateQualityScorer(llm=llm)
+
+    limited = controller.limit_candidates_per_source(
+        [*low_quality_new_items, *high_quality_old_items],
+        scorer=scorer,
+    )
 
     assert len(limited) == 5
     assert [item.title for item in limited] == [
@@ -174,6 +196,51 @@ def test_limit_candidates_per_source_keeps_highest_quality_five_items():
         "Linux kernel scheduler performance update 3",
         "Linux kernel scheduler performance update 4",
     ]
+    assert "score" in llm.prompts[0]
+    assert "0-100" in llm.prompts[0]
+    assert "should_keep" in llm.prompts[0]
+
+
+def test_limit_candidates_per_source_excludes_llm_rejected_items():
+    from app.manual_news_run import CandidateQualityScorer, ManualNewsRunController
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    items = [
+        RawItem(
+            source_id=1,
+            title=f"candidate {idx}",
+            url=f"https://x/{idx}",
+            raw_content="body",
+            published_at=now - timedelta(minutes=idx),
+        )
+        for idx in range(6)
+    ]
+
+    class _StubLlm:
+        def complete(self, prompt, **kw):
+            import json
+
+            return json.dumps(
+                {
+                    "scores": [
+                        {
+                            "url": item.url,
+                            "score": 100 - idx,
+                            "reason": "not key technology news",
+                            "should_keep": idx < 2,
+                        }
+                        for idx, item in enumerate(items)
+                    ]
+                }
+            )
+
+    limited = controller.limit_candidates_per_source(
+        items,
+        scorer=CandidateQualityScorer(llm=_StubLlm()),
+    )
+
+    assert [item.url for item in limited] == ["https://x/0", "https://x/1"]
 
 
 def test_filter_candidates_excludes_out_of_window():
