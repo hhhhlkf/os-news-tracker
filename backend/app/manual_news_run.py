@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from threading import Lock
@@ -8,7 +7,6 @@ import json
 import logging
 import re
 import threading
-import time as time_module
 from typing import Protocol
 
 from app.enums import MissingDatePolicy
@@ -42,55 +40,6 @@ _MAX_EXPANSION_ROUNDS = 3
 # Per source/link, each collection round should contribute only the highest
 # quality candidates so one noisy feed cannot dominate the manual run.
 MAX_CANDIDATES_PER_SOURCE_PER_ROUND = 5
-
-# Keep LLM quality prompts bounded.  High-volume feeds can return hundreds of
-# rows; ranking all of them with LLM blocks queueing and produces huge prompts.
-CANDIDATE_LLM_PREFILTER_LIMIT = 30
-CANDIDATE_LOCAL_ONLY_THRESHOLD = 100
-CANDIDATE_SCORE_SNIPPET_LIMIT = 350
-
-_TECH_SIGNAL_KEYWORDS = (
-    "abi",
-    "agent",
-    "ai",
-    "architecture",
-    "benchmark",
-    "bpf",
-    "compiler",
-    "container",
-    "cve",
-    "ebpf",
-    "glibc",
-    "kernel",
-    "kubernetes",
-    "linux",
-    "llm",
-    "openssl",
-    "package",
-    "performance",
-    "rpm",
-    "scheduler",
-    "security",
-    "supply chain",
-    "toolchain",
-    "vulnerability",
-)
-
-_LOW_VALUE_CANDIDATE_MARKERS = (
-    "anubis",
-    "browser verification",
-    "community event",
-    "conference",
-    "enable javascript",
-    "hashcash",
-    "job",
-    "making sure you're not a bot",
-    "meetup",
-    "podcast",
-    "proof-of-work",
-    "webinar",
-    "确保您不是机器人",
-)
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +132,7 @@ class CandidateQualityScorer:
             "title": item.title,
             "url": item.url,
             "published_at": item.published_at.isoformat() if item.published_at else None,
-            "snippet": (item.raw_content or "")[:CANDIDATE_SCORE_SNIPPET_LIMIT],
+            "snippet": (item.raw_content or "")[:800],
         }
 
 
@@ -198,41 +147,6 @@ def _resolve_missing_date_policy() -> MissingDatePolicy:
     except ValueError:
         logger.warning("invalid MISSING_DATE_POLICY=%r, falling back to exclude", raw)
         return MissingDatePolicy.EXCLUDE
-
-
-def _local_candidate_prefilter(items: list[RawItem], *, limit: int) -> list[RawItem]:
-    """Cheaply rank candidates before any LLM work.
-
-    This deliberately uses coarse signals only.  The goal is to avoid sending
-    hundreds of feed rows to the LLM, not to replace later enrichment/relevance
-    judgment.
-    """
-    return sorted(items, key=_local_candidate_rank, reverse=True)[:limit]
-
-
-def _local_candidate_rank(item: RawItem) -> tuple[int, datetime]:
-    text = f"{item.title}\n{item.raw_content or ''}".lower()
-    score = 0
-
-    for marker in _LOW_VALUE_CANDIDATE_MARKERS:
-        if marker in text:
-            score -= 30
-
-    for keyword in _TECH_SIGNAL_KEYWORDS:
-        if keyword in text:
-            score += 6
-
-    title = (item.title or "").lower()
-    if any(keyword in title for keyword in _TECH_SIGNAL_KEYWORDS):
-        score += 8
-    if item.raw_content:
-        score += min(len(item.raw_content), 1000) // 100
-    if item.published_at is None:
-        score -= 5
-
-    published_at = item.published_at or datetime.min.replace(tzinfo=timezone.utc)
-    return score, published_at
-
 
 @dataclass
 class _RuntimeState:
@@ -249,8 +163,6 @@ class _RuntimeState:
     last_error: str | None = None
     stop_requested: bool = False
     time_filter_stats: TimeFilterStats | None = None
-    current_source_name: str | None = None
-    current_stage: str | None = None
 
 
 class ManualNewsRunController:
@@ -363,11 +275,6 @@ class ManualNewsRunController:
                 included_without_date=included_without_date,
             )
 
-    def set_current_source(self, name: str | None, stage: str | None) -> None:
-        with self._lock:
-            self._runtime.current_source_name = name
-            self._runtime.current_stage = stage
-
     # -- candidate helpers ------------------------------------------------
 
     def filter_candidates(
@@ -472,48 +379,19 @@ class ManualNewsRunController:
         *,
         scorer: CandidateQualityScorer | None = None,
     ) -> list[RawItem]:
-        """Keep at most the LLM highest-scored candidates from one source fetch.
-
-        When *items* has ≤ ``MAX_CANDIDATES_PER_SOURCE_PER_ROUND`` entries,
-        LLM scoring is skipped — there is no value in ranking a list that
-        is already at or below the cap.
-        """
+        """Keep at most the LLM highest-scored candidates from one source fetch."""
         if not items:
             return items
-
-        if len(items) <= MAX_CANDIDATES_PER_SOURCE_PER_ROUND:
-            return _local_candidate_prefilter(
-                items,
-                limit=MAX_CANDIDATES_PER_SOURCE_PER_ROUND,
-            )
-
-        if len(items) > CANDIDATE_LOCAL_ONLY_THRESHOLD:
-            logger.info(
-                "candidate quality scoring skipped for high-volume source: "
-                "%d candidates, local top %d used",
-                len(items),
-                MAX_CANDIDATES_PER_SOURCE_PER_ROUND,
-            )
-            return _local_candidate_prefilter(
-                items,
-                limit=MAX_CANDIDATES_PER_SOURCE_PER_ROUND,
-            )
-
-        llm_items = _local_candidate_prefilter(
-            items,
-            limit=CANDIDATE_LLM_PREFILTER_LIMIT,
-        )
-
         if scorer is None:
             scorer = CandidateQualityScorer()
         try:
-            scores = scorer.score(llm_items)
+            scores = scorer.score(items)
         except Exception:
             logger.exception("candidate quality scoring failed; falling back to recency")
             scores = {}
 
         rankable_items = [
-            item for item in llm_items
+            item for item in items
             if scores.get(item.url, (0, True))[1]
         ]
         ordered = sorted(
@@ -548,8 +426,6 @@ class ManualNewsRunController:
                 finished_at=self._runtime.finished_at,
                 last_error=self._runtime.last_error,
                 time_filter_stats=self._runtime.time_filter_stats,
-                current_source_name=self._runtime.current_source_name,
-                current_stage=self._runtime.current_stage,
             )
 
     # -- time window ------------------------------------------------------
@@ -607,127 +483,23 @@ def stop_manual_news_run() -> ManualNewsRunStatus:
     return _controller.status()
 
 
-def _fetch_source_worker(source_info: dict) -> dict:
-    """Fetch a single source inside its own thread, with its own DB session.
-
-    Returns a dict with keys: source_id, source_name, source_type, url,
-    candidates (list[RawItem]), elapsed_ms, error (str|None).
-
-    This function must not share any SQLAlchemy session or ORM object
-    with any other thread.
-    """
-    from app.db import SessionLocal
-    from app.extract.scrapling_extractor import ScraplingExtractor
-    from app.models import Source
-    from app.scheduler import build_fetcher
-    from app.search.base import get_search_provider
-
-    source_id = source_info["source_id"]
-    source_name = source_info["source_name"]
-
-    session = SessionLocal()
-    try:
-        source = session.get(Source, source_id)
-        if source is None or not source.enabled:
-            return {
-                "source_id": source_id,
-                "source_name": source_name,
-                "source_type": source_info.get("source_type", "?"),
-                "url": source_info.get("url", ""),
-                "candidates": [],
-                "elapsed_ms": 0,
-                "error": "source not found or disabled",
-            }
-
-        extractor = ScraplingExtractor(use_stealth=source.stealth)
-        search = get_search_provider()
-        fetcher = build_fetcher(source, extractor, search)
-
-        t0 = time_module.monotonic()
-        candidates = fetcher.fetch(source)
-        elapsed_ms = int((time_module.monotonic() - t0) * 1000)
-
-        session.commit()
-
-        return {
-            "source_id": source_id,
-            "source_name": source_name,
-            "source_type": source_info.get("source_type", "?"),
-            "url": source_info.get("url", ""),
-            "candidates": candidates,
-            "elapsed_ms": elapsed_ms,
-            "error": None,
-        }
-    except Exception as exc:
-        session.rollback()
-        return {
-            "source_id": source_id,
-            "source_name": source_name,
-            "source_type": source_info.get("source_type", "?"),
-            "url": source_info.get("url", ""),
-            "candidates": [],
-            "elapsed_ms": 0,
-            "error": str(exc),
-        }
-    finally:
-        session.close()
-
-
-def _update_source_health(
-    source_id: int,
-    health_status: str,
-    increment_fail_count: bool = False,
-) -> None:
-    """Update source health/fail_count in a short-lived DB session."""
-    from app.db import SessionLocal
-    from app.models import Source
-
-    session = SessionLocal()
-    try:
-        source = session.get(Source, source_id)
-        if source is not None:
-            source.health_status = health_status
-            if increment_fail_count:
-                source.fail_count += 1
-            session.commit()
-    except Exception:
-        session.rollback()
-        logger.exception("failed to update health for source %d", source_id)
-    finally:
-        session.close()
-
-
 def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
     """Target-driven news collection loop.
 
     Repeatedly collects candidates then processes them until
     ``saved_count >= target_count`` or no more candidates can be found.
-
-    Collection phase (each round):
-      - Fetches sources concurrently via ThreadPoolExecutor.
-      - Applies time filtering + LLM quality scoring (concurrency-limited).
-      - Skips LLM scoring when a source yields ≤5 candidates.
-
-    Processing phase:
-      - Serial pipeline processing (dedup, enrich, save).
     """
-    from app.config import get_settings
     from app.db import SessionLocal
     from app.enums import SourceType
     from app.extract.scrapling_extractor import ScraplingExtractor
     from app.models import Source
     from app.pipeline import Pipeline
     from app.processing.enricher import Enricher
-    from app.scheduler import list_enabled_news_sources
-
-    settings = get_settings()
-    max_fetch_workers = settings.manual_fetch_max_workers
+    from app.scheduler import build_fetcher, list_enabled_news_sources
+    from app.search.base import get_search_provider
 
     logger.info(
-        "manual news run: started, target saved=%d, fetch_workers=%d, llm_concurrency=%d",
-        request.target_count,
-        max_fetch_workers,
-        settings.llm_max_concurrency,
+        "manual news run: started, target saved=%d", request.target_count,
     )
 
     # ── Per-run state ──────────────────────────────────────────────
@@ -740,6 +512,7 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
     collection_round = 0
     # Accumulated time-filter stats across all sources / rounds.
     acc_stats = TimeFilterStats()
+    candidate_scorer = CandidateQualityScorer()
 
     # Discover sources once.
     discover_session = SessionLocal()
@@ -763,147 +536,42 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
             logger.info("manual news run: exceeded max collection rounds")
             break
 
-        if not sources_for_round:
-            logger.info("manual news run: no sources for round %d", collection_round)
-            break
+        collect_session = SessionLocal()
+        try:
+            search = get_search_provider()
 
-        # ── Phase 1+2: Fetch & time-filter & queue as each source completes ─
-        round_t0 = time_module.monotonic()
-
-        # Build lightweight source info dicts — no SQLAlchemy objects
-        # cross thread boundaries.
-        source_infos = [
-            {
-                "source_id": s.id,
-                "source_name": s.name,
-                "source_type": s.type.value if isinstance(s.type, SourceType) else str(s.type),
-                "url": s.url,
-            }
-            for s in sources_for_round
-        ]
-
-        n_workers = min(max_fetch_workers, len(source_infos)) if max_fetch_workers > 0 else 1
-        n_scoring_workers = max(1, settings.llm_max_concurrency)
-        del settings  # only used for config values above
-
-        # Shared scorer for LLM tasks (stateless, thread-safe).
-        scorer = CandidateQualityScorer()
-
-        # Scoring executor: created once so LLM scoring can run in parallel
-        # with remaining source fetches.  max_workers provides the
-        # concurrency limit — no additional semaphore needed.
-        score_executor = ThreadPoolExecutor(max_workers=n_scoring_workers)
-        scoring_futures: list = []
-
-        def _score_one(result, time_filtered):
-            source_name = result["source_name"]
-            _controller.set_current_source(source_name, "quality_scoring")
-            logger.info(
-                "manual news run: LLM quality scoring start — %s (%d candidates)",
-                source_name,
-                len(time_filtered),
-            )
-            t0 = time_module.monotonic()
-            limited = _controller.limit_candidates_per_source(
-                time_filtered, scorer=scorer,
-            )
-            elapsed = int((time_module.monotonic() - t0) * 1000)
-            logger.info(
-                "manual news run: LLM quality scoring done — %s: %d → %d, %d ms",
-                source_name,
-                len(time_filtered),
-                len(limited),
-                elapsed,
-            )
-            return result, limited
-
-        def _queue_candidates(limited, source_name, candidate_count):
-            """Dedup by URL, add to pool, update queued_count — shared helper."""
-            nonlocal new_in_round
-            new_items = [c for c in limited if c.url not in seen_urls]
-            for c in new_items:
-                seen_urls.add(c.url)
-            all_candidates.extend(new_items)
-            new_in_round += len(new_items)
-            _controller.mark_queued(len(all_candidates))
-            logger.info(
-                "manual news run: %s — %d matched → %d queued",
-                source_name,
-                candidate_count,
-                len(new_items),
-            )
-
-        with ThreadPoolExecutor(max_workers=n_workers) as fetch_executor:
-            future_to_info = {
-                fetch_executor.submit(_fetch_source_worker, info): info
-                for info in source_infos
-            }
-
-            for future in as_completed(future_to_info):
+            for source in sources_for_round:
                 if _controller.should_stop():
-                    for f in future_to_info:
-                        f.cancel()
-                    for f in scoring_futures:
-                        f.cancel()
-                    score_executor.shutdown(wait=False)
                     _controller.complete(state="stopped")
                     return
 
-                info = future_to_info[future]
-                source_name = info["source_name"]
+                # Re-attach the source to the active session so that
+                # modifications (e.g. last_content_hash, health_status)
+                # are persisted on commit.
+                source = collect_session.merge(source)
 
-                _controller.set_current_source(source_name, "fetching")
-
+                # Create extractor per-source so stealth is honored.
+                extractor = ScraplingExtractor(use_stealth=source.stealth)
+                fetcher = build_fetcher(source, extractor, search)
                 try:
-                    result = future.result()
-                except Exception as exc:
-                    logger.exception("unexpected error fetching source %s", source_name)
-                    result = {
-                        "source_id": info["source_id"],
-                        "source_name": source_name,
-                        "source_type": info.get("source_type", "?"),
-                        "url": info.get("url", ""),
-                        "candidates": [],
-                        "elapsed_ms": 0,
-                        "error": str(exc),
-                    }
+                    candidates = fetcher.fetch(source)
+                except Exception:
+                    logger.exception("fetch failed for source %s (round %d)", source.name, collection_round)
+                    source.fail_count += 1
+                    source.health_status = "error"
+                    collect_session.commit()
+                    continue
 
-                if result["error"]:
-                    logger.warning(
-                        "manual news run: fetch FAILED for %s (%s) in %d ms: %s",
-                        source_name,
-                        result["source_type"],
-                        result["elapsed_ms"],
-                        result["error"],
-                    )
-                    _update_source_health(
-                        source_id=result["source_id"],
-                        health_status="error",
-                        increment_fail_count=True,
-                    )
-                    continue  # no candidates to process
+                discovered_total += len(candidates)
+                _controller.mark_discovered(discovered_total)
 
-                logger.info(
-                    "manual news run: fetched %s (%s) — %d candidates, %d ms",
-                    source_name,
-                    result["source_type"],
-                    len(result["candidates"]),
-                    result["elapsed_ms"],
-                )
-
-                # ── Immediate time-filter ──────────────────────────
-                _controller.set_current_source(source_name, "time_filtering")
-                time_filtered, round_stats = _controller.filter_candidates_with_stats(
-                    request, result["candidates"],
-                )
+                time_filtered, round_stats = _controller.filter_candidates_with_stats(request, candidates)
+                # Accumulate stats across sources.
                 acc_stats.missing_published_at += round_stats.missing_published_at
                 acc_stats.before_start += round_stats.before_start
                 acc_stats.after_end += round_stats.after_end
                 acc_stats.matched += round_stats.matched
                 acc_stats.included_without_date += round_stats.included_without_date
-
-                discovered_total += len(result["candidates"])
-                _controller.mark_discovered(discovered_total)
                 _controller.set_time_filter_stats(
                     missing_pub=acc_stats.missing_published_at,
                     before=acc_stats.before_start,
@@ -912,53 +580,25 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
                     included_without_date=acc_stats.included_without_date,
                 )
 
-                if not time_filtered:
-                    logger.debug(
-                        "manual news run: %s — all %d candidates filtered out by time window",
-                        source_name,
-                        len(result["candidates"]),
-                    )
-                    continue
+                limited_candidates = _controller.limit_candidates_per_source(
+                    time_filtered,
+                    scorer=candidate_scorer,
+                )
+                new_items = [c for c in limited_candidates if c.url not in seen_urls]
+                for c in new_items:
+                    seen_urls.add(c.url)
+                all_candidates.extend(new_items)
+                new_in_round += len(new_items)
+                _controller.mark_queued(len(all_candidates))
 
-                # ── Queue immediately or dispatch to LLM scoring ───
-                if len(time_filtered) > MAX_CANDIDATES_PER_SOURCE_PER_ROUND:
-                    # Submit to scoring executor (runs in parallel with
-                    # remaining fetches, limited by max_workers).
-                    scoring_futures.append(
-                        score_executor.submit(_score_one, result, time_filtered)
-                    )
-                else:
-                    limited = _controller.limit_candidates_per_source(time_filtered)
-                    _queue_candidates(limited, source_name, len(time_filtered))
-
-        # ── Wait for remaining LLM scoring tasks ────────────────────
-        for future in as_completed(scoring_futures):
-            if _controller.should_stop():
-                for f in scoring_futures:
-                    f.cancel()
-                score_executor.shutdown(wait=False)
-                _controller.complete(state="stopped")
-                return
-            try:
-                result, limited = future.result()
-            except Exception:
-                logger.exception("LLM scoring task failed unexpectedly")
-                continue
-            _queue_candidates(limited, result["source_name"], len(limited))
-
-        score_executor.shutdown(wait=True)
-
-        _controller.set_current_source(None, "queued")
-        round_elapsed = int((time_module.monotonic() - round_t0) * 1000)
-        logger.info(
-            "manual news run: round %d collect complete — "
-            "discovered=%d, all_queued=%d, new_in_round=%d, elapsed=%d ms",
-            collection_round,
-            discovered_total,
-            len(all_candidates),
-            new_in_round,
-            round_elapsed,
-        )
+                source.health_status = "ok"
+                collect_session.commit()
+        except Exception as exc:
+            logger.exception("manual news run collection failed")
+            _controller.complete(state="failed", error=str(exc))
+            return
+        finally:
+            collect_session.close()
 
         # --- Determine unprocessed candidates (newest first) ---
         unprocessed = [
@@ -974,9 +614,8 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
             logger.info("manual news run: no unprocessed candidates, round=%d", collection_round)
             break
 
-        # --- Process (serial, by design) ---
+        # --- Process ---
         _controller.mark_processing()
-        _controller.set_current_source(None, "processing")
 
         process_session = SessionLocal()
         try:
@@ -1000,23 +639,11 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
                     processed_urls.add(raw.url)
                     continue
 
-                _controller.set_current_source(raw.title or raw.url, "enriching")
-                t0 = time_module.monotonic()
                 saved = pipeline.process_item(source, raw)
-                elapsed = int((time_module.monotonic() - t0) * 1000)
                 processed_total += 1
                 processed_urls.add(raw.url)
                 if saved:
                     saved_total += 1
-                    logger.info(
-                        "manual news run: SAVED  %s (%s) — %d ms",
-                        raw.title, raw.url, elapsed,
-                    )
-                else:
-                    logger.debug(
-                        "manual news run: skipped %s (%s) — %d ms",
-                        raw.title, raw.url, elapsed,
-                    )
                 _controller.mark_processed(processed_total)
                 _controller.mark_saved(saved_total)
                 source.health_status = "ok"
@@ -1047,7 +674,6 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
             break
 
     # ── Finalise ──────────────────────────────────────────────────
-    _controller.set_current_source(None, None)
     fulfilled = saved_total >= request.target_count
     _controller.set_fulfilled(fulfilled)
 
@@ -1066,6 +692,8 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
         _controller.set_gap_reason(None)
     else:
         shortage = request.target_count - saved_total
+        # Build a time-filter summary so users can see *why* candidates
+        # were discarded.
         filter_detail_parts = [
             f"发现 {discovered_total} 条",
             f"时间命中 {acc_stats.matched} 条",
