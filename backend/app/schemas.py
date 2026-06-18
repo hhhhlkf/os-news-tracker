@@ -116,3 +116,6 @@ class ManualNewsRunStatus(BaseModel):
     finished_at: datetime | None = None
     last_error: str | None = None
     time_filter_stats: TimeFilterStats | None = None
+    # V2 observability: which source is currently being worked on, and at which stage.
+    current_source_name: str | None = None
+    current_stage: str | None = None

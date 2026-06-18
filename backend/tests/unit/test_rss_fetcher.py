@@ -108,3 +108,111 @@ def test_parse_date_from_struct():
     assert result.month == 7
     assert result.day == 4
     assert result.hour == 15
+
+
+# ── Timeout / HTTP fetch path ─────────────────────────────────────────
+
+
+def test_rss_fetcher_uses_timeout_http_path_for_http_urls(monkeypatch):
+    """RSS fetcher calls _fetch_feed_content for HTTP URLs (not raw feedparser)."""
+    from unittest.mock import patch
+
+    feed_xml = """<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Test Feed</title>
+    <item>
+      <title>Test Entry</title>
+      <link>https://example.com/1</link>
+      <pubDate>Wed, 10 Jun 2026 12:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>"""
+
+    from app.config import get_settings
+    get_settings.cache_clear()
+
+    from app.enums import SourceType
+    from app.fetchers.rss import RssFetcher
+    from app.models import Source
+
+    fetch_calls = []
+
+    def fake_fetch(url, timeout, user_agent):
+        fetch_calls.append((url, timeout, user_agent))
+        return feed_xml
+
+    with patch("app.fetchers.rss._fetch_feed_content", fake_fetch):
+        src = Source(
+            id=1,
+            name="TestFeed",
+            type=SourceType.RSS,
+            url="https://example.com/feed.xml",
+        )
+        fetcher = RssFetcher()
+        items = fetcher.fetch(src)
+
+    assert len(items) == 1
+    assert items[0].title == "Test Entry"
+    assert len(fetch_calls) == 1
+    # First call: timeout should come from settings.
+    assert fetch_calls[0][0] == "https://example.com/feed.xml"
+    assert fetch_calls[0][1] == 20.0  # default fetch_timeout_seconds
+
+
+def test_rss_fetcher_still_handles_file_urls():
+    """file:// URLs bypass httpx and go straight to feedparser."""
+    import os
+    from app.enums import SourceType
+    from app.fetchers.rss import RssFetcher
+    from app.models import Source
+
+    # Use the existing fixture.
+    fixtures_dir = os.path.join(os.path.dirname(__file__), "..", "fixtures")
+    path = os.path.join(fixtures_dir, "sample_feed.xml")
+    src = Source(id=1, name="Local", type=SourceType.RSS, url=f"file://{path}")
+    fetcher = RssFetcher()
+    items = fetcher.fetch(src)
+
+    assert len(items) == 2
+    assert items[0].title == "Linux 6.9 Released"
+
+
+def test_fetch_feed_content_uses_timeout(monkeypatch):
+    """_fetch_feed_content passes the configured timeout to httpx.Client."""
+    from unittest.mock import MagicMock, patch
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = "<rss/>"
+    mock_response.raise_for_status = MagicMock()
+    mock_client_instance = MagicMock()
+    mock_client_instance.get.return_value = mock_response
+    mock_client_instance.__enter__ = MagicMock(return_value=mock_client_instance)
+    mock_client_instance.__exit__ = MagicMock(return_value=None)
+    mock_client.return_value = mock_client_instance
+
+    with patch("httpx.Client", mock_client):
+        from app.fetchers.rss import _fetch_feed_content
+
+        result = _fetch_feed_content(
+            "https://example.com/feed", timeout=15.5, user_agent="test/1.0",
+        )
+
+    assert result == "<rss/>"
+    # Verify timeout was passed to Client constructor.
+    mock_client.assert_called_once_with(timeout=15.5)
+    # Verify User-Agent header was set.
+    call_kwargs = mock_client_instance.get.call_args
+    assert call_kwargs is not None
+    assert call_kwargs[1]["headers"]["User-Agent"] == "test/1.0"
+
+
+def test_fetch_feed_content_returns_none_for_file_urls():
+    """_fetch_feed_content returns None for file:// URLs."""
+    from app.fetchers.rss import _fetch_feed_content
+
+    result = _fetch_feed_content(
+        "file:///tmp/test.xml", timeout=10, user_agent="test",
+    )
+    assert result is None

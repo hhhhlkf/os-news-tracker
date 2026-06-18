@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     search_provider: str = "none"
     fetch_user_agent: str = "os-news-tracker/0.1 (+internal)"
     fetch_per_host_delay_seconds: float = 2.0
+    fetch_timeout_seconds: float = 20.0
+    manual_fetch_max_workers: int = 4
     missing_date_policy: str = "include_as_now"
 
 

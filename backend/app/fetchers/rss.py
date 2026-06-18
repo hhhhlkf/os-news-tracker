@@ -12,6 +12,27 @@ from app.schemas import RawItem
 logger = logging.getLogger(__name__)
 
 
+def _fetch_feed_content(url: str, timeout: float, user_agent: str) -> str | None:
+    """Fetch raw feed content via HTTP with an explicit timeout.
+
+    Returns the response body as a string, or ``None`` for ``file://``
+    URLs (which feedparser handles natively).
+    """
+    if url.startswith("file://"):
+        return None
+
+    import httpx
+
+    with httpx.Client(timeout=timeout) as client:
+        resp = client.get(
+            url,
+            headers={"User-Agent": user_agent},
+            follow_redirects=True,
+        )
+        resp.raise_for_status()
+        return resp.text
+
+
 def _parse_date_from_struct(parsed_struct) -> datetime | None:
     """Convert a feedparser ``*_parsed`` struct_time to a UTC datetime."""
     try:
@@ -30,7 +51,18 @@ def _make_aware_utc(dt: datetime) -> datetime:
 
 class RssFetcher(Fetcher):
     def fetch(self, source: Source) -> list[RawItem]:
-        parsed = feedparser.parse(source.url)
+        from app.config import get_settings
+
+        settings = get_settings()
+        timeout = settings.fetch_timeout_seconds
+        user_agent = settings.fetch_user_agent
+
+        content = _fetch_feed_content(source.url, timeout=timeout, user_agent=user_agent)
+        if content is not None:
+            parsed = feedparser.parse(content)
+        else:
+            parsed = feedparser.parse(source.url)
+
         items: list[RawItem] = []
 
         # Feed-level date as ultimate fallback (low confidence).
