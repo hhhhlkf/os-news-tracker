@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -5,8 +7,8 @@ from app.api.auth_routes import router as auth_router
 from app.api.routes import router
 
 
-def create_app() -> FastAPI:
-    app = FastAPI(title="OS News Tracker")
+def create_app(*, lifespan: Any = None) -> FastAPI:
+    app = FastAPI(title="OS News Tracker", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

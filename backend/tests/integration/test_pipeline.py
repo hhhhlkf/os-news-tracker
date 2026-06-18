@@ -89,7 +89,7 @@ def test_pipeline_blocks_internal_ai_category_for_non_internal_sources(session):
 
     assert pipeline.run_source(src, fetcher=_StubFetcher()) == 1
 
-    stored = session.query(Source).get(1).items[0]
+    stored = session.get(Source, 1).items[0]
     assert stored.main_category == "OS性能发展"
 
 
@@ -153,7 +153,7 @@ def test_pipeline_applies_relevance_filter_when_enabled(session, monkeypatch):
     pipeline = Pipeline(session=session, extractor=_StubExtractor(), enricher=_StubEnricher())
 
     assert pipeline.run_source(src, fetcher=_StubFetcher()) == 0
-    assert session.query(Source).get(1).items == []
+    assert session.get(Source, 1).items == []
 
 
 class _RejectingEnricher:
@@ -187,7 +187,7 @@ def test_pipeline_skips_non_newsworthy_items_rejected_by_enricher(session):
     pipeline = Pipeline(session=session, extractor=_StubExtractor(), enricher=_RejectingEnricher())
 
     assert pipeline.run_source(src, fetcher=_StubFetcher()) == 0
-    assert session.query(Source).get(1).items == []
+    assert session.get(Source, 1).items == []
 
 
 def test_pipeline_skips_bot_challenge_pages_before_enrichment(session):
@@ -222,4 +222,4 @@ def test_pipeline_skips_bot_challenge_pages_before_enrichment(session):
 
     assert pipeline.run_source(src, fetcher=_ChallengeFetcher()) == 0
     assert enricher.calls == 0
-    assert session.query(Source).get(1).items == []
+    assert session.get(Source, 1).items == []

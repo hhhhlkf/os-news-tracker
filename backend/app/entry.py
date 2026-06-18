@@ -1,13 +1,16 @@
+from contextlib import asynccontextmanager
 import logging
 import os
 import threading
+
+from fastapi import FastAPI
+
 from app.api.main import create_app
 from app.db import engine, SessionLocal
 from app.models import Base
 from app.sources.registry import seed_sources_from_yaml
 
 logging.basicConfig(level=logging.INFO)
-app = create_app()
 
 
 def _env_flag(name: str, default: str) -> bool:
@@ -20,8 +23,7 @@ def _start_background_task(target, *, name: str) -> threading.Thread:
     return thread
 
 
-@app.on_event("startup")
-def _startup():
+def _startup(app: FastAPI) -> None:
     Base.metadata.create_all(engine)
     seed_path = os.path.join(os.path.dirname(__file__), "sources", "seed_sources.yaml")
     session = SessionLocal()
@@ -38,3 +40,12 @@ def _startup():
                 run_startup_backfill,
                 name="startup-backfill",
             )
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    _startup(app)
+    yield
+
+
+app = create_app(lifespan=_lifespan)
