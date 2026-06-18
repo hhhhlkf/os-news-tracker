@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import type { NewsRunLogEntry } from "../types";
 
 interface Props {
@@ -30,6 +32,7 @@ function compactFields(log: NewsRunLogEntry) {
 }
 
 export function NewsRunLogPanel({ logs, isLoading = false }: Props) {
+  const [expanded, setExpanded] = useState(false);
   const visibleLogs = logs.slice(-80).reverse();
   return (
     <section
@@ -44,15 +47,32 @@ export function NewsRunLogPanel({ logs, isLoading = false }: Props) {
     >
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: "#f8fafc" }}>运行日志</div>
-        <div style={{ fontSize: 12, color: "#98a2b3" }}>
-          {isLoading ? "加载中" : `${logs.length} 条`}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ fontSize: 12, color: "#98a2b3" }}>
+            {isLoading ? "加载中" : `${logs.length} 条`}
+          </div>
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            style={{
+              border: "1px solid #344054",
+              borderRadius: 6,
+              background: expanded ? "#1d2939" : "transparent",
+              color: "#d0d5dd",
+              cursor: "pointer",
+              fontSize: 12,
+              padding: "4px 8px",
+            }}
+          >
+            {expanded ? "收起" : "展开"}
+          </button>
         </div>
       </div>
       <div
         style={{
           display: "grid",
           gap: 8,
-          maxHeight: 300,
+          maxHeight: expanded ? "70vh" : 300,
           overflowY: "auto",
           fontFamily: "JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace",
           fontSize: 12,
