@@ -2,14 +2,14 @@ from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.deps import get_db
 from app.api.main import create_app
 from app.enums import Importance, InfoType, SourceType
-from app.models import Base, Source
+from app.models import Base, Source, Tag, TagAlias
 from app.repository import Repository
 from app.schemas import EnrichedFields, ManualNewsRunStatus, NormalizedItem
 
@@ -116,6 +116,21 @@ def client():
     ]
     for ni, ef in items_data:
         repo.save_enriched(ni, ef)
+    kernel_tag = seed.scalar(select(Tag).where(Tag.name == "kernel", Tag.kind == "sub_tag"))
+    parent_tag = Tag(name="Linux Kernel", kind="sub_tag")
+    seed.add(parent_tag)
+    seed.flush()
+    seed.add(
+        TagAlias(
+            child_tag_id=kernel_tag.id,
+            parent_tag_id=parent_tag.id,
+            status="approved",
+            source="llm",
+            confidence=0.9,
+            reason="Linux Kernel is the canonical parent",
+        )
+    )
+    seed.commit()
 
     seed.close()
 
@@ -148,7 +163,7 @@ def test_filter_by_main_category(client):
 def test_facets_endpoint(client):
     facets = client.get("/facets").json()
     assert "OS性能发展" in [f["value"] for f in facets["main_category"]]
-    assert "kernel" in [f["value"] for f in facets["sub_tags"]]
+    assert "Linux Kernel" in [f["value"] for f in facets["sub_tags"]]
 
 
 def test_item_detail(client):
@@ -156,11 +171,11 @@ def test_item_detail(client):
     detail = client.get(f"/items/{item_id}").json()
     assert detail["summary"] == "sa"
     assert detail["key_points"][0] == "[内核] pa"
-    assert detail["sub_tags"] == ["kernel"]
+    assert detail["sub_tags"] == ["Linux Kernel"]
 
 
-def test_filter_by_sub_tag(client):
-    resp = client.get("/items?sub_tag=kernel")
+def test_filter_by_sub_tag_uses_canonical_parent_tag(client):
+    resp = client.get("/items?sub_tag=Linux%20Kernel")
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] == 1

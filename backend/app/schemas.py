@@ -20,6 +20,14 @@ class ExtractedDoc(BaseModel):
     published_at: datetime | None = None
 
 
+class TagMergeSuggestion(BaseModel):
+    child_tag_id: int
+    parent_tag_id: int | None = None
+    parent_tag_name: str
+    reason: str | None = None
+    confidence: float = 0.0
+
+
 class EnrichedFields(BaseModel):
     title_zh: str
     summary: str
@@ -29,9 +37,11 @@ class EnrichedFields(BaseModel):
     main_category: str
     sub_tags: list[str] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
+    merge_suggestions: list[TagMergeSuggestion] = Field(default_factory=list)
     confidence: float = 0.0
     should_store: bool = True
     reject_reason: str | None = None
+
 
 
 class NormalizedItem(BaseModel):

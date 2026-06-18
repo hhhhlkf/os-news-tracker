@@ -2,7 +2,7 @@ import uuid as _uuid
 from datetime import datetime
 from typing import Any
 from sqlalchemy import (
-    String, Text, Integer, DateTime, ForeignKey, Float, JSON, UniqueConstraint, func,
+    String, Text, Integer, DateTime, ForeignKey, Float, JSON, UniqueConstraint, CheckConstraint, func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -44,6 +44,23 @@ class Tag(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(200))
     kind: Mapped[str] = mapped_column(String(20))
+
+
+class TagAlias(Base):
+    __tablename__ = "tag_aliases"
+    __table_args__ = (
+        UniqueConstraint("child_tag_id", name="uq_tag_alias_child"),
+        CheckConstraint("child_tag_id != parent_tag_id", name="ck_tag_alias_not_self"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    child_tag_id: Mapped[int] = mapped_column(ForeignKey("tags.id"), index=True)
+    parent_tag_id: Mapped[int] = mapped_column(ForeignKey("tags.id"), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="approved", index=True)
+    source: Mapped[str] = mapped_column(String(20), default="llm")
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
 class Entity(Base):

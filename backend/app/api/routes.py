@@ -11,7 +11,7 @@ from app.manual_news_run import (
     start_manual_news_run,
     stop_manual_news_run,
 )
-from app.models import Item, ItemSource, ItemTag, Tag
+from app.models import Item, ItemSource, ItemTag, Tag, TagAlias
 from app.schemas import ManualNewsRunRequest
 
 router = APIRouter()
@@ -32,6 +32,43 @@ def _item_summary(item: Item) -> dict:
         "fetched_at": item.fetched_at.isoformat() if item.fetched_at else None,
         "url": item.url,
     }
+
+
+def _approved_parent_map(db: Session) -> dict[int, int]:
+    aliases = db.scalars(select(TagAlias).where(TagAlias.status == "approved")).all()
+    return {alias.child_tag_id: alias.parent_tag_id for alias in aliases}
+
+
+def _find_root_tag_id(tag_id: int, parent_by_child: dict[int, int]) -> int:
+    seen: set[int] = set()
+    current = tag_id
+    while current in parent_by_child and current not in seen:
+        seen.add(current)
+        current = parent_by_child[current]
+    return current
+
+
+def _sub_tag_root_name(tag: Tag, parent_by_child: dict[int, int], tags_by_id: dict[int, Tag]) -> str:
+    root_id = _find_root_tag_id(tag.id, parent_by_child)
+    return tags_by_id.get(root_id, tag).name
+
+
+def _tag_ids_for_root_name(db: Session, name: str) -> list[int]:
+    tags = db.scalars(select(Tag).where(Tag.kind == "sub_tag")).all()
+    tags_by_id = {tag.id: tag for tag in tags}
+    parent_by_child = _approved_parent_map(db)
+    root_ids = {
+        tag.id
+        for tag in tags
+        if _sub_tag_root_name(tag, parent_by_child, tags_by_id) == name
+    }
+    if not root_ids:
+        return []
+    return [
+        tag.id
+        for tag in tags
+        if _find_root_tag_id(tag.id, parent_by_child) in root_ids
+    ]
 
 
 @router.get("/items")
@@ -57,11 +94,11 @@ def list_items(
     if importance:
         stmt = stmt.where(Item.importance == importance)
     if sub_tag:
+        tag_ids = _tag_ids_for_root_name(db, sub_tag)
         stmt = stmt.where(
             Item.id.in_(
                 select(ItemTag.item_id)
-                .join(Tag, Tag.id == ItemTag.tag_id)
-                .where(Tag.name == sub_tag, Tag.kind == "sub_tag")
+                .where(ItemTag.tag_id.in_(tag_ids))
             )
         )
     if q:
@@ -103,14 +140,25 @@ def facets(db: Session = Depends(get_db)):
         rows = db.execute(select(column, func.count()).group_by(column)).all()
         return [{"value": value, "count": count} for value, count in rows if value is not None]
 
-    sub_tag_rows = db.execute(
-        select(Tag.name, func.count(func.distinct(ItemTag.item_id)))
+    parent_by_child = _approved_parent_map(db)
+    tags_by_id = {tag.id: tag for tag in db.scalars(select(Tag)).all()}
+    raw_sub_tag_rows = db.execute(
+        select(Tag.id, Tag.name, func.count(func.distinct(ItemTag.item_id)))
         .join(ItemTag, Tag.id == ItemTag.tag_id)
         .where(Tag.kind == "sub_tag")
-        .group_by(Tag.name)
+        .group_by(Tag.id, Tag.name)
         .order_by(func.count(func.distinct(ItemTag.item_id)).desc())
-        .limit(30)
     ).all()
+    sub_tag_counts: dict[str, int] = {}
+    for tag_id, name, count in raw_sub_tag_rows:
+        tag = tags_by_id.get(tag_id)
+        root_name = _sub_tag_root_name(tag, parent_by_child, tags_by_id) if tag else name
+        sub_tag_counts[root_name] = sub_tag_counts.get(root_name, 0) + count
+    sub_tag_rows = sorted(
+        sub_tag_counts.items(),
+        key=lambda row: row[1],
+        reverse=True,
+    )[:30]
 
     return {
         "main_category": _counts(Item.main_category),
@@ -137,13 +185,22 @@ def item_detail(item_id: int, db: Session = Depends(get_db)):
         if key not in seen:
             seen.add(key)
             unique_links.append({"source_id": src.source_id, "url": src.url})
+    parent_by_child = _approved_parent_map(db)
+    tags_by_id = {tag.id: tag for tag in db.scalars(select(Tag)).all()}
+    sub_tags = list(
+        dict.fromkeys(
+            _sub_tag_root_name(tag, parent_by_child, tags_by_id)
+            for tag in item.tags
+            if tag.kind == "sub_tag"
+        )
+    )
     return {
         **_item_summary(item),
         "summary": item.summary,
         "key_points": item.key_points or [],
         "why_it_matters": item.why_it_matters,
         "llm_confidence": item.llm_confidence,
-        "sub_tags": [tag.name for tag in item.tags if tag.kind == "sub_tag"],
+        "sub_tags": sub_tags,
         "entities": [{"type": entity.type, "name": entity.name} for entity in item.entities],
         "source_links": unique_links,
     }

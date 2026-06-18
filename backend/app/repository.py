@@ -2,7 +2,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.enums import ItemStatus, TagKind
-from app.models import Entity, Item, ItemSource, Tag
+from app.models import Entity, Item, ItemSource, ItemTag, Tag, TagAlias
 from app.processing.dedup import content_hash, url_hash
 from app.schemas import EnrichedFields, NormalizedItem
 
@@ -19,6 +19,20 @@ class Repository:
 
     def count_items(self) -> int:
         return self._s.scalar(select(func.count(Item.id))) or 0
+
+    def list_existing_sub_tags(self, *, limit: int = 100) -> list[dict]:
+        rows = self._s.execute(
+            select(Tag.id, Tag.name, func.count(ItemTag.item_id).label("usage_count"))
+            .outerjoin(ItemTag, Tag.id == ItemTag.tag_id)
+            .where(Tag.kind == TagKind.SUB_TAG)
+            .group_by(Tag.id, Tag.name)
+            .order_by(func.count(ItemTag.item_id).desc(), Tag.name.asc())
+            .limit(limit)
+        ).all()
+        return [
+            {"id": tag_id, "name": name, "usage_count": usage_count}
+            for tag_id, name, usage_count in rows
+        ]
 
     def _get_or_create_tag(self, name: str, kind: str) -> Tag:
         tag = self._s.scalar(select(Tag).where(Tag.name == name, Tag.kind == kind))
@@ -52,6 +66,64 @@ class Repository:
         max_sub_tags = MAX_TAGS_PER_ITEM - 1  # reserve one tag for main_category
         return list(dict.fromkeys(fields.sub_tags))[:max_sub_tags]
 
+    def _record_tag_alias_suggestions(self, fields: EnrichedFields) -> None:
+        for suggestion in fields.merge_suggestions:
+            child_tag_id = (
+                suggestion.get("child_tag_id")
+                if isinstance(suggestion, dict)
+                else suggestion.child_tag_id
+            )
+            parent_tag_id = (
+                suggestion.get("parent_tag_id")
+                if isinstance(suggestion, dict)
+                else suggestion.parent_tag_id
+            )
+            parent_tag_name = (
+                suggestion.get("parent_tag_name")
+                if isinstance(suggestion, dict)
+                else suggestion.parent_tag_name
+            )
+            reason = suggestion.get("reason") if isinstance(suggestion, dict) else suggestion.reason
+            confidence = (
+                suggestion.get("confidence")
+                if isinstance(suggestion, dict)
+                else suggestion.confidence
+            )
+            child = self._s.get(Tag, child_tag_id)
+            if child is None or child.kind != TagKind.SUB_TAG:
+                continue
+            parent = (
+                self._s.get(Tag, parent_tag_id)
+                if parent_tag_id is not None
+                else None
+            )
+            if parent is None:
+                parent = self._get_or_create_tag(parent_tag_name, TagKind.SUB_TAG)
+                if parent.id is None:
+                    self._s.flush()
+            if parent.id == child.id:
+                continue
+            existing = self._s.scalar(
+                select(TagAlias).where(TagAlias.child_tag_id == child.id)
+            )
+            if existing is None:
+                self._s.add(
+                    TagAlias(
+                        child_tag_id=child.id,
+                        parent_tag_id=parent.id,
+                        status="approved",
+                        source="llm",
+                        confidence=confidence,
+                        reason=reason,
+                    )
+                )
+            else:
+                existing.parent_tag_id = parent.id
+                existing.status = "approved"
+                existing.source = "llm"
+                existing.confidence = confidence
+                existing.reason = reason
+
     def save_enriched(self, item: NormalizedItem, fields: EnrichedFields) -> Item:
         sub_tags = self._select_sub_tags(fields)
         db_item = Item(
@@ -77,6 +149,7 @@ class Repository:
         db_item.tags.append(self._get_or_create_tag(fields.main_category, TagKind.MAIN_CATEGORY))
         self._s.add(db_item)
         self._s.flush()
+        self._record_tag_alias_suggestions(fields)
         self._add_source_link_if_new(db_item.id, item.source_id, item.canonical_url)
         self._s.commit()
         return db_item

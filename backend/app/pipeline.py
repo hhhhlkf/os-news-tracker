@@ -104,7 +104,13 @@ class Pipeline:
                 )
                 return False
         try:
-            fields = self._enricher.enrich(normalized)
+            try:
+                fields = self._enricher.enrich(
+                    normalized,
+                    existing_tags=self._repo.list_existing_sub_tags(),
+                )
+            except TypeError:
+                fields = self._enricher.enrich(normalized)
         except Exception:
             logger.exception("enrich failed for %s", normalized.canonical_url)
             return False

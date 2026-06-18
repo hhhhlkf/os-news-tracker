@@ -29,6 +29,7 @@ _PROMPT_TEMPLATE = """你是操作系统维护工程师的关键技术新闻与�
 - confidence: 0~1 的浮点，表示你对归类与摘要的把握
 - should_store: 布尔值。若页面不是新闻/热点/技术更新，或信息不足，则必须为 false
 - reject_reason: 当 should_store=false 时必填，简要说明拒收原因；当 should_store=true 时可为 null
+- merge_suggestions: 标签合并建议数组；如果当前 tag 更通用，可以建议把已有旧 tag 合并到当前 tag
 
 标签聚合规则：
 - sub_tags 控制在 2-4 个，优先选择能跨多篇文章复用的 canonical 名称；每条最终最多保留 5 个标签（含 main_category），把一次性细节放入 keywords。
@@ -37,6 +38,13 @@ _PROMPT_TEMPLATE = """你是操作系统维护工程师的关键技术新闻与�
 - 不要把完整版本号、补丁号、CVE 编号、公告编号、日期、URL 片段、过长短语放入 sub_tags；这些细节放入 keywords。
 - 避免近义重复：同一篇文章不要同时输出 openEuler 和 欧拉、Linux Kernel 和 kernel、RPM 和 rpm package。
 - keywords 可以保留更细的原文术语、版本、包名组合和 CVE 编号，但仍应去重，避免同义写法重复。
+- existing_tags 是数据库中已有标签，格式为 {{"id": 数字, "name": 标签名, "usage_count": 使用次数}}；优先复用 existing_tags 中适合描述当前文章的标签。
+- 如果 existing_tags 里没有合适标签，才创建新的 sub_tags。
+- 如果当前新增或选用的 tag 比已有旧 tag 更通用，可以输出 merge_suggestions；系统会默认 approved 写入 tag_aliases 表。
+- merge_suggestions 格式：{{"child_tag_id": 旧标签id, "parent_tag_id": 可选父标签id, "parent_tag_name": "父标签名", "reason": "原因", "confidence": 0.0-1.0}}。
+
+已有标签 existing_tags：
+{existing_tags}
 
 标题：{title}
 正文：
@@ -60,9 +68,10 @@ class Enricher:
     def __init__(self, llm: LlmClient | None = None):
         self._llm = llm or LlmClient()
 
-    def enrich(self, item: NormalizedItem) -> EnrichedFields:
+    def enrich(self, item: NormalizedItem, *, existing_tags: list[dict] | None = None) -> EnrichedFields:
         prompt = _PROMPT_TEMPLATE.format(
             categories=", ".join(MAIN_CATEGORIES),
+            existing_tags=json.dumps(existing_tags or [], ensure_ascii=False),
             title=item.title,
             content=item.clean_content[:6000],
         )

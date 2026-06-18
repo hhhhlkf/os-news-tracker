@@ -119,6 +119,38 @@ def test_enricher_prompt_requires_aggregated_tagging_rules():
     assert "同义写法" in prompt
 
 
+def test_enricher_prompt_includes_existing_tags_and_merge_suggestions():
+    prompts_sent: list[str] = []
+
+    class _CaptureLlm:
+        def complete(self, prompt, **kw):
+            prompts_sent.append(prompt)
+            return _valid_payload()
+
+    n = NormalizedItem(
+        source_id=1,
+        title="openEuler kernel update",
+        url="https://x/a",
+        canonical_url="https://x/a",
+        clean_content="body",
+    )
+    Enricher(llm=_CaptureLlm()).enrich(
+        n,
+        existing_tags=[
+            {"id": 1, "name": "kernel", "usage_count": 12},
+            {"id": 2, "name": "Linux Kernel", "usage_count": 4},
+        ],
+    )
+    prompt = prompts_sent[0]
+    assert '"id": 1' in prompt
+    assert '"name": "kernel"' in prompt
+    assert "优先复用 existing_tags" in prompt
+    assert "merge_suggestions" in prompt
+    assert "child_tag_id" in prompt
+    assert "parent_tag_name" in prompt
+    assert "默认 approved" in prompt
+
+
 def test_enricher_prompt_requires_key_technology_news_filtering():
     prompts_sent: list[str] = []
 

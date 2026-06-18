@@ -1,9 +1,10 @@
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from app.enums import Importance, InfoType, SourceType
-from app.models import Base, Source
+from app.models import Base, Source, Tag, TagAlias
 from app.repository import Repository
 from app.schemas import EnrichedFields, NormalizedItem
 
@@ -69,6 +70,37 @@ def test_save_new_item_limits_total_tags_to_five(session):
         "RPM",
         "OS性能发展",
     }
+
+
+def test_save_new_item_records_approved_tag_alias_suggestions(session):
+    repo = Repository(session)
+    old_tag = Tag(name="kernel", kind="sub_tag")
+    session.add(old_tag)
+    session.commit()
+    fields = _fields()
+    fields.sub_tags = ["Linux Kernel"]
+    fields.merge_suggestions = [
+        {
+            "child_tag_id": old_tag.id,
+            "parent_tag_name": "Linux Kernel",
+            "reason": "Linux Kernel is the canonical parent",
+            "confidence": 0.93,
+        }
+    ]
+
+    item = repo.save_enriched(_norm(), fields)
+
+    parent_tag = session.scalar(
+        select(Tag).where(Tag.name == "Linux Kernel", Tag.kind == "sub_tag")
+    )
+    alias = session.scalar(select(TagAlias).where(TagAlias.child_tag_id == old_tag.id))
+    assert parent_tag is not None
+    assert alias is not None
+    assert alias.parent_tag_id == parent_tag.id
+    assert alias.status == "approved"
+    assert alias.source == "llm"
+    assert alias.confidence == 0.93
+    assert {tag.name for tag in item.tags} == {"Linux Kernel", "OS性能发展"}
 
 
 def test_duplicate_canonical_url_merges_source_not_duplicate(session):
