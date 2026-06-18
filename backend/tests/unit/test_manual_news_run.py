@@ -497,6 +497,35 @@ def test_ledger_fulfillment_depends_only_on_saved_count():
     assert counts.saved < 30
 
 
+def test_ledger_is_safe_for_concurrent_updates():
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.manual_news_run import CandidateRunLedger
+
+    ledger = CandidateRunLedger()
+
+    def _worker(start: int) -> None:
+        for idx in range(start, start + 25):
+            url = f"https://x/{idx}"
+            ledger.mark_discovered(1)
+            ledger.add_queued(url)
+            ledger.mark_processing(url)
+            if idx % 2 == 0:
+                ledger.mark_saved(url)
+            else:
+                ledger.mark_rejected(url)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        list(executor.map(_worker, [0, 25, 50, 75]))
+
+    counts = ledger.counts()
+
+    assert counts.discovered == 100
+    assert counts.queued == 100
+    assert counts.processed == 100
+    assert counts.saved == 50
+
+
 # ── Fulfilment ──────────────────────────────────────────────────────
 
 

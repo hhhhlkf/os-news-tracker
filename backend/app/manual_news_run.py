@@ -3,12 +3,13 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from threading import Lock
+from queue import Queue
+from threading import Event, Lock
 import json
 import logging
 import re
 import threading
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.enums import MissingDatePolicy
 from app.run_logs import append_run_log, clear_run_logs
@@ -266,19 +267,23 @@ class CandidateRunLedger:
     def __init__(self) -> None:
         self._discovered = 0
         self._by_url: dict[str, str] = {}
+        self._lock = Lock()
 
     def mark_discovered(self, count: int) -> None:
-        self._discovered += count
+        with self._lock:
+            self._discovered += count
 
     def add_queued(self, url: str) -> bool:
-        if url in self._by_url:
-            return False
-        self._by_url[url] = "queued"
-        return True
+        with self._lock:
+            if url in self._by_url:
+                return False
+            self._by_url[url] = "queued"
+            return True
 
     def mark_processing(self, url: str) -> None:
-        if url in self._by_url:
-            self._by_url[url] = "processing"
+        with self._lock:
+            if url in self._by_url:
+                self._by_url[url] = "processing"
 
     def mark_saved(self, url: str) -> None:
         self._mark_terminal(url, "saved")
@@ -293,19 +298,21 @@ class CandidateRunLedger:
         self._mark_terminal(url, "failed")
 
     def _mark_terminal(self, url: str, status: str) -> None:
-        if url in self._by_url:
-            self._by_url[url] = status
+        with self._lock:
+            if url in self._by_url:
+                self._by_url[url] = status
 
     def counts(self) -> CandidateRunCounts:
-        statuses = self._by_url.values()
-        terminal = sum(1 for status in statuses if status in self._TERMINAL_STATUSES)
-        saved = sum(1 for status in self._by_url.values() if status == "saved")
-        return CandidateRunCounts(
-            discovered=self._discovered,
-            queued=sum(1 for status in self._by_url.values() if status in self._ACTIVE_STATUSES),
-            processed=terminal,
-            saved=saved,
-        )
+        with self._lock:
+            statuses = list(self._by_url.values())
+            terminal = sum(1 for status in statuses if status in self._TERMINAL_STATUSES)
+            saved = sum(1 for status in statuses if status == "saved")
+            return CandidateRunCounts(
+                discovered=self._discovered,
+                queued=sum(1 for status in statuses if status in self._ACTIVE_STATUSES),
+                processed=terminal,
+                saved=saved,
+            )
 
 
 @dataclass
@@ -724,11 +731,7 @@ def _fetch_source_for_manual_run(source_id: int) -> dict:
 
 
 def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
-    """Target-driven news collection loop.
-
-    Repeatedly collects candidates then processes them until
-    ``saved_count >= target_count`` or no more candidates can be found.
-    """
+    """Target-driven news collection loop with a staged worker pipeline."""
     from app.config import get_settings
     from app.db import SessionLocal
     from app.enums import SourceType
@@ -746,20 +749,22 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
         time_mode=request.time_mode,
         relative_range=request.relative_range,
     )
-    logger.info(
-        "manual news run: started, target saved=%d", request.target_count,
-    )
+    logger.info("manual news run: started, target saved=%d", request.target_count)
 
-    # ── Per-run state ──────────────────────────────────────────────
-    all_candidates: list[RawItem] = []       # full candidate pool
-    seen_urls: set[str] = set()              # for URL dedup across rounds
-    processed_urls: set[str] = set()         # already fed to pipeline
     ledger = CandidateRunLedger()
-    collection_round = 0
-    # Accumulated time-filter stats across all sources / rounds.
+    seen_urls: set[str] = set()
+    seen_lock = Lock()
+    stats_lock = Lock()
     acc_stats = TimeFilterStats()
-    candidate_scorer = CandidateQualityScorer()
-    max_fetch_workers = max(1, get_settings().manual_fetch_max_workers)
+    stop_event = Event()
+    raw_result_queue: Queue[dict[str, Any] | object] = Queue()
+    candidate_queue: Queue[RawItem | object] = Queue()
+    raw_sentinel = object()
+    candidate_sentinel = object()
+
+    settings = get_settings()
+    max_fetch_workers = max(1, settings.manual_fetch_max_workers)
+    scoring_workers = max(1, settings.llm_max_concurrency)
 
     def _sync_status_from_ledger() -> CandidateRunCounts:
         counts = ledger.counts()
@@ -769,19 +774,94 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
         _controller.mark_saved(counts.saved)
         return counts
 
-    def _process_available_candidates() -> CandidateRunCounts:
-        unprocessed = [
-            c for c in all_candidates
-            if c.url not in processed_urls
-        ]
-        unprocessed.sort(
-            key=lambda item: item.published_at or datetime.min.replace(tzinfo=timezone.utc),
-            reverse=True,
-        )
-        if not unprocessed:
-            return _sync_status_from_ledger()
+    def _target_reached() -> bool:
+        return ledger.counts().saved >= request.target_count
 
-        _controller.mark_processing()
+    def _update_time_filter_stats(round_stats: TimeFilterStats) -> None:
+        with stats_lock:
+            acc_stats.missing_published_at += round_stats.missing_published_at
+            acc_stats.before_start += round_stats.before_start
+            acc_stats.after_end += round_stats.after_end
+            acc_stats.matched += round_stats.matched
+            acc_stats.included_without_date += round_stats.included_without_date
+            _controller.set_time_filter_stats(
+                missing_pub=acc_stats.missing_published_at,
+                before=acc_stats.before_start,
+                after=acc_stats.after_end,
+                matched=acc_stats.matched,
+                included_without_date=acc_stats.included_without_date,
+            )
+
+    def _candidate_worker() -> None:
+        scorer = CandidateQualityScorer()
+        while True:
+            result = raw_result_queue.get()
+            try:
+                if result is raw_sentinel:
+                    return
+                if stop_event.is_set() or _controller.should_stop():
+                    continue
+                assert isinstance(result, dict)
+                if result["error"]:
+                    logger.warning(
+                        "manual news run source failed: %s (%s)",
+                        result["source_name"],
+                        result["error"],
+                    )
+                    continue
+
+                candidates = result["candidates"]
+                ledger.mark_discovered(len(candidates))
+                _sync_status_from_ledger()
+
+                time_filtered, round_stats = _controller.filter_candidates_with_stats(request, candidates)
+                append_run_log(
+                    "time_filter",
+                    "时间过滤完成",
+                    source=result["source_name"],
+                    count=len(candidates),
+                    matched=round_stats.matched,
+                    before_start=round_stats.before_start,
+                    after_end=round_stats.after_end,
+                    missing_published_at=round_stats.missing_published_at,
+                )
+                _update_time_filter_stats(round_stats)
+
+                limited_candidates = _controller.limit_candidates_per_source(
+                    time_filtered,
+                    scorer=scorer,
+                )
+                new_items: list[RawItem] = []
+                with seen_lock:
+                    for item in limited_candidates:
+                        if item.url in seen_urls:
+                            continue
+                        seen_urls.add(item.url)
+                        if ledger.add_queued(item.url):
+                            new_items.append(item)
+
+                counts = _sync_status_from_ledger()
+                append_run_log(
+                    "queue",
+                    "候选入队完成",
+                    source=result["source_name"],
+                    count=len(new_items),
+                    queued_total=counts.queued,
+                    saved_total=counts.saved,
+                )
+                logger.info(
+                    "manual news run source queued: %s discovered=%d queued=%d saved=%d",
+                    result["source_name"],
+                    counts.discovered,
+                    counts.queued,
+                    counts.saved,
+                )
+                for item in new_items:
+                    candidate_queue.put(item)
+            finally:
+                raw_result_queue.task_done()
+
+    def _processing_worker() -> None:
         process_session = SessionLocal()
         try:
             pipeline = Pipeline(
@@ -789,68 +869,68 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
                 extractor=ScraplingExtractor(),
                 enricher=Enricher(),
             )
-
-            for raw in unprocessed:
-                if _controller.should_stop():
-                    return _sync_status_from_ledger()
-                if ledger.counts().saved >= request.target_count:
-                    break
-
-                source = process_session.get(Source, raw.source_id)
-                if source is None or not source.enabled:
-                    processed_urls.add(raw.url)
-                    ledger.mark_failed(raw.url)
-                    _sync_status_from_ledger()
-                    continue
-
-                ledger.mark_processing(raw.url)
-                _sync_status_from_ledger()
+            while True:
+                raw = candidate_queue.get()
                 try:
-                    saved = pipeline.process_item(source, raw)
-                except Exception:
-                    logger.exception("manual news run item processing failed for %s", raw.url)
-                    saved = False
-                    ledger.mark_failed(raw.url)
-                    append_run_log(
-                        "process",
-                        "候选处理失败",
-                        source=source.name,
-                        level="error",
-                        title=raw.title,
-                        url=raw.url,
-                    )
-                else:
-                    if saved:
-                        ledger.mark_saved(raw.url)
+                    if raw is candidate_sentinel:
+                        return
+                    if stop_event.is_set() or _controller.should_stop():
+                        continue
+                    if _target_reached():
+                        stop_event.set()
+                        continue
+                    assert isinstance(raw, RawItem)
+                    _controller.mark_processing()
+                    source = process_session.get(Source, raw.source_id)
+                    if source is None or not source.enabled:
+                        ledger.mark_failed(raw.url)
+                        _sync_status_from_ledger()
+                        continue
+
+                    ledger.mark_processing(raw.url)
+                    _sync_status_from_ledger()
+                    try:
+                        saved = pipeline.process_item(source, raw)
+                    except Exception:
+                        logger.exception("manual news run item processing failed for %s", raw.url)
+                        ledger.mark_failed(raw.url)
                         append_run_log(
                             "process",
-                            "候选已新增入库",
+                            "候选处理失败",
                             source=source.name,
+                            level="error",
                             title=raw.title,
                             url=raw.url,
                         )
                     else:
-                        ledger.mark_rejected(raw.url)
-                        append_run_log(
-                            "process",
-                            "候选未入库",
-                            source=source.name,
-                            title=raw.title,
-                            url=raw.url,
-                        )
-                processed_urls.add(raw.url)
-                source.health_status = "ok"
-                process_session.commit()
-                _sync_status_from_ledger()
-
-                if ledger.counts().saved >= request.target_count:
-                    break
+                        if saved:
+                            ledger.mark_saved(raw.url)
+                            append_run_log(
+                                "process",
+                                "候选已新增入库",
+                                source=source.name,
+                                title=raw.title,
+                                url=raw.url,
+                            )
+                        else:
+                            ledger.mark_rejected(raw.url)
+                            append_run_log(
+                                "process",
+                                "候选未入库",
+                                source=source.name,
+                                title=raw.title,
+                                url=raw.url,
+                            )
+                    source.health_status = "ok"
+                    process_session.commit()
+                    counts = _sync_status_from_ledger()
+                    if counts.saved >= request.target_count:
+                        stop_event.set()
+                finally:
+                    candidate_queue.task_done()
         finally:
             process_session.close()
 
-        return _sync_status_from_ledger()
-
-    # Discover sources once.
     discover_session = SessionLocal()
     try:
         all_sources = list_enabled_news_sources(discover_session)
@@ -861,138 +941,77 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
     finally:
         discover_session.close()
 
-    # ── Outer loop: collect → process → repeat if needed ──────────
-    while ledger.counts().saved < request.target_count:
-        collection_round += 1
+    candidate_workers = [
+        threading.Thread(target=_candidate_worker, name=f"manual-candidate-{idx}", daemon=True)
+        for idx in range(scoring_workers)
+    ]
+    for worker in candidate_workers:
+        worker.start()
+    processor = threading.Thread(target=_processing_worker, name="manual-processing", daemon=True)
+    processor.start()
 
-        # --- Collect ---
-        _controller.mark_collecting()
+    collection_round = 0
+    try:
+        while not stop_event.is_set() and ledger.counts().saved < request.target_count:
+            collection_round += 1
+            _controller.mark_collecting()
+            source_ids_for_round = all_source_ids if collection_round == 1 else search_source_ids
 
-        source_ids_for_round = all_source_ids if collection_round == 1 else search_source_ids
-        new_in_round = 0
+            if collection_round > _MAX_EXPANSION_ROUNDS + 1:
+                logger.info("manual news run: exceeded max collection rounds")
+                break
+            if not source_ids_for_round:
+                break
 
-        if collection_round > _MAX_EXPANSION_ROUNDS + 1:
-            logger.info("manual news run: exceeded max collection rounds")
-            break
+            queued_before = ledger.counts().queued
+            try:
+                worker_count = min(max_fetch_workers, len(source_ids_for_round)) or 1
+                with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                    futures = [
+                        executor.submit(_fetch_source_for_manual_run, source_id)
+                        for source_id in source_ids_for_round
+                    ]
+                    for future in as_completed(futures):
+                        if stop_event.is_set() or _controller.should_stop():
+                            stop_event.set()
+                            for pending in futures:
+                                pending.cancel()
+                            break
+                        raw_result_queue.put(future.result())
+            except Exception as exc:
+                logger.exception("manual news run collection failed")
+                _controller.complete(state="failed", error=str(exc))
+                stop_event.set()
+                return
 
-        try:
-            worker_count = min(max_fetch_workers, len(source_ids_for_round)) or 1
-            with ThreadPoolExecutor(max_workers=worker_count) as executor:
-                future_to_source_id = {
-                    executor.submit(_fetch_source_for_manual_run, source_id): source_id
-                    for source_id in source_ids_for_round
-                }
+            raw_result_queue.join()
+            candidate_queue.join()
 
-                for future in as_completed(future_to_source_id):
-                    if _controller.should_stop():
-                        for pending in future_to_source_id:
-                            pending.cancel()
-                        _controller.complete(state="stopped")
-                        return
-
-                    result = future.result()
-                    if result["error"]:
-                        logger.warning(
-                            "manual news run source failed: %s (%s)",
-                            result["source_name"],
-                            result["error"],
-                        )
-                        continue
-
-                    candidates = result["candidates"]
-                    ledger.mark_discovered(len(candidates))
-                    counts = _sync_status_from_ledger()
-
-                    time_filtered, round_stats = _controller.filter_candidates_with_stats(request, candidates)
-                    append_run_log(
-                        "time_filter",
-                        "时间过滤完成",
-                        source=result["source_name"],
-                        count=len(candidates),
-                        matched=round_stats.matched,
-                        before_start=round_stats.before_start,
-                        after_end=round_stats.after_end,
-                        missing_published_at=round_stats.missing_published_at,
-                    )
-                    # Accumulate stats across sources.
-                    acc_stats.missing_published_at += round_stats.missing_published_at
-                    acc_stats.before_start += round_stats.before_start
-                    acc_stats.after_end += round_stats.after_end
-                    acc_stats.matched += round_stats.matched
-                    acc_stats.included_without_date += round_stats.included_without_date
-                    _controller.set_time_filter_stats(
-                        missing_pub=acc_stats.missing_published_at,
-                        before=acc_stats.before_start,
-                        after=acc_stats.after_end,
-                        matched=acc_stats.matched,
-                        included_without_date=acc_stats.included_without_date,
-                    )
-
-                    limited_candidates = _controller.limit_candidates_per_source(
-                        time_filtered,
-                        scorer=candidate_scorer,
-                    )
-                    new_items = [c for c in limited_candidates if c.url not in seen_urls]
-                    for c in new_items:
-                        seen_urls.add(c.url)
-                        ledger.add_queued(c.url)
-                    all_candidates.extend(new_items)
-                    new_in_round += len(new_items)
-                    counts = _sync_status_from_ledger()
-                    append_run_log(
-                        "queue",
-                        "候选入队完成",
-                        source=result["source_name"],
-                        count=len(new_items),
-                        queued_total=counts.queued,
-                        saved_total=counts.saved,
-                    )
-                    logger.info(
-                        "manual news run source queued: %s discovered=%d queued=%d saved=%d",
-                        result["source_name"],
-                        counts.discovered,
-                        counts.queued,
-                        counts.saved,
-                    )
-
-                    counts = _process_available_candidates()
-                    if counts.saved >= request.target_count:
-                        break
-        except Exception as exc:
-            logger.exception("manual news run collection failed")
-            _controller.complete(state="failed", error=str(exc))
-            return
+            counts = _sync_status_from_ledger()
+            no_new_work = counts.queued == queued_before
+            if counts.saved >= request.target_count:
+                break
+            if no_new_work:
+                break
+            if collection_round > 1 and not search_source_ids:
+                break
 
         if _controller.should_stop():
-            _controller.complete(state="stopped")
-            return
+            stop_event.set()
+    finally:
+        for _ in candidate_workers:
+            raw_result_queue.put(raw_sentinel)
+        raw_result_queue.join()
+        candidate_queue.put(candidate_sentinel)
+        candidate_queue.join()
+        for worker in candidate_workers:
+            worker.join(timeout=5)
+        processor.join(timeout=5)
 
-        if ledger.counts().saved >= request.target_count:
-            break
-
-        # --- Process anything left after the collect futures have drained. ---
-        counts = _process_available_candidates()
-
-        # --- Check exit conditions ---
-        if counts.saved >= request.target_count:
-            break
-
-        # No new candidates this round and nothing left to process.
-        if new_in_round == 0 and not [
-            c for c in all_candidates if c.url not in processed_urls
-        ]:
-            break
-
-        # No search sources for expansion.
-        if collection_round > 1 and not search_source_ids:
-            break
-
-    # ── Finalise ──────────────────────────────────────────────────
     final_counts = _sync_status_from_ledger()
     fulfilled = final_counts.saved >= request.target_count
     _controller.set_fulfilled(fulfilled)
 
-    # Always log the time-filter stats so operators can diagnose low-yield runs.
     logger.info(
         "manual news run: time-filter stats — "
         "discovered=%d, matched=%d, missing_pub=%d, before_start=%d, after_end=%d",
@@ -1007,8 +1026,6 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
         _controller.set_gap_reason(None)
     else:
         shortage = request.target_count - final_counts.saved
-        # Build a time-filter summary so users can see *why* candidates
-        # were discarded.
         filter_detail_parts = [
             f"发现 {final_counts.discovered} 条",
             f"时间命中 {acc_stats.matched} 条",
@@ -1022,7 +1039,6 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
         if acc_stats.after_end:
             filter_detail_parts.append(f"晚于结束时间 {acc_stats.after_end} 条")
         filter_detail = "；".join(filter_detail_parts)
-
         if collection_round == 1:
             _controller.set_gap_reason(
                 f"入库不足：共新增入库 {final_counts.saved} 条（目标 {request.target_count}），"
