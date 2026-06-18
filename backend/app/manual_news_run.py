@@ -41,6 +41,54 @@ _MAX_EXPANSION_ROUNDS = 3
 # quality candidates so one noisy feed cannot dominate the manual run.
 MAX_CANDIDATES_PER_SOURCE_PER_ROUND = 5
 
+# Bound LLM scoring prompts.  High-volume feeds can produce hundreds of rows;
+# local prefiltering keeps queueing responsive while preserving LLM judgment.
+CANDIDATE_LLM_PREFILTER_LIMIT = 30
+CANDIDATE_SCORE_SNIPPET_LIMIT = 350
+
+_TECH_SIGNAL_KEYWORDS = (
+    "abi",
+    "agent",
+    "ai",
+    "architecture",
+    "benchmark",
+    "bpf",
+    "compiler",
+    "container",
+    "cve",
+    "ebpf",
+    "glibc",
+    "kernel",
+    "kubernetes",
+    "linux",
+    "llm",
+    "openssl",
+    "package",
+    "performance",
+    "rpm",
+    "scheduler",
+    "security",
+    "supply chain",
+    "toolchain",
+    "vulnerability",
+)
+
+_LOW_VALUE_CANDIDATE_MARKERS = (
+    "anubis",
+    "browser verification",
+    "community event",
+    "conference",
+    "enable javascript",
+    "hashcash",
+    "job",
+    "making sure you're not a bot",
+    "meetup",
+    "podcast",
+    "proof-of-work",
+    "webinar",
+    "确保您不是机器人",
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -132,7 +180,7 @@ class CandidateQualityScorer:
             "title": item.title,
             "url": item.url,
             "published_at": item.published_at.isoformat() if item.published_at else None,
-            "snippet": (item.raw_content or "")[:800],
+            "snippet": (item.raw_content or "")[:CANDIDATE_SCORE_SNIPPET_LIMIT],
         }
 
 
@@ -147,6 +195,40 @@ def _resolve_missing_date_policy() -> MissingDatePolicy:
     except ValueError:
         logger.warning("invalid MISSING_DATE_POLICY=%r, falling back to exclude", raw)
         return MissingDatePolicy.EXCLUDE
+
+
+def _local_candidate_prefilter(items: list[RawItem], *, limit: int) -> list[RawItem]:
+    """Rank candidates cheaply before LLM scoring.
+
+    This keeps large-source prompts bounded.  It is intentionally conservative:
+    the LLM still makes the final keep/drop decision for the selected subset.
+    """
+    return sorted(items, key=_local_candidate_rank, reverse=True)[:limit]
+
+
+def _local_candidate_rank(item: RawItem) -> tuple[int, datetime]:
+    text = f"{item.title}\n{item.raw_content or ''}".lower()
+    score = 0
+
+    for marker in _LOW_VALUE_CANDIDATE_MARKERS:
+        if marker in text:
+            score -= 30
+
+    for keyword in _TECH_SIGNAL_KEYWORDS:
+        if keyword in text:
+            score += 6
+
+    title = (item.title or "").lower()
+    if any(keyword in title for keyword in _TECH_SIGNAL_KEYWORDS):
+        score += 8
+    if item.raw_content:
+        score += min(len(item.raw_content), 1000) // 100
+    if item.published_at is None:
+        score -= 5
+
+    published_at = item.published_at or datetime.min.replace(tzinfo=timezone.utc)
+    return score, published_at
+
 
 @dataclass
 class _RuntimeState:
@@ -382,16 +464,20 @@ class ManualNewsRunController:
         """Keep at most the LLM highest-scored candidates from one source fetch."""
         if not items:
             return items
+        llm_items = _local_candidate_prefilter(
+            items,
+            limit=CANDIDATE_LLM_PREFILTER_LIMIT,
+        )
         if scorer is None:
             scorer = CandidateQualityScorer()
         try:
-            scores = scorer.score(items)
+            scores = scorer.score(llm_items)
         except Exception:
             logger.exception("candidate quality scoring failed; falling back to recency")
             scores = {}
 
         rankable_items = [
-            item for item in items
+            item for item in llm_items
             if scores.get(item.url, (0, True))[1]
         ]
         ordered = sorted(

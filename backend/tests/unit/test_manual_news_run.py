@@ -243,6 +243,114 @@ def test_limit_candidates_per_source_excludes_llm_rejected_items():
     assert [item.url for item in limited] == ["https://x/0", "https://x/1"]
 
 
+def test_limit_candidates_per_source_prefilters_large_source_before_llm():
+    from app.manual_news_run import (
+        CANDIDATE_LLM_PREFILTER_LIMIT,
+        CandidateQualityScorer,
+        ManualNewsRunController,
+    )
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    items = [
+        RawItem(
+            source_id=1,
+            title=f"Linux kernel scheduler update {idx}",
+            url=f"https://x/{idx}",
+            raw_content="kernel scheduler performance benchmark RPM compatibility",
+            published_at=now - timedelta(minutes=idx),
+        )
+        for idx in range(CANDIDATE_LLM_PREFILTER_LIMIT + 20)
+    ]
+
+    class _SpyLlm:
+        def __init__(self):
+            self.prompts: list[str] = []
+
+        def complete(self, prompt, **kw):
+            import json
+
+            self.prompts.append(prompt)
+            return json.dumps({
+                "scores": [
+                    {"url": f"https://x/{idx}", "score": 100 - idx, "reason": "ok", "should_keep": True}
+                    for idx in range(CANDIDATE_LLM_PREFILTER_LIMIT)
+                ]
+            })
+
+    llm = _SpyLlm()
+    limited = controller.limit_candidates_per_source(
+        items,
+        scorer=CandidateQualityScorer(llm=llm),
+    )
+
+    assert len(limited) == 5
+    assert len(llm.prompts) == 1
+    assert llm.prompts[0].count('"title"') == CANDIDATE_LLM_PREFILTER_LIMIT
+
+
+def test_limit_candidates_per_source_huge_source_still_uses_prefiltered_llm():
+    from app.manual_news_run import (
+        CANDIDATE_LLM_PREFILTER_LIMIT,
+        CandidateQualityScorer,
+        ManualNewsRunController,
+    )
+
+    controller = ManualNewsRunController()
+    now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    items = [
+        RawItem(
+            source_id=1,
+            title=f"Fedora COPR package build update {idx}",
+            url=f"https://x/{idx}",
+            raw_content="package build update",
+            published_at=now - timedelta(minutes=idx),
+        )
+        for idx in range(200)
+    ]
+
+    class _SpyLlm:
+        def __init__(self):
+            self.prompts: list[str] = []
+
+        def complete(self, prompt, **kw):
+            import json
+
+            self.prompts.append(prompt)
+            return json.dumps({
+                "scores": [
+                    {"url": f"https://x/{idx}", "score": 80, "reason": "ok", "should_keep": True}
+                    for idx in range(CANDIDATE_LLM_PREFILTER_LIMIT)
+                ]
+            })
+
+    llm = _SpyLlm()
+    limited = controller.limit_candidates_per_source(
+        items,
+        scorer=CandidateQualityScorer(llm=llm),
+    )
+
+    assert len(limited) == 5
+    assert len(llm.prompts) == 1
+    assert llm.prompts[0].count('"title"') == CANDIDATE_LLM_PREFILTER_LIMIT
+
+
+def test_candidate_quality_prompt_uses_short_snippets():
+    from app.manual_news_run import CANDIDATE_SCORE_SNIPPET_LIMIT, CandidateQualityScorer
+
+    item = RawItem(
+        source_id=1,
+        title="Linux kernel performance update",
+        url="https://x/kernel",
+        raw_content="x" * (CANDIDATE_SCORE_SNIPPET_LIMIT + 100),
+        published_at=datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc),
+    )
+
+    payload = CandidateQualityScorer(llm=None)._candidate_payload(item)
+
+    assert len(payload["snippet"]) == CANDIDATE_SCORE_SNIPPET_LIMIT
+
+
 def test_filter_candidates_excludes_out_of_window():
     from app.manual_news_run import ManualNewsRunController
 
