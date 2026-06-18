@@ -132,30 +132,47 @@ def test_filter_candidates_applies_time_window_only_does_not_truncate():
     assert [item.title for item in filtered] == ["newest", "middle", "also-recent"]
 
 
-def test_limit_candidates_per_source_keeps_newest_five_items():
+def test_limit_candidates_per_source_keeps_highest_quality_five_items():
     from app.manual_news_run import ManualNewsRunController
 
     controller = ManualNewsRunController()
     now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
-    items = [
+    low_quality_new_items = [
         RawItem(
             source_id=1,
-            title=f"item-{idx}",
-            url=f"https://x/{idx}",
+            title=f"event reminder {idx}",
+            url=f"https://x/low-{idx}",
+            raw_content="community event reminder and general update",
             published_at=now - timedelta(minutes=idx),
         )
-        for idx in range(8)
+        for idx in range(3)
+    ]
+    high_quality_old_items = [
+        RawItem(
+            source_id=1,
+            title=f"Linux kernel scheduler performance update {idx}",
+            url=f"https://x/high-{idx}",
+            raw_content=(
+                "Linux Kernel eBPF scheduler benchmark release ABI "
+                "compatibility RPM package update"
+            ),
+            published_at=now - timedelta(hours=idx + 1),
+        )
+        for idx in range(5)
     ]
 
-    limited = controller.limit_candidates_per_source(items)
+    limited = controller.limit_candidates_per_source([
+        *low_quality_new_items,
+        *high_quality_old_items,
+    ])
 
     assert len(limited) == 5
     assert [item.title for item in limited] == [
-        "item-0",
-        "item-1",
-        "item-2",
-        "item-3",
-        "item-4",
+        "Linux kernel scheduler performance update 0",
+        "Linux kernel scheduler performance update 1",
+        "Linux kernel scheduler performance update 2",
+        "Linux kernel scheduler performance update 3",
+        "Linux kernel scheduler performance update 4",
     ]
 
 

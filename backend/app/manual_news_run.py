@@ -34,9 +34,75 @@ _RELATIVE_RANGE_TO_DELTA = {
 # Maximum expansion rounds when candidates fall short of target_count.
 _MAX_EXPANSION_ROUNDS = 3
 
-# Per source/link, each collection round should contribute only the freshest
-# candidates so one noisy feed cannot dominate the manual run.
+# Per source/link, each collection round should contribute only the highest
+# quality candidates so one noisy feed cannot dominate the manual run.
 MAX_CANDIDATES_PER_SOURCE_PER_ROUND = 5
+
+_QUALITY_TERMS = (
+    "linux kernel",
+    "kernel",
+    "scheduler",
+    "ebpf",
+    "bpf",
+    "systemd",
+    "glibc",
+    "gcc",
+    "llvm",
+    "compiler",
+    "rpm",
+    "package",
+    "koji",
+    "bodhi",
+    "cve",
+    "vulnerability",
+    "security",
+    "advisory",
+    "release",
+    "released",
+    "performance",
+    "benchmark",
+    "regression",
+    "compatibility",
+    "abi",
+    "api",
+    "container",
+    "kubernetes",
+    "cloud native",
+    "ai agent",
+    "llm",
+    "openeuler",
+    "openanolis",
+    "fedora",
+    "rhel",
+    "ubuntu",
+)
+
+_LOW_QUALITY_TERMS = (
+    "event",
+    "webinar",
+    "conference",
+    "meetup",
+    "newsletter",
+    "podcast",
+    "hiring",
+    "job",
+    "career",
+    "tutorial",
+    "how to",
+    "beginner",
+    "marketing",
+    "community activity",
+    "reminder",
+)
+
+_BOT_CHALLENGE_TERMS = (
+    "making sure you're not a bot",
+    "anubis",
+    "proof-of-work",
+    "hashcash",
+    "enable javascript",
+    "browser verification",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -279,13 +345,40 @@ class ManualNewsRunController:
         )
 
     def limit_candidates_per_source(self, items: list[RawItem]) -> list[RawItem]:
-        """Keep at most the newest candidates from one source fetch."""
+        """Keep at most the highest-quality candidates from one source fetch."""
         ordered = sorted(
             items,
-            key=lambda item: item.published_at or datetime.min.replace(tzinfo=timezone.utc),
+            key=lambda item: (
+                self._candidate_quality_score(item),
+                item.published_at or datetime.min.replace(tzinfo=timezone.utc),
+            ),
             reverse=True,
         )
         return ordered[:MAX_CANDIDATES_PER_SOURCE_PER_ROUND]
+
+    def _candidate_quality_score(self, item: RawItem) -> int:
+        text = f"{item.title}\n{item.raw_content or ''}".lower()
+        score = 0
+
+        for term in _QUALITY_TERMS:
+            if term in text:
+                score += 3 if term in item.title.lower() else 1
+
+        for term in _LOW_QUALITY_TERMS:
+            if term in text:
+                score -= 4
+
+        challenge_hits = sum(1 for term in _BOT_CHALLENGE_TERMS if term in text)
+        if challenge_hits >= 2:
+            score -= 100
+
+        if item.raw_content:
+            score += min(len(item.raw_content) // 300, 5)
+
+        if item.published_at is not None:
+            score += 1
+
+        return score
 
     # -- status -----------------------------------------------------------
 
