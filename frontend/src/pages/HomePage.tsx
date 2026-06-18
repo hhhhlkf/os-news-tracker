@@ -7,7 +7,7 @@ import { ItemDetail } from "../components/ItemDetail";
 import { NewsRunControl } from "../components/NewsRunControl";
 import { NewsRunLogPanel } from "../components/NewsRunLogPanel";
 import { demoItems } from "../demoData";
-import { buildDemoFacets, filterDemoItems, makeListResponse, resolveHomeDataMode } from "./homeData";
+import { buildDemoFacets, filterDemoItems, isManualNewsRunActive, makeListResponse, resolveHomeDataMode } from "./homeData";
 import type { ManualNewsRunRequest, ManualNewsRunState } from "../types";
 
 const PAGE_SIZE = 10;
@@ -35,32 +35,33 @@ export function HomePage() {
     [filters, page],
   );
 
-  const itemsQuery = useQuery({
-    queryKey: ["items", params],
-    queryFn: () => fetchItems(params),
-    retry: false,
-  });
-  const facetsQuery = useQuery({
-    queryKey: ["facets"],
-    queryFn: fetchFacets,
-    retry: false,
-  });
   const newsRunQuery = useQuery({
     queryKey: ["news-run"],
     queryFn: fetchNewsRunStatus,
     retry: false,
     refetchInterval: (query) => {
-      const state = query.state.data?.state;
-      return state === "collecting" || state === "processing" || state === "stopping" ? 2000 : false;
+      return isManualNewsRunActive(query.state.data?.state) ? 2000 : false;
     },
+  });
+  const runIsActive = isManualNewsRunActive(newsRunQuery.data?.state);
+  const itemsQuery = useQuery({
+    queryKey: ["items", params],
+    queryFn: () => fetchItems(params),
+    retry: false,
+    refetchInterval: () => runIsActive ? 2000 : false,
+  });
+  const facetsQuery = useQuery({
+    queryKey: ["facets"],
+    queryFn: fetchFacets,
+    retry: false,
+    refetchInterval: () => runIsActive ? 2000 : false,
   });
   const newsRunLogsQuery = useQuery({
     queryKey: ["news-run-logs"],
     queryFn: fetchNewsRunLogs,
     retry: false,
     refetchInterval: () => {
-      const state = newsRunQuery.data?.state;
-      return state === "collecting" || state === "processing" || state === "stopping" ? 2000 : false;
+      return runIsActive ? 2000 : false;
     },
   });
 
@@ -89,9 +90,9 @@ export function HomePage() {
     const previousState = previousRunState.current;
     if (
       previousState &&
-      (previousState === "collecting" || previousState === "processing" || previousState === "stopping") &&
+      isManualNewsRunActive(previousState) &&
       nextState &&
-      !["collecting", "processing", "stopping"].includes(nextState)
+      !isManualNewsRunActive(nextState)
     ) {
       void queryClient.invalidateQueries({ queryKey: ["items"] });
       void queryClient.invalidateQueries({ queryKey: ["facets"] });

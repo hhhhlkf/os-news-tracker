@@ -1,4 +1,4 @@
-import type { FacetValue, ItemDetail, ItemListResponse } from "../types";
+import type { FacetValue, ItemDetail, ItemListResponse, ManualNewsRunState } from "../types";
 
 type ModeInputs = {
   itemsFailed: boolean;
@@ -7,6 +7,10 @@ type ModeInputs = {
 
 export function resolveHomeDataMode({ itemsFailed, facetsFailed }: ModeInputs): "live" | "demo" {
   return itemsFailed || facetsFailed ? "demo" : "live";
+}
+
+export function isManualNewsRunActive(state: ManualNewsRunState | null | undefined): boolean {
+  return state === "collecting" || state === "processing" || state === "stopping";
 }
 
 function normalize(value: string | null | undefined): string {
