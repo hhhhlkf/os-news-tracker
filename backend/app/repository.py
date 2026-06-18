@@ -6,6 +6,8 @@ from app.models import Entity, Item, ItemSource, Tag
 from app.processing.dedup import content_hash, url_hash
 from app.schemas import EnrichedFields, NormalizedItem
 
+MAX_TAGS_PER_ITEM = 5
+
 
 class Repository:
     def __init__(self, session: Session):
@@ -46,8 +48,12 @@ class Repository:
         self._s.add(ItemSource(item_id=item_id, source_id=source_id, url=url))
         return True
 
+    def _select_sub_tags(self, fields: EnrichedFields) -> list[str]:
+        max_sub_tags = MAX_TAGS_PER_ITEM - 1  # reserve one tag for main_category
+        return list(dict.fromkeys(fields.sub_tags))[:max_sub_tags]
+
     def save_enriched(self, item: NormalizedItem, fields: EnrichedFields) -> Item:
-        all_tags = list(dict.fromkeys(fields.sub_tags + fields.keywords))
+        sub_tags = self._select_sub_tags(fields)
         db_item = Item(
             source_id=item.source_id,
             title=item.title,
@@ -66,7 +72,7 @@ class Repository:
             status=ItemStatus.ENRICHED,
             llm_confidence=fields.confidence,
         )
-        for tag_name in all_tags:
+        for tag_name in sub_tags:
             db_item.tags.append(self._get_or_create_tag(tag_name, TagKind.SUB_TAG))
         db_item.tags.append(self._get_or_create_tag(fields.main_category, TagKind.MAIN_CATEGORY))
         self._s.add(db_item)

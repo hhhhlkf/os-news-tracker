@@ -112,7 +112,8 @@ def test_enricher_prompt_requires_aggregated_tagging_rules():
     prompt = prompts_sent[0]
     assert "标签聚合规则" in prompt
     assert "canonical" in prompt
-    assert "sub_tags 控制在 3-6 个" in prompt
+    assert "sub_tags 控制在 2-4 个" in prompt
+    assert "最多保留 5 个标签" in prompt
     assert "不要把完整版本号" in prompt
     assert "OpenEuler/openEuler/欧拉" in prompt
     assert "同义写法" in prompt

@@ -31,7 +31,7 @@ _PROMPT_TEMPLATE = """你是操作系统维护工程师的关键技术新闻与�
 - reject_reason: 当 should_store=false 时必填，简要说明拒收原因；当 should_store=true 时可为 null
 
 标签聚合规则：
-- sub_tags 控制在 3-6 个，优先选择能跨多篇文章复用的 canonical 名称；把一次性细节放入 keywords。
+- sub_tags 控制在 2-4 个，优先选择能跨多篇文章复用的 canonical 名称；每条最终最多保留 5 个标签（含 main_category），把一次性细节放入 keywords。
 - 使用稳定、短小的标签：厂商/发行版/项目/组件/包名/主题，如 openEuler、OpenAnolis、Fedora、RHEL、Ubuntu、Linux Kernel、RPM、Koji、glibc、systemd、CVE、安全更新、性能优化、软件包更新。
 - 合并同义写法和大小写变体，例如 OpenEuler/openEuler/欧拉 统一写作 openEuler；OpenAnolis/Anolis/龙蜥 统一写作 OpenAnolis；kernel/Linux kernel/内核 统一写作 Linux Kernel。
 - 不要把完整版本号、补丁号、CVE 编号、公告编号、日期、URL 片段、过长短语放入 sub_tags；这些细节放入 keywords。

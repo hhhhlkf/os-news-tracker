@@ -156,7 +156,7 @@ def test_item_detail(client):
     detail = client.get(f"/items/{item_id}").json()
     assert detail["summary"] == "sa"
     assert detail["key_points"][0] == "[内核] pa"
-    assert detail["sub_tags"] == ["kernel", "Linux"]
+    assert detail["sub_tags"] == ["kernel"]
 
 
 def test_filter_by_sub_tag(client):

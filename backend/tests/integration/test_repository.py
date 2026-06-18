@@ -43,14 +43,32 @@ def _fields():
     )
 
 
-def test_save_new_item_merges_sub_tags_and_keywords(session):
+def test_save_new_item_uses_sub_tags_and_main_category_as_tags(session):
     repo = Repository(session)
     item = repo.save_enriched(_norm(), _fields())
     assert item.id is not None
     tag_names = {tag.name for tag in item.tags}
-    assert {"kernel", "sched_ext", "OS性能发展"} <= tag_names
+    assert tag_names == {"kernel", "OS性能发展"}
     assert item.entities == []
     assert repo.exists_by_canonical("https://x/a") is True
+
+
+def test_save_new_item_limits_total_tags_to_five(session):
+    repo = Repository(session)
+    fields = _fields()
+    fields.sub_tags = ["kernel", "scheduler", "openEuler", "RPM", "security"]
+    fields.keywords = ["Linux 6.9", "sched_ext", "EAS", "CVE-2026-0001"]
+
+    item = repo.save_enriched(_norm(), fields)
+
+    assert len(item.tags) == 5
+    assert {tag.name for tag in item.tags} == {
+        "kernel",
+        "scheduler",
+        "openEuler",
+        "RPM",
+        "OS性能发展",
+    }
 
 
 def test_duplicate_canonical_url_merges_source_not_duplicate(session):
