@@ -12,6 +12,7 @@ from app.manual_news_run import (
     stop_manual_news_run,
 )
 from app.models import Item, ItemSource, ItemTag, Tag, TagAlias
+from app.run_logs import list_run_logs
 from app.schemas import ManualNewsRunRequest
 
 router = APIRouter()
@@ -209,6 +210,11 @@ def item_detail(item_id: int, db: Session = Depends(get_db)):
 @router.get("/news-run")
 def get_news_run():
     return get_manual_news_run_status()
+
+
+@router.get("/news-run/logs")
+def get_news_run_logs(after_id: int | None = None, limit: int = Query(200, le=300)):
+    return {"logs": list_run_logs(after_id=after_id, limit=limit)}
 
 
 @router.post("/news-run/start")

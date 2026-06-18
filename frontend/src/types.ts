@@ -72,3 +72,17 @@ export interface ManualNewsRunStatus {
   last_error: string | null;
   time_filter_stats: TimeFilterStats | null;
 }
+
+export interface NewsRunLogEntry {
+  id: number;
+  ts: string;
+  level: "info" | "warning" | "error" | string;
+  stage: string;
+  source: string | null;
+  message: string;
+  [key: string]: unknown;
+}
+
+export interface NewsRunLogsResponse {
+  logs: NewsRunLogEntry[];
+}

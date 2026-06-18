@@ -11,6 +11,7 @@ import threading
 from typing import Protocol
 
 from app.enums import MissingDatePolicy
+from app.run_logs import append_run_log, clear_run_logs
 from app.schemas import (
     ManualNewsRunRequest,
     ManualNewsRunStatus,
@@ -151,6 +152,11 @@ class CandidateQualityScorer:
     def score(self, items: list[RawItem]) -> dict[str, tuple[int, bool]]:
         if not items:
             return {}
+        append_run_log(
+            "llm_scoring",
+            "候选质量 LLM 打分开始",
+            count=len(items),
+        )
         prompt = _CANDIDATE_SCORE_PROMPT.format(
             candidates=json.dumps(
                 [self._candidate_payload(item) for item in items],
@@ -174,6 +180,14 @@ class CandidateQualityScorer:
             score = max(0, min(100, score))
             should_keep = bool(row.get("should_keep", True))
             scores[url] = (score, should_keep)
+        kept = sum(1 for score, should_keep in scores.values() if should_keep)
+        append_run_log(
+            "llm_scoring",
+            "候选质量 LLM 打分完成",
+            count=len(items),
+            kept=kept,
+            rejected=max(0, len(items) - kept),
+        )
         return scores
 
     def _candidate_payload(self, item: RawItem) -> dict[str, str | None]:
@@ -532,6 +546,13 @@ class ManualNewsRunController:
             items,
             limit=CANDIDATE_LLM_PREFILTER_LIMIT,
         )
+        append_run_log(
+            "candidate_prefilter",
+            "本地预筛候选",
+            count=len(items),
+            sent_to_llm=len(llm_items),
+            cap=MAX_CANDIDATES_PER_SOURCE_PER_ROUND,
+        )
         if scorer is None:
             scorer = CandidateQualityScorer()
         try:
@@ -653,11 +674,26 @@ def _fetch_source_for_manual_run(source_id: int) -> dict:
             }
         source_name = source.name
         try:
+            append_run_log(
+                "fetch",
+                "开始抓取 source",
+                source=source_name,
+                source_id=source_id,
+                type=str(source.type),
+                url=source.url,
+            )
             extractor = ScraplingExtractor(use_stealth=source.stealth)
             fetcher = build_fetcher(source, extractor, get_search_provider())
             candidates = fetcher.fetch(source)
             source.health_status = "ok"
             session.commit()
+            append_run_log(
+                "fetch",
+                "source 抓取完成",
+                source=source_name,
+                source_id=source_id,
+                count=len(candidates),
+            )
             return {
                 "source_id": source_id,
                 "source_name": source_name,
@@ -666,6 +702,14 @@ def _fetch_source_for_manual_run(source_id: int) -> dict:
             }
         except Exception as exc:
             logger.exception("fetch failed for source %s", source_name)
+            append_run_log(
+                "fetch",
+                "source 抓取失败",
+                source=source_name,
+                source_id=source_id,
+                level="error",
+                error=str(exc),
+            )
             source.fail_count += 1
             source.health_status = "error"
             session.commit()
@@ -694,6 +738,14 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
     from app.processing.enricher import Enricher
     from app.scheduler import list_enabled_news_sources
 
+    clear_run_logs()
+    append_run_log(
+        "run",
+        "手动新闻处理开始",
+        target_count=request.target_count,
+        time_mode=request.time_mode,
+        relative_range=request.relative_range,
+    )
     logger.info(
         "manual news run: started, target saved=%d", request.target_count,
     )
@@ -759,11 +811,33 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
                     logger.exception("manual news run item processing failed for %s", raw.url)
                     saved = False
                     ledger.mark_failed(raw.url)
+                    append_run_log(
+                        "process",
+                        "候选处理失败",
+                        source=source.name,
+                        level="error",
+                        title=raw.title,
+                        url=raw.url,
+                    )
                 else:
                     if saved:
                         ledger.mark_saved(raw.url)
+                        append_run_log(
+                            "process",
+                            "候选已新增入库",
+                            source=source.name,
+                            title=raw.title,
+                            url=raw.url,
+                        )
                     else:
                         ledger.mark_rejected(raw.url)
+                        append_run_log(
+                            "process",
+                            "候选未入库",
+                            source=source.name,
+                            title=raw.title,
+                            url=raw.url,
+                        )
                 processed_urls.add(raw.url)
                 source.health_status = "ok"
                 process_session.commit()
@@ -830,6 +904,16 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
                     counts = _sync_status_from_ledger()
 
                     time_filtered, round_stats = _controller.filter_candidates_with_stats(request, candidates)
+                    append_run_log(
+                        "time_filter",
+                        "时间过滤完成",
+                        source=result["source_name"],
+                        count=len(candidates),
+                        matched=round_stats.matched,
+                        before_start=round_stats.before_start,
+                        after_end=round_stats.after_end,
+                        missing_published_at=round_stats.missing_published_at,
+                    )
                     # Accumulate stats across sources.
                     acc_stats.missing_published_at += round_stats.missing_published_at
                     acc_stats.before_start += round_stats.before_start
@@ -855,6 +939,14 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
                     all_candidates.extend(new_items)
                     new_in_round += len(new_items)
                     counts = _sync_status_from_ledger()
+                    append_run_log(
+                        "queue",
+                        "候选入队完成",
+                        source=result["source_name"],
+                        count=len(new_items),
+                        queued_total=counts.queued,
+                        saved_total=counts.saved,
+                    )
                     logger.info(
                         "manual news run source queued: %s discovered=%d queued=%d saved=%d",
                         result["source_name"],
@@ -945,6 +1037,15 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
             )
 
     if _controller.should_stop():
+        append_run_log("run", "手动新闻处理已停止", level="warning")
         _controller.complete(state="stopped")
         return
+    append_run_log(
+        "run",
+        "手动新闻处理完成",
+        saved=final_counts.saved,
+        processed=final_counts.processed,
+        queued=final_counts.queued,
+        fulfilled=fulfilled,
+    )
     _controller.complete(state="completed")

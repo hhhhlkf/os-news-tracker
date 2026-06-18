@@ -4,6 +4,7 @@ import type {
   Facets,
   ManualNewsRunRequest,
   ManualNewsRunStatus,
+  NewsRunLogsResponse,
 } from "../types";
 
 const BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
@@ -56,6 +57,12 @@ export async function fetchFacets(): Promise<Facets> {
 export async function fetchNewsRunStatus(): Promise<ManualNewsRunStatus> {
   const r = await fetch(`${BASE}/news-run`);
   if (!r.ok) throw new ApiError(r.status, `failed to load news run status (HTTP ${r.status})`);
+  return r.json();
+}
+
+export async function fetchNewsRunLogs(): Promise<NewsRunLogsResponse> {
+  const r = await fetch(`${BASE}/news-run/logs`);
+  if (!r.ok) throw new ApiError(r.status, `failed to load news run logs (HTTP ${r.status})`);
   return r.json();
 }
 

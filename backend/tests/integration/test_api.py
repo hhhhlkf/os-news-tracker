@@ -293,6 +293,22 @@ def test_get_news_run_status(client, monkeypatch):
     assert resp.json()["state"] == "idle"
 
 
+def test_get_news_run_logs(client):
+    from app.run_logs import append_run_log, clear_run_logs
+
+    clear_run_logs()
+    append_run_log("collect", "开始抓取", source="Test Source", count=3)
+
+    resp = client.get("/news-run/logs")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["logs"][0]["stage"] == "collect"
+    assert body["logs"][0]["message"] == "开始抓取"
+    assert body["logs"][0]["source"] == "Test Source"
+    assert body["logs"][0]["count"] == 3
+
+
 def test_start_news_run_returns_conflict_when_already_active(client, monkeypatch):
     monkeypatch.setattr("app.api.routes.start_manual_news_run", lambda request: False)
 

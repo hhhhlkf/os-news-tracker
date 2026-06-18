@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, fetchFacets, fetchItems, fetchNewsRunStatus, startNewsRun, stopNewsRun } from "../api/client";
+import { ApiError, fetchFacets, fetchItems, fetchNewsRunLogs, fetchNewsRunStatus, startNewsRun, stopNewsRun } from "../api/client";
 import { FacetSidebar } from "../components/FacetSidebar";
 import { ItemList } from "../components/ItemList";
 import { ItemDetail } from "../components/ItemDetail";
 import { NewsRunControl } from "../components/NewsRunControl";
+import { NewsRunLogPanel } from "../components/NewsRunLogPanel";
 import { demoItems } from "../demoData";
 import { buildDemoFacets, filterDemoItems, makeListResponse, resolveHomeDataMode } from "./homeData";
 import type { ManualNewsRunRequest, ManualNewsRunState } from "../types";
@@ -53,6 +54,15 @@ export function HomePage() {
       return state === "collecting" || state === "processing" || state === "stopping" ? 2000 : false;
     },
   });
+  const newsRunLogsQuery = useQuery({
+    queryKey: ["news-run-logs"],
+    queryFn: fetchNewsRunLogs,
+    retry: false,
+    refetchInterval: () => {
+      const state = newsRunQuery.data?.state;
+      return state === "collecting" || state === "processing" || state === "stopping" ? 2000 : false;
+    },
+  });
 
   const mode = resolveHomeDataMode({
     itemsFailed: itemsQuery.isError,
@@ -95,6 +105,7 @@ export function HomePage() {
     try {
       await startNewsRun(request);
       await newsRunQuery.refetch();
+      await newsRunLogsQuery.refetch();
     } catch (error) {
       setRunActionError(
         error instanceof ApiError ? error.message : "启动新闻处理任务失败",
@@ -189,6 +200,11 @@ export function HomePage() {
           isSubmitting={runActionPending}
           onStart={handleStartNewsRun}
           onStop={handleStopNewsRun}
+        />
+
+        <NewsRunLogPanel
+          logs={newsRunLogsQuery.data?.logs ?? []}
+          isLoading={newsRunLogsQuery.isLoading}
         />
 
         <section
