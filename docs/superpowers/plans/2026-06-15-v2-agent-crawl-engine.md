@@ -813,43 +813,54 @@ cd backend && git add app/agent/quality_pool.py tests/unit/test_agent_quality_po
 Create `backend/tests/unit/test_agent_summary_pool.py`:
 
 ```python
-import asyncio
+"""SummaryWorkerPool 单元测试 — 验证自适应摘要生成、主题分组分配、错误隔离。"""
+
 import json
-import pytest
 from unittest.mock import MagicMock
-from app.agent.summary_pool import SummaryWorkerPool
+
+import pytest
+
 from app.agent.schemas import AgentSourceConfig, QualifiedPage, RawPage
+from app.agent.summary_pool import SummaryWorkerPool
 
 
-def _config(topic_groups=None):
-    return AgentSourceConfig(
-        source_id=1, focus_areas=["kernel"], topic_groups=topic_groups or [],
+def _config(topic_groups=None, **kwargs):
+    """构造 AgentSourceConfig，提供合理的默认值。"""
+    defaults = dict(
+        source_id=1, focus_areas=["kernel", "ebpf"], topic_groups=topic_groups or [],
         summary_workers=2, quality_workers=2, crawl_workers=3,
         quality_threshold=4, crawl_depth=1, max_urls_per_run=20,
     )
+    defaults.update(kwargs)
+    return AgentSourceConfig(**defaults)
 
 
 def _qpage(url="https://a.com/1"):
-    page = RawPage(url=url, guessed_topic="kernel", title="Linux 6.12 Released", content="Content here")
+    """构造一个通过质量评估的测试用 QualifiedPage。"""
+    page = RawPage(
+        url=url, guessed_topic="kernel",
+        title="Linux 6.12 Released", content="Linux 6.12 brings sched_ext and many EEVDF improvements.",
+    )
     return QualifiedPage(page=page, verdict="keep", score=8)
 
 
 def _make_llm(content_type="release_note"):
+    """构造一个 mock LLM，返回指定内容类型的 JSON 摘要响应。"""
     llm = MagicMock()
     llm.complete.return_value = json.dumps({
         "title": "Linux 6.12 正式发布",
         "topic_group": None,
         "content_type": content_type,
         "importance": "高",
-        "body": "内核 6.12 引入 sched_ext",
-        "key_facts": ["sched_ext 合入主线"],
-        "source_url": "https://a.com/1",
+        "body": "内核 6.12 引入 sched_ext 可扩展调度器框架，并带来多项 EEVDF 调度器改进。",
+        "key_facts": ["sched_ext 合入主线", "EEVDF 调度器多项优化"],
     }, ensure_ascii=False)
     return llm
 
 
 @pytest.mark.asyncio
 async def test_summarize_returns_agent_item():
+    """正常摘要：QualifiedPage 应被转换为 AgentItem，字段完整。"""
     pool = SummaryWorkerPool(llm=_make_llm())
     items = await pool.summarize_all([_qpage()], _config())
     assert len(items) == 1
@@ -857,25 +868,89 @@ async def test_summarize_returns_agent_item():
     assert item.title == "Linux 6.12 正式发布"
     assert item.importance == "高"
     assert item.content_type == "release_note"
+    assert len(item.key_facts) == 2
+    assert item.source_id == 1
+    assert item.url == "https://a.com/1"
 
 
 @pytest.mark.asyncio
 async def test_topic_group_assigned_when_provided():
+    """配置了 topic_groups 时，LLM 可从列表中选择最匹配的分组。"""
     llm = MagicMock()
     llm.complete.return_value = json.dumps({
-        "title": "t", "topic_group": "项目动态", "content_type": "article",
-        "importance": "中", "body": "body", "key_facts": [], "source_url": "https://a.com/1",
+        "title": "Anolis OS 23.2 发布",
+        "topic_group": "项目动态",
+        "content_type": "release_note",
+        "importance": "中",
+        "body": "Anolis OS 23.2 正式发布，新增多项安全特性。",
+        "key_facts": ["基于龙蜥 23", "新增安全特性"],
     }, ensure_ascii=False)
     pool = SummaryWorkerPool(llm=llm)
-    items = await pool.summarize_all([_qpage()], _config(topic_groups=["项目动态", "技术迭代"]))
+    items = await pool.summarize_all(
+        [_qpage()], _config(topic_groups=["项目动态", "技术迭代", "安全公告"]),
+    )
     assert items[0].topic_group == "项目动态"
 
 
 @pytest.mark.asyncio
 async def test_no_topic_group_when_not_configured():
+    """未配置 topic_groups 时，topic_group 应为 None。"""
     pool = SummaryWorkerPool(llm=_make_llm())
     items = await pool.summarize_all([_qpage()], _config(topic_groups=[]))
     assert items[0].topic_group is None
+
+
+@pytest.mark.asyncio
+async def test_failed_summary_is_skipped():
+    """单个页面摘要失败不应影响其他页面。"""
+    call_count = [0]
+
+    def fail_second(prompt):
+        call_count[0] += 1
+        if call_count[0] == 2:
+            raise RuntimeError("LLM timeout")
+        return json.dumps({
+            "title": "ok", "topic_group": None, "content_type": "article",
+            "importance": "低", "body": "ok", "key_facts": [],
+        }, ensure_ascii=False)
+
+    llm = MagicMock()
+    llm.complete.side_effect = fail_second
+
+    pool = SummaryWorkerPool(llm=llm)
+    items = await pool.summarize_all(
+        [_qpage("https://a.com/1"), _qpage("https://a.com/2")], _config(),
+    )
+    # 第二个失败被跳过，第一个成功保留
+    assert len(items) == 1
+
+
+@pytest.mark.asyncio
+async def test_respects_summary_workers_concurrency():
+    """并发数不应超过 summary_workers 配置。"""
+    active = [0]
+    peak = [0]
+
+    def counting_complete(prompt):
+        active[0] += 1
+        peak[0] = max(peak[0], active[0])
+        import time
+        time.sleep(0.02)
+        active[0] -= 1
+        return json.dumps({
+            "title": "t", "topic_group": None, "content_type": "article",
+            "importance": "低", "body": "b", "key_facts": [],
+        }, ensure_ascii=False)
+
+    llm = MagicMock()
+    llm.complete.side_effect = counting_complete
+
+    pool = SummaryWorkerPool(llm=llm)
+    pages = [_qpage(f"https://a.com/{i}") for i in range(8)]
+    await pool.summarize_all(pages, _config(summary_workers=2))
+
+    # 峰值并发不应超过配置的 2
+    assert peak[0] <= 2
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -889,6 +964,14 @@ Expected: ImportError.
 - [ ] **Step 3: Create `backend/app/agent/summary_pool.py`**
 
 ```python
+"""SummaryWorkerPool — 并行自适应摘要生成（Generator 角色）。
+
+对 QualityWorkerPool 筛选通过的页面进行 LLM 摘要提取，根据页面实际内容类型
+自动选择最合适的输出格式（发行说明/基准测试/技术讨论/更新日志/通用文章）。
+
+这是 Handoff Chain 的第④阶段，产出最终进入新闻流的 AgentItem。
+"""
+
 import asyncio
 import json
 import logging
@@ -898,47 +981,98 @@ from app.agent.schemas import AgentItem, AgentSourceConfig, QualifiedPage
 
 logger = logging.getLogger(__name__)
 
-_PROMPT = """你是技术内容整理助手。阅读以下页面，提取对 OS maintainer 有价值的信息。
+# ── 摘要生成 prompt ──────────────────────────────────────────────
+# 参考 Enricher 的 prompt 风格：明确的角色定位、内容类型识别、
+# 字段级别的输出规范、反例说明。
+_PROMPT = """你是操作系统维护团队的技术内容分析师。你的任务是将通过质量筛选的网页内容，
+提炼为结构化的技术情报摘要，供 OS maintainer 快速了解要点并决定是否需要深入阅读原文。
 
-用户关注点：{focus_areas}
-用户主题分组（从中选一个最匹配的，若无则留空）：{topic_groups}
-页面 URL：{url}
-页面正文：{content}
+## 角色定位
+你面对的是专业 OS maintainer（内核开发者、发行版维护者、安全工程师），
+他们对操作系统、内核、编译器、包管理、云原生基础设施有深入理解。
+你需要提取他们关心的技术事实，而不是复述入门级内容。
 
-根据页面实际内容类型，选择最合适的输出格式，输出 JSON（不要多余文字）：
-{{
-  "title": "...",
-  "topic_group": null,
-  "content_type": "article",
-  "importance": "中",
-  "body": "...",
-  "key_facts": [],
-  "source_url": "{url}"
-}}
+## 内容类型识别
+根据页面实际内容，选择最合适的 content_type：
+| content_type | 适用场景 |
+| release_note | 版本发布、发行版更新、重要软件包新版本 |
+| benchmark | 性能基准测试、横向对比、架构性能分析 |
+| changelog | 更新日志、变更列表、补丁说明 |
+| discussion | 技术讨论、RFC、设计文档、社区争议 |
+| article | 通用技术文章（默认值） |
 
-content_type 选项：article | release_note | benchmark | discussion | changelog
-importance 选项：高 | 中 | 低
+## 字段要求
+- title: 中文标题，准确反映页面核心内容，20字以内
+- topic_group: 从用户提供的分组列表中选择一个最匹配的；列表为空或无匹配项时设为 null
+- content_type: 从上述类型中选择
+- importance: 高（内核大版本/严重漏洞/关键变更）| 中（重要更新/路线变化/性能报告）| 低（一般讨论/小版本）
+- body: 2–5 句核心摘要，包含具体技术事实
+- key_facts: 3–5 条关键事实，格式「[关键词] 具体说明」
+
+## 输出格式
+严格输出 JSON，不要多余文字：
+{{{{
+  "title": "Linux 6.12 内核正式发布",
+  "topic_group": "项目动态",
+  "content_type": "release_note",
+  "importance": "高",
+  "body": "Linux 6.12 内核正式发布，引入 sched_ext 可扩展调度器框架……",
+  "key_facts": ["[内核] sched_ext 合入主线", "[调度器] EEVDF 多项优化"]
+}}}}
+
+用户关注领域：{{focus_areas}}
+用户主题分组：{{topic_groups}}
+页面 URL：{{url}}
+页面标题：{{title}}
+页面正文：
+{{content}}
 """
 
 
+def _extract_json(text: str) -> dict:
+    """从 LLM 原始响应中提取 JSON 对象。
+    支持围栏代码块（```json ... ```）和裸 JSON 两种格式。
+    """
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if fenced:
+        return json.loads(fenced.group(1))
+    brace = re.search(r"\{.*\}", text, re.DOTALL)
+    if brace:
+        return json.loads(brace.group(0))
+    raise ValueError(f"No JSON found in summary response: {text[:200]}")
+
+
 def _parse_summary(text: str, source_url: str, source_id: int) -> AgentItem:
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if not m:
-        raise ValueError(f"no JSON in summary response: {text[:100]}")
-    data = json.loads(m.group(0))
+    """从 LLM 响应提取 JSON 并解析为 AgentItem。
+    使用传入的 source_url（不信任 LLM 返回的 URL，防止幻觉）。
+    对 importance 和 content_type 做取值校验。"""
+    data = _extract_json(text)
+
+    importance = data.get("importance", "低")
+    if importance not in ("高", "中", "低"):
+        importance = "低"
+
+    valid_types = {"article", "release_note", "benchmark", "discussion", "changelog"}
+    content_type = data.get("content_type", "article")
+    if content_type not in valid_types:
+        content_type = "article"
+
     return AgentItem(
         source_id=source_id,
-        url=data.get("source_url", source_url),
+        url=source_url,  # 使用传入的 URL，不信任 LLM 输出
         title=data.get("title", ""),
         topic_group=data.get("topic_group") or None,
-        content_type=data.get("content_type", "article"),
-        importance=data.get("importance", "低"),
+        content_type=content_type,
+        importance=importance,
         body=data.get("body", ""),
         key_facts=data.get("key_facts", []),
     )
 
 
 class SummaryWorkerPool:
+    """并行自适应摘要生成器。
+    对每页调用 LLM 进行内容摘要，使用 asyncio.Semaphore 控制并发数。"""
+
     def __init__(self, llm=None):
         from app.llm.client import LlmClient
         self._llm = llm or LlmClient()
@@ -946,26 +1080,28 @@ class SummaryWorkerPool:
     async def summarize_all(
         self, pages: list[QualifiedPage], config: AgentSourceConfig
     ) -> list[AgentItem]:
+        """并行摘要所有通过质量评估的页面。单个失败不影响其他。"""
         sem = asyncio.Semaphore(config.summary_workers)
 
         async def summarize_one(qp: QualifiedPage) -> AgentItem | None:
             async with sem:
-                prompt = _PROMPT.format(
-                    focus_areas=", ".join(config.focus_areas),
-                    topic_groups=", ".join(config.topic_groups) if config.topic_groups else "无",
-                    url=qp.page.url,
-                    content=qp.page.content[:4000],
-                )
                 try:
+                    prompt = _PROMPT.format(
+                        focus_areas=", ".join(config.focus_areas),
+                        topic_groups=", ".join(config.topic_groups) if config.topic_groups else "无",
+                        url=qp.page.url,
+                        title=qp.page.title,
+                        content=qp.page.content[:4000],
+                    )
                     raw = await asyncio.to_thread(self._llm.complete, prompt)
                     return _parse_summary(raw, source_url=qp.page.url, source_id=config.source_id)
                 except Exception as e:
-                    logger.warning("summary_pool: summarize failed %s: %s", qp.page.url, e)
+                    logger.warning("summary_pool: 摘要失败 %s: %s", qp.page.url, e)
                     return None
 
         results = await asyncio.gather(*[summarize_one(p) for p in pages])
         items = [r for r in results if r is not None]
-        logger.info("summary_pool: summarized %d/%d pages", len(items), len(pages))
+        logger.info("summary_pool: 摘要完成 %d/%d 页", len(items), len(pages))
         return items
 ```
 
@@ -975,7 +1111,7 @@ class SummaryWorkerPool:
 cd backend && ENABLE_SCHEDULER=0 python -m pytest tests/unit/test_agent_summary_pool.py -v
 ```
 
-Expected: 3 tests PASS.
+Expected: 5 tests PASS.
 
 - [ ] **Step 5: Commit**
 
