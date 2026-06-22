@@ -24,65 +24,35 @@ from app.models import Source
 logger = logging.getLogger(__name__)
 
 # ── URL 规划 prompt ──────────────────────────────────────────────
-# 参考 Enricher 的 prompt 风格：角色定位、筛选标准、输出格式约束。
-_PROMPT = """你是操作系统维护团队的信息采集规划助手。你的任务是从网页链接列表中，
-筛选出最可能包含 OS maintainer 关心的技术内容的 URL，并按优先级排序。
+# 风格对齐 Enricher：段落式标准 + URL 启发式规则 + 明确任务目的。
+# 链接数据升级为 {"url": ..., "text": ...} 格式，让 LLM 能读到链接文字。
+_PROMPT = """你是操作系统维护工程师的 URL 发现与规划助手。给定一个技术网站首页的链接列表，从 OS maintainer 的视角筛选出最可能包含有价值技术内容的页面 URL，并按优先级排序。选出的 URL 将进入全文深度抓取，请优先选内容最丰富的页面，而不只是标题最吸引眼球的。
 
-## 角色定位
+优先选择：版本发布公告（Release、Announcement、Changelog、包含版本号）；操作系统、内核、驱动、文件系统、网络栈、虚拟化的技术博客；性能基准测试报告与横向对比；安全公告、CVE 报告、漏洞修复说明；新工具/新项目介绍（编译器、调试器、包管理器、容器运行时）；技术讨论、RFC、设计文档。
+不选：首页、关于页、联系页、赞助页；招聘与 HR 相关；活动通知、meetup、会议征稿、直播预告；用户文档、入门教程；社交媒体与 RSS/Atom feed 链接；登录/注册页面；已知低质量 URL（见跳过列表）。
 
-你面对的是一个技术新闻/博客/发布页的链接列表。用户需要从中选出最有价值的页面
-进入后续的深度抓取和摘要流程。你需要根据 URL pattern 和链接上下文做出判断，
-就像一个有经验的 OS 工程师在浏览页面时会点击哪些链接。
-
-## 筛选标准（高优先级）
-
-以下类型的链接值得优先选择：
-- 版本发布公告（Release、Announcement、Changelog）
-- 技术博客文章（内核、驱动、文件系统、网络栈、虚拟化等）
-- 性能基准测试报告、基准对比
-- 安全公告、CVE 报告、漏洞修复说明
-- 新工具/新项目介绍（编译器、调试器、包管理器、容器运行时）
-- 技术讨论、RFC、设计文档
-
-## 排除标准（低优先级或直接跳过）
-
-以下类型应降低优先级或排除：
-- 首页、关于页、联系页、赞助页
-- 招聘、求职、HR 相关
-- 活动通知、meetup、会议征稿、直播预告
-- 用户文档、入门教程、"Getting Started"
-- 社交媒体链接（Twitter、LinkedIn、YouTube）
-- RSS/Atom feed 链接
-- 登录/注册页面
-- 已知的低质量 URL（见跳过列表）
-
-## 输出格式
+URL 路径规律参考：路径中包含年份（/2026/）、月份或日期数字通常是文章；包含版本号（v1.2、6.12、2026.1）通常是发布公告；/about/、/contact/、/tag/、/category/、/page/、/feed/、/archive/ 通常跳过。链接文字（text 字段）比 URL 路径更能说明内容，优先参考链接文字做判断。
 
 严格输出 JSON，不要多余文字：
-```json
-{{
-  "urls": [
-    {{"url": "https://blog.example.com/2026/06/linux-6.12-released", "guessed_topic": "Linux Kernel"}},
-    {{"url": "https://blog.example.com/2026/06/ebpf-verifier-improvements", "guessed_topic": "eBPF"}}
-  ]
-}}
-```
+{{"urls": [{{"url": "https://blog.example.com/2026/06/linux-6.12-released", "guessed_topic": "Linux Kernel"}}, {{"url": "https://blog.example.com/2026/06/ebpf-verifier-improvements", "guessed_topic": "eBPF"}}]}}
 
-- url: 完整的绝对 URL
-- guessed_topic: 用英文简短标注该页面可能的技术主题（如 "Linux Kernel"、"systemd"、"KVM"），不超过 3 个词
-- 按优先级从高到低排序
-- 最多返回 {max_urls} 个 URL
+- url：完整绝对 URL
+- guessed_topic：英文短标注，不超过 3 个词（如 "Linux Kernel"、"systemd"、"KVM"）
+- 按优先级从高到低排序，最多返回 {max_urls} 个
 
 用户关注领域：{focus_areas}
 页面 URL：{source_url}
-候选链接（共 {total_count} 个）：{links_json}
+候选链接（共 {total_count} 个，格式为 url + 链接文字）：
+{links_json}
 已知低质量 URL（请跳过）：{skip_patterns}
 """
 
 
 class _LinkExtractor(HTMLParser):
-    """从 HTML 中提取所有 <a href> 链接的 HTMLParser 子类。
+    """从 HTML 中提取所有 <a href> 链接及其链接文字的 HTMLParser 子类。
 
+    同时捕获 URL（href）和链接文字（anchor text），提供更丰富的链接上下文，
+    让 LLM 可以通过文字而非仅靠 URL pattern 做出判断。
     自动处理相对 URL（通过 urljoin 拼接 base_url）。
     保持链接出现的顺序，自动去重。
     """
@@ -95,28 +65,46 @@ class _LinkExtractor(HTMLParser):
         """
         super().__init__()
         self._base_url = base_url
-        self._links: list[str] = []
+        self._links: list[dict] = []          # {"url": ..., "text": ...}
         self._seen: set[str] = set()
+        self._current_url: str | None = None  # 当前 <a> 标签的 href
+        self._text_buf: list[str] = []        # 累积当前 <a> 内的文字
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        """遇到开始标签时回调，提取 <a href> 属性。"""
+        """遇到 <a> 开始标签时，记录 href 并开始捕获链接文字。"""
         if tag != "a":
             return
         for name, value in attrs:
             if name == "href" and value:
                 # 跳过页面内锚点
                 if value.startswith("#"):
-                    continue
+                    return
                 # 跳过 javascript: / mailto: 等非 http 协议
                 if ":" in value and not value.startswith(("http://", "https://")):
-                    continue
+                    return
                 # 解析相对 URL
                 absolute = urljoin(self._base_url, value)
-                # 去重
                 if absolute not in self._seen:
-                    self._seen.add(absolute)
-                    self._links.append(absolute)
+                    self._current_url = absolute
+                    self._text_buf = []
                 break
+
+    def handle_data(self, data: str) -> None:
+        """在 <a>…</a> 内部遇到文本节点时，追加到文字缓冲。"""
+        if self._current_url is not None:
+            stripped = data.strip()
+            if stripped:
+                self._text_buf.append(stripped)
+
+    def handle_endtag(self, tag: str) -> None:
+        """遇到 </a> 时提交 {url, text} 对并重置状态。"""
+        if tag == "a" and self._current_url is not None:
+            text = " ".join(self._text_buf).strip()
+            if self._current_url not in self._seen:
+                self._seen.add(self._current_url)
+                self._links.append({"url": self._current_url, "text": text})
+            self._current_url = None
+            self._text_buf = []
 
 
 def _extract_json(text: str) -> dict:
@@ -171,17 +159,18 @@ class PlanAgent:
         self._llm = llm or LlmClient()
         self._memory = memory or SiteMemory()
 
-    def _fetch_links(self, url: str) -> list[str]:
-        """从指定页面提取所有出站链接。
+    def _fetch_links(self, url: str) -> list[dict]:
+        """从指定页面提取所有出站链接及其链接文字。
 
         使用 httpx 获取页面 HTML，然后用 _LinkExtractor（基于 stdlib HTMLParser）
-        提取所有 <a href> 链接。最多返回 100 个去重链接。
+        同时提取 <a href> 和链接文字。最多返回 100 个去重链接。
 
         Args:
             url: 要提取链接的页面 URL。
 
         Returns:
-            去重后的绝对 URL 列表。如果请求失败则返回空列表。
+            去重后的链接列表，每项格式为 {"url": ..., "text": ...}。
+            如果请求失败则返回空列表。
         """
         import httpx
 
@@ -236,12 +225,12 @@ class PlanAgent:
             )
             return CrawlPlan(source_id=config.source_id, urls=[])
 
-        # ── 2. 过滤已知 discard ──
-        skip_patterns = [
-            link for link in links
-            if self._memory.should_skip(db=db, source_id=config.source_id, url=link)
-        ]
-        candidate_links = [l for l in links if l not in skip_patterns]
+        # ── 2. 过滤已知 discard（按 URL 检查）──
+        skip_urls = {
+            link["url"] for link in links
+            if self._memory.should_skip(db=db, source_id=config.source_id, url=link["url"])
+        }
+        candidate_links = [l for l in links if l["url"] not in skip_urls]
 
         # ── 3. LLM 语义筛选 ──
         prompt = _PROMPT.format(
@@ -249,7 +238,7 @@ class PlanAgent:
             source_url=root_url,
             total_count=len(candidate_links),
             links_json=json.dumps(candidate_links[:50], ensure_ascii=False),
-            skip_patterns=json.dumps(skip_patterns[:10], ensure_ascii=False) if skip_patterns else "无",
+            skip_patterns=json.dumps(list(skip_urls)[:10], ensure_ascii=False) if skip_urls else "无",
             max_urls=config.max_urls_per_run,
         )
 
