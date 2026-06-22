@@ -5,8 +5,10 @@ interface AgentSourceRunCardProps {
   source: AgentSource;
   latestRun?: AgentRunRecord | null;
   isTriggering?: boolean;
+  isCancelling?: boolean;
   errorMessage?: string | null;
   onTrigger: (sourceId: number) => Promise<void> | void;
+  onCancel?: (sourceId: number, runId: number) => Promise<void> | void;
 }
 
 const stageLabels: Record<AgentRunStage, string> = {
@@ -38,7 +40,7 @@ function formatList(values: string[] | undefined): string {
 }
 
 export function AgentSourceRunCard(props: AgentSourceRunCardProps) {
-  const { source, latestRun, isTriggering = false, errorMessage, onTrigger } = props;
+  const { source, latestRun, isTriggering = false, isCancelling = false, errorMessage, onTrigger, onCancel } = props;
   const running = isAgentSourceRunning(latestRun);
   const stageLabel = formatAgentStageLabel(latestRun?.current_stage);
   const buttonDisabled = isTriggering || running;
@@ -62,24 +64,46 @@ export function AgentSourceRunCard(props: AgentSourceRunCardProps) {
             聚焦：{formatList(source.config?.focus_areas)} · 主题：{formatList(source.config?.topic_groups)}
           </div>
         </div>
-        <button
-          type="button"
-          disabled={buttonDisabled}
-          onClick={() => void onTrigger(source.id)}
-          style={{
-            border: "none",
-            borderRadius: 999,
-            padding: "10px 14px",
-            minWidth: 104,
-            background: buttonDisabled ? "#98a2b3" : "#175cd3",
-            color: "#ffffff",
-            fontSize: 13,
-            fontWeight: 700,
-            cursor: buttonDisabled ? "not-allowed" : "pointer",
-          }}
-        >
-          {running ? "运行中" : isTriggering ? "提交中" : "立即抓取"}
-        </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+          {running && onCancel && latestRun?.id != null && (
+            <button
+              type="button"
+              disabled={isCancelling}
+              onClick={() => void onCancel(source.id, latestRun.id)}
+              style={{
+                border: "1px solid #d0d5dd",
+                borderRadius: 999,
+                padding: "10px 14px",
+                minWidth: 72,
+                background: "#ffffff",
+                color: isCancelling ? "#98a2b3" : "#344054",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: isCancelling ? "not-allowed" : "pointer",
+              }}
+            >
+              {isCancelling ? "取消中" : "取消"}
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={buttonDisabled}
+            onClick={() => void onTrigger(source.id)}
+            style={{
+              border: "none",
+              borderRadius: 999,
+              padding: "10px 14px",
+              minWidth: 104,
+              background: buttonDisabled ? "#98a2b3" : "#175cd3",
+              color: "#ffffff",
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: buttonDisabled ? "not-allowed" : "pointer",
+            }}
+          >
+            {running ? "运行中" : isTriggering ? "提交中" : "立即抓取"}
+          </button>
+        </div>
       </div>
 
       <div

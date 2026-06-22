@@ -12,26 +12,29 @@
 
 import logging
 import threading
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_db
 from app.enums import SourceType, Stream
 from app.models import (
     AgentCrawlRun,
     AgentSiteMemory,
     AgentSourceConfig,
     Source,
-    User,
 )
 from app.scheduler import run_source_job
+from app.sources.registry import seed_sources_from_yaml
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sources/agent", tags=["agent-sources"])
+public_router = APIRouter(prefix="/crawl-sources", tags=["agent-sources"])
+SEED_SOURCES_YAML = Path(__file__).resolve().parent.parent / "sources" / "seed_sources.yaml"
 
 
 # ── 请求模型 ──────────────────────────────────────────────────────
@@ -87,6 +90,42 @@ def _build_default_agent_source_config(candidate: Source) -> AgentSourceConfig:
         quality_workers=3,
         summary_workers=3,
     )
+
+
+def _list_standard_agent_candidates(db: Session) -> list[Source]:
+    return db.scalars(
+        select(Source)
+        .where(
+            Source.enabled.is_(True),
+            Source.stream == Stream.NEWS,
+            Source.type != SourceType.AGENT_CRAWL,
+        )
+        .order_by(Source.name.asc())
+    ).all()
+
+
+def _ensure_seed_candidates_available(db: Session) -> list[Source]:
+    sources = _list_standard_agent_candidates(db)
+    if sources:
+        return sources
+
+    if not SEED_SOURCES_YAML.exists():
+        logger.warning("Agent candidate seed YAML missing: %s", SEED_SOURCES_YAML)
+        return sources
+
+    summary = seed_sources_from_yaml(db, str(SEED_SOURCES_YAML))
+    logger.info("Agent candidate list backfilled from seed YAML: %s", summary)
+    return _list_standard_agent_candidates(db)
+
+
+def _candidate_response(source: Source) -> dict:
+    return {
+        "id": source.id,
+        "name": source.name,
+        "url": source.url,
+        "source_type": source.type,
+        "main_category": source.main_category,
+    }
 
 
 def _ensure_agent_source_for_candidate(db: Session, candidate: Source) -> tuple[Source, bool]:
@@ -160,10 +199,10 @@ def _source_response(source: Source, config: AgentSourceConfig | None) -> dict:
 
 # ── CRUD 端点 ─────────────────────────────────────────────────────
 
+@public_router.get("")
 @router.get("")
 def list_agent_sources(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """列出所有 agent_crawl 类型的源及其配置。"""
     sources = db.scalars(
@@ -176,38 +215,33 @@ def list_agent_sources(
     return result
 
 
+@public_router.get("/candidates")
 @router.get("/candidates")
 def list_agent_source_candidates(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(5, ge=1, le=50),
 ):
     """列出可一键转为 Agent Crawl 的标准抓取来源。"""
-    sources = db.scalars(
-        select(Source)
-        .where(
-            Source.enabled.is_(True),
-            Source.stream == Stream.NEWS,
-            Source.type != SourceType.AGENT_CRAWL,
-        )
-        .order_by(Source.name.asc())
-    ).all()
-    return [
-        {
-            "id": source.id,
-            "name": source.name,
-            "url": source.url,
-            "source_type": source.type,
-            "main_category": source.main_category,
-        }
-        for source in sources
-    ]
+    sources = _ensure_seed_candidates_available(db)
+    total = len(sources)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    start = (page - 1) * page_size
+    end = start + page_size
+    return {
+        "items": [_candidate_response(source) for source in sources[start:end]],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
 
 
+@public_router.post("/candidates/{candidate_source_id}/run", status_code=202)
 @router.post("/candidates/{candidate_source_id}/run", status_code=202)
 def trigger_agent_run_from_candidate(
     candidate_source_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """从标准抓取来源一键创建/复用 agent source 并立即运行。"""
     candidate = db.get(Source, candidate_source_id)
@@ -232,11 +266,11 @@ def trigger_agent_run_from_candidate(
     }
 
 
+@public_router.post("", status_code=201)
 @router.post("", status_code=201)
 def create_agent_source(
     body: AgentSourceCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """创建新的 agent_crawl 源。
 
@@ -269,12 +303,12 @@ def create_agent_source(
     return _source_response(source, config)
 
 
+@public_router.put("/{source_id}")
 @router.put("/{source_id}")
 def update_agent_source(
     source_id: int,
     body: AgentSourceCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """更新 agent_crawl 源的基本信息及配置。"""
     source = db.get(Source, source_id)
@@ -301,11 +335,11 @@ def update_agent_source(
     return _source_response(source, config)
 
 
+@public_router.delete("/{source_id}", status_code=204)
 @router.delete("/{source_id}", status_code=204)
 def delete_agent_source(
     source_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """删除 agent_crawl 源。
 
@@ -320,11 +354,11 @@ def delete_agent_source(
 
 # ── 运行记录 ──────────────────────────────────────────────────────
 
+@public_router.get("/{source_id}/runs")
 @router.get("/{source_id}/runs")
 def list_runs(
     source_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """查看指定源的最近 20 次运行记录。"""
     runs = db.scalars(
@@ -351,11 +385,11 @@ def list_runs(
     ]
 
 
+@public_router.post("/{source_id}/run", status_code=202)
 @router.post("/{source_id}/run", status_code=202)
 def trigger_agent_run(
     source_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """立即触发指定 agent source 的一次抓取。"""
     source = db.get(Source, source_id)
@@ -372,18 +406,43 @@ def trigger_agent_run(
     }
 
 
+# ── 取消运行 ────────────────────────────────────────────────────────
+
+@public_router.post("/{source_id}/runs/{run_id}/cancel", status_code=200)
+@router.post("/{source_id}/runs/{run_id}/cancel", status_code=200)
+def cancel_agent_run(
+    source_id: int,
+    run_id: int,
+    db: Session = Depends(get_db),
+):
+    """取消指定的运行记录。
+
+    将 status 标记为 failed，stage_message 设为「已取消」。
+    后台线程仍会继续运行至自然结束，但 UI 立即反映取消状态。
+    """
+    from datetime import datetime, timezone
+    run = db.get(AgentCrawlRun, run_id)
+    if run is None or run.source_id != source_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.status not in ("running",):
+        raise HTTPException(status_code=409, detail=f"Run is already {run.status}")
+    run.status = "failed"
+    run.stage_message = "已取消"
+    run.current_stage = "failed"
+    run.completed_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"cancelled": True, "run_id": run_id}
+
+
 # ── SiteMemory 管理（管理员专用）──────────────────────────────────
 
+@public_router.get("/{source_id}/memory")
 @router.get("/{source_id}/memory")
 def view_memory(
     source_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
-    """查看指定源的 SiteMemory 记录（最近 100 条）。管理员专用。"""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
-
+    """查看指定源的 SiteMemory 记录（最近 100 条）。"""
     records = db.scalars(
         select(AgentSiteMemory)
         .where(AgentSiteMemory.source_id == source_id)
@@ -403,20 +462,17 @@ def view_memory(
     ]
 
 
+@public_router.delete("/{source_id}/memory/{url_pattern:path}", status_code=204)
 @router.delete("/{source_id}/memory/{url_pattern:path}", status_code=204)
 def delete_memory_record(
     source_id: int,
     url_pattern: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
-    """删除指定的 SiteMemory 记录。管理员专用。
+    """删除指定的 SiteMemory 记录。
 
     url_pattern 为完整的 URL pattern（含斜杠），由 FastAPI :path 转换器捕获。
     """
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
-
     record = db.scalars(
         select(AgentSiteMemory)
         .where(

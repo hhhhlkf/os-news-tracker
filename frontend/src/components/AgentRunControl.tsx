@@ -1,34 +1,54 @@
+import type { CSSProperties } from "react";
 import { AgentSourceRunCard } from "./AgentSourceRunCard";
-import type { AgentRunRecord, AgentSource, AgentSourceCandidate } from "../types";
+import type { AgentRunRecord, AgentSource, AgentSourceCandidatesResponse } from "../types";
+
+const paginationButtonStyle: CSSProperties = {
+  border: "1px solid #d0d5dd",
+  borderRadius: 999,
+  padding: "8px 12px",
+  minWidth: 88,
+  background: "#ffffff",
+  color: "#344054",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
+};
 
 interface AgentRunControlProps {
   sources: AgentSource[];
-  candidateSources?: AgentSourceCandidate[];
+  candidatePage?: AgentSourceCandidatesResponse | null;
   runsBySourceId: Record<number, AgentRunRecord[] | undefined>;
   isLoading?: boolean;
   errorMessage?: string | null;
   triggerPendingSourceId?: number | null;
   triggerErrors?: Record<number, string | null | undefined>;
+  cancelPendingSourceId?: number | null;
   candidateTriggerPendingSourceId?: number | null;
   candidateTriggerErrors?: Record<number, string | null | undefined>;
   onTrigger: (sourceId: number) => Promise<void> | void;
+  onCancel?: (sourceId: number, runId: number) => Promise<void> | void;
   onTriggerCandidate?: (sourceId: number) => Promise<void> | void;
+  onCandidatePageChange?: (page: number) => void;
 }
 
 export function AgentRunControl(props: AgentRunControlProps) {
   const {
     sources,
-    candidateSources = [],
+    candidatePage = null,
     runsBySourceId,
     isLoading = false,
     errorMessage,
     triggerPendingSourceId = null,
     triggerErrors = {},
+    cancelPendingSourceId = null,
     candidateTriggerPendingSourceId = null,
     candidateTriggerErrors = {},
     onTrigger,
+    onCancel,
     onTriggerCandidate,
+    onCandidatePageChange,
   } = props;
+  const candidateSources = candidatePage?.items ?? [];
 
   if (isLoading) {
     return <div style={{ fontSize: 13, color: "#667085" }}>正在加载 Agent 源…</div>;
@@ -77,6 +97,11 @@ export function AgentRunControl(props: AgentRunControlProps) {
             <div style={{ fontSize: 13, color: "#667085" }}>
               直接复用标准抓取链接，一键创建或复用对应 Agent source 并立即运行。
             </div>
+            {candidatePage && (
+              <div style={{ fontSize: 12, color: "#475467" }}>
+                共 {candidatePage.total} 条 · 第 {candidatePage.page} / {candidatePage.total_pages} 页
+              </div>
+            )}
           </div>
           <div style={{ display: "grid", gap: 10 }}>
             {candidateSources.map((source) => (
@@ -125,6 +150,34 @@ export function AgentRunControl(props: AgentRunControlProps) {
               </div>
             ))}
           </div>
+          {candidatePage && candidatePage.total_pages > 1 && (
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                disabled={candidatePage.page <= 1}
+                onClick={() => onCandidatePageChange?.(candidatePage.page - 1)}
+                style={{
+                  ...paginationButtonStyle,
+                  cursor: candidatePage.page <= 1 ? "not-allowed" : "pointer",
+                  color: candidatePage.page <= 1 ? "#98a2b3" : "#344054",
+                }}
+              >
+                上一页
+              </button>
+              <button
+                type="button"
+                disabled={candidatePage.page >= candidatePage.total_pages}
+                onClick={() => onCandidatePageChange?.(candidatePage.page + 1)}
+                style={{
+                  ...paginationButtonStyle,
+                  cursor: candidatePage.page >= candidatePage.total_pages ? "not-allowed" : "pointer",
+                  color: candidatePage.page >= candidatePage.total_pages ? "#98a2b3" : "#344054",
+                }}
+              >
+                下一页
+              </button>
+            </div>
+          )}
         </section>
       )}
 
@@ -134,8 +187,10 @@ export function AgentRunControl(props: AgentRunControlProps) {
           source={source}
           latestRun={runsBySourceId[source.id]?.[0] ?? null}
           isTriggering={triggerPendingSourceId === source.id}
+          isCancelling={cancelPendingSourceId === source.id}
           errorMessage={triggerErrors[source.id] ?? null}
           onTrigger={onTrigger}
+          onCancel={onCancel}
         />
       ))}
     </div>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, fetchAgentRuns, fetchAgentSourceCandidates, fetchAgentSources, fetchFacets, fetchItems, fetchNewsRunLogs, fetchNewsRunStatus, startNewsRun, stopNewsRun, triggerAgentRun, triggerAgentRunFromCandidate } from "../api/client";
+import { ApiError, cancelAgentRun, fetchAgentRuns, fetchAgentSourceCandidates, fetchAgentSources, fetchFacets, fetchItems, fetchNewsRunLogs, fetchNewsRunStatus, startNewsRun, stopNewsRun, triggerAgentRun, triggerAgentRunFromCandidate } from "../api/client";
 import { AgentRunControl } from "../components/AgentRunControl";
 import { FacetSidebar } from "../components/FacetSidebar";
 import { ItemList } from "../components/ItemList";
@@ -12,6 +12,14 @@ import { buildDemoFacets, filterDemoItems, isAgentSourceRunning, isManualNewsRun
 import type { ManualNewsRunRequest, ManualNewsRunState } from "../types";
 
 const PAGE_SIZE = 10;
+const AGENT_CANDIDATE_PAGE_SIZE = 5;
+
+function formatUnknownAgentError(prefix: string, error: unknown) {
+  if (error instanceof Error && error.message) {
+    return `${prefix}: ${error.message}`;
+  }
+  return prefix;
+}
 
 export function HomePage() {
   const [filters, setFilters] = useState<Record<string, string>>({ q: "", sort_by: "published_at", sort_dir: "desc" });
@@ -20,7 +28,9 @@ export function HomePage() {
   const [controlMode, setControlMode] = useState<"standard" | "agent">("standard");
   const [runActionError, setRunActionError] = useState<string | null>(null);
   const [runActionPending, setRunActionPending] = useState(false);
+  const [agentCandidatePage, setAgentCandidatePage] = useState(1);
   const [agentTriggerPendingSourceId, setAgentTriggerPendingSourceId] = useState<number | null>(null);
+  const [agentCancelPendingSourceId, setAgentCancelPendingSourceId] = useState<number | null>(null);
   const [agentTriggerErrors, setAgentTriggerErrors] = useState<Record<number, string | null>>({});
   const [candidateTriggerPendingSourceId, setCandidateTriggerPendingSourceId] = useState<number | null>(null);
   const [candidateTriggerErrors, setCandidateTriggerErrors] = useState<Record<number, string | null>>({});
@@ -42,6 +52,7 @@ export function HomePage() {
     }),
     [filters, page],
   );
+  const agentFeatureEnabled = true;
 
   const newsRunQuery = useQuery({
     queryKey: ["news-run"],
@@ -81,15 +92,15 @@ export function HomePage() {
   const agentSourcesQuery = useQuery({
     queryKey: ["agent-sources"],
     queryFn: fetchAgentSources,
-    enabled: mode === "live" && controlMode === "agent",
+    enabled: agentFeatureEnabled && mode === "live" && controlMode === "agent",
     retry: false,
     refetchInterval: () => agentPollingEnabled ? 2000 : false,
   });
 
   const agentCandidatesQuery = useQuery({
-    queryKey: ["agent-source-candidates"],
-    queryFn: fetchAgentSourceCandidates,
-    enabled: mode === "live" && controlMode === "agent",
+    queryKey: ["agent-source-candidates", agentCandidatePage, AGENT_CANDIDATE_PAGE_SIZE],
+    queryFn: () => fetchAgentSourceCandidates(agentCandidatePage, AGENT_CANDIDATE_PAGE_SIZE),
+    enabled: agentFeatureEnabled && mode === "live" && controlMode === "agent",
     retry: false,
   });
 
@@ -97,7 +108,7 @@ export function HomePage() {
     queries: (agentSourcesQuery.data ?? []).map((source) => ({
       queryKey: ["agent-runs", source.id],
       queryFn: () => fetchAgentRuns(source.id),
-      enabled: mode === "live" && controlMode === "agent",
+      enabled: agentFeatureEnabled && mode === "live" && controlMode === "agent",
       retry: false,
       refetchInterval: () => agentPollingEnabled ? 2000 : false,
     })),
@@ -146,6 +157,13 @@ export function HomePage() {
     }
     previousRunState.current = nextState;
   }, [newsRunQuery.data?.state, queryClient]);
+
+  useEffect(() => {
+    const totalPages = agentCandidatesQuery.data?.total_pages;
+    if (totalPages && agentCandidatePage > totalPages) {
+      setAgentCandidatePage(totalPages);
+    }
+  }, [agentCandidatePage, agentCandidatesQuery.data?.total_pages]);
 
   useEffect(() => {
     const previous = previousActiveAgentSourceIds.current;
@@ -207,12 +225,30 @@ export function HomePage() {
     }
   }
 
+  async function handleCancelAgentRun(sourceId: number, runId: number) {
+    setAgentCancelPendingSourceId(sourceId);
+    try {
+      await cancelAgentRun(sourceId, runId);
+      await queryClient.invalidateQueries({ queryKey: ["agent-runs", sourceId] });
+    } catch (error) {
+      setAgentTriggerErrors((state) => ({
+        ...state,
+        [sourceId]: error instanceof ApiError ? error.message : "取消失败",
+      }));
+    } finally {
+      setAgentCancelPendingSourceId(null);
+    }
+  }
+
   async function handleTriggerAgentRunFromCandidate(sourceId: number) {
     setCandidateTriggerPendingSourceId(sourceId);
     setCandidateTriggerErrors((state) => ({ ...state, [sourceId]: null }));
     try {
       await triggerAgentRunFromCandidate(sourceId);
       setAgentPollingEnabled(true);
+      if ((agentCandidatesQuery.data?.items.length ?? 0) === 1 && agentCandidatePage > 1) {
+        setAgentCandidatePage((page) => Math.max(1, page - 1));
+      }
       await queryClient.invalidateQueries({ queryKey: ["agent-sources"] });
       await queryClient.invalidateQueries({ queryKey: ["agent-source-candidates"] });
       await queryClient.invalidateQueries({ queryKey: ["items"] });
@@ -230,11 +266,20 @@ export function HomePage() {
     if (agentSourcesQuery.error instanceof ApiError) {
       return agentSourcesQuery.error.message;
     }
+    if (agentSourcesQuery.error) {
+      return formatUnknownAgentError("Agent source 列表加载失败", agentSourcesQuery.error);
+    }
     if (agentCandidatesQuery.error instanceof ApiError) {
       return agentCandidatesQuery.error.message;
     }
-    const firstError = agentRunsQueries.find((query) => query.error instanceof ApiError)?.error;
-    return firstError instanceof ApiError ? firstError.message : null;
+    if (agentCandidatesQuery.error) {
+      return formatUnknownAgentError("标准抓取来源加载失败", agentCandidatesQuery.error);
+    }
+    const firstError = agentRunsQueries.find((query) => query.error)?.error;
+    if (firstError instanceof ApiError) {
+      return firstError.message;
+    }
+    return firstError ? formatUnknownAgentError("Agent 运行记录加载失败", firstError) : null;
   }, [agentCandidatesQuery.error, agentRunsQueries, agentSourcesQuery.error]);
 
   return (
@@ -306,7 +351,7 @@ export function HomePage() {
             ) : (
               <AgentRunControl
                 sources={agentSourcesQuery.data ?? []}
-                candidateSources={agentCandidatesQuery.data ?? []}
+                candidatePage={agentCandidatesQuery.data ?? null}
                 runsBySourceId={agentRunsBySourceId}
                 isLoading={
                   agentSourcesQuery.isLoading ||
@@ -316,10 +361,13 @@ export function HomePage() {
                 errorMessage={agentRunError}
                 triggerPendingSourceId={agentTriggerPendingSourceId}
                 triggerErrors={agentTriggerErrors}
+                cancelPendingSourceId={agentCancelPendingSourceId}
                 candidateTriggerPendingSourceId={candidateTriggerPendingSourceId}
                 candidateTriggerErrors={candidateTriggerErrors}
                 onTrigger={handleTriggerAgentRun}
+                onCancel={handleCancelAgentRun}
                 onTriggerCandidate={handleTriggerAgentRunFromCandidate}
+                onCandidatePageChange={setAgentCandidatePage}
               />
             )
           }

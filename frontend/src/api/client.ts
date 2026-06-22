@@ -2,8 +2,9 @@ import type {
   AgentCandidateRunResponse,
   AgentRunRecord,
   AgentRunTriggerResponse,
-  AgentSourceCandidate,
+  AgentSourceCandidatesResponse,
   AgentSource,
+  AgentSourceCandidate,
   ItemListResponse,
   ItemDetail,
   Facets,
@@ -14,6 +15,8 @@ import type {
 import { authHeaders } from "../auth";
 
 const BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+const CRAWL_BASE = `${BASE}/crawl-sources`;
+const LEGACY_CRAWL_BASE = `${BASE}/sources/agent`;
 
 export class ApiError extends Error {
   status: number;
@@ -71,6 +74,48 @@ async function expectOk<T>(response: Response, fallbackMessage: string): Promise
   return response.json() as Promise<T>;
 }
 
+async function fetchJsonWithFallback<T>(
+  primaryUrl: string,
+  fallbackUrl: string,
+  init: RequestInit | undefined,
+  fallbackMessage: string,
+): Promise<T> {
+  async function readJsonOrThrow(url: string): Promise<T> {
+    const response = await fetch(url, init);
+    if (!response.ok) {
+      const body = await parseErrorBody(response);
+      const message =
+        typeof body === "object" &&
+        body !== null &&
+        "detail" in body &&
+        typeof (body as { detail?: unknown }).detail === "string"
+          ? (body as { detail: string }).detail
+          : `${fallbackMessage} (HTTP ${response.status})`;
+      throw new ApiError(response.status, message, body);
+    }
+
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.includes("application/json")) {
+      throw new SyntaxError(`Expected JSON but received ${contentType || "unknown content type"}`);
+    }
+
+    return response.json() as Promise<T>;
+  }
+
+  try {
+    return await readJsonOrThrow(primaryUrl);
+  } catch (error) {
+    const shouldFallback =
+      error instanceof SyntaxError ||
+      (error instanceof ApiError && error.status === 404) ||
+      (error instanceof TypeError);
+    if (!shouldFallback) {
+      throw error;
+    }
+    return readJsonOrThrow(fallbackUrl);
+  }
+}
+
 export async function fetchItems(params: ItemQueryParams): Promise<ItemListResponse> {
   const qs = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -117,38 +162,72 @@ export async function stopNewsRun(): Promise<ManualNewsRunStatus> {
 }
 
 export async function fetchAgentSources(): Promise<AgentSource[]> {
-  const r = await fetch(`${BASE}/sources/agent`, {
-    headers: authHeaders(),
-  });
-  return expectOk<AgentSource[]>(r, "failed to load agent sources");
+  return fetchJsonWithFallback<AgentSource[]>(
+    CRAWL_BASE,
+    LEGACY_CRAWL_BASE,
+    { headers: authHeaders() },
+    "failed to load agent sources",
+  );
 }
 
 export async function fetchAgentRuns(sourceId: number): Promise<AgentRunRecord[]> {
-  const r = await fetch(`${BASE}/sources/agent/${sourceId}/runs`, {
-    headers: authHeaders(),
-  });
-  return expectOk<AgentRunRecord[]>(r, "failed to load agent runs");
+  return fetchJsonWithFallback<AgentRunRecord[]>(
+    `${CRAWL_BASE}/${sourceId}/runs`,
+    `${LEGACY_CRAWL_BASE}/${sourceId}/runs`,
+    { headers: authHeaders() },
+    "failed to load agent runs",
+  );
 }
 
 export async function triggerAgentRun(sourceId: number): Promise<AgentRunTriggerResponse> {
-  const r = await fetch(`${BASE}/sources/agent/${sourceId}/run`, {
-    method: "POST",
-    headers: authHeaders(),
-  });
-  return expectOk<AgentRunTriggerResponse>(r, "failed to trigger agent run");
+  return fetchJsonWithFallback<AgentRunTriggerResponse>(
+    `${CRAWL_BASE}/${sourceId}/run`,
+    `${LEGACY_CRAWL_BASE}/${sourceId}/run`,
+    { method: "POST", headers: authHeaders() },
+    "failed to trigger agent run",
+  );
 }
 
-export async function fetchAgentSourceCandidates(): Promise<AgentSourceCandidate[]> {
-  const r = await fetch(`${BASE}/sources/agent/candidates`, {
-    headers: authHeaders(),
+export async function cancelAgentRun(sourceId: number, runId: number): Promise<{ cancelled: boolean; run_id: number }> {
+  return fetchJsonWithFallback(
+    `${CRAWL_BASE}/${sourceId}/runs/${runId}/cancel`,
+    `${LEGACY_CRAWL_BASE}/${sourceId}/runs/${runId}/cancel`,
+    { method: "POST", headers: authHeaders() },
+    "failed to cancel agent run",
+  );
+}
+
+export async function fetchAgentSourceCandidates(
+  page = 1,
+  pageSize = 5,
+): Promise<AgentSourceCandidatesResponse> {
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize),
   });
-  return expectOk<AgentSourceCandidate[]>(r, "failed to load agent source candidates");
+  const payload = await fetchJsonWithFallback<AgentSourceCandidatesResponse | AgentSourceCandidate[]>(
+    `${CRAWL_BASE}/candidates?${params}`,
+    `${LEGACY_CRAWL_BASE}/candidates?${params}`,
+    { headers: authHeaders() },
+    "failed to load agent source candidates",
+  );
+  if (Array.isArray(payload)) {
+    return {
+      items: payload,
+      total: payload.length,
+      page: 1,
+      page_size: payload.length || pageSize,
+      total_pages: 1,
+    };
+  }
+  return payload;
 }
 
 export async function triggerAgentRunFromCandidate(sourceId: number): Promise<AgentCandidateRunResponse> {
-  const r = await fetch(`${BASE}/sources/agent/candidates/${sourceId}/run`, {
-    method: "POST",
-    headers: authHeaders(),
-  });
-  return expectOk<AgentCandidateRunResponse>(r, "failed to trigger agent run from candidate");
+  return fetchJsonWithFallback<AgentCandidateRunResponse>(
+    `${CRAWL_BASE}/candidates/${sourceId}/run`,
+    `${LEGACY_CRAWL_BASE}/candidates/${sourceId}/run`,
+    { method: "POST", headers: authHeaders() },
+    "failed to trigger agent run from candidate",
+  );
 }
