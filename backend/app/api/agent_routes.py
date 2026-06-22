@@ -366,6 +366,21 @@ def delete_agent_source(
     if source is None or source.type != "agent_crawl":
         raise HTTPException(status_code=404, detail="Agent source not found")
 
+    # 先将运行中的 run 标记为 failed，减少后台线程持锁的竞争窗口
+    from datetime import datetime, timezone
+    running_runs = db.scalars(
+        select(AgentCrawlRun).where(
+            AgentCrawlRun.source_id == source_id,
+            AgentCrawlRun.status == "running",
+        )
+    ).all()
+    for run in running_runs:
+        run.status = "failed"
+        run.stage_message = "来源已删除"
+        run.completed_at = datetime.now(timezone.utc)
+    if running_runs:
+        db.flush()  # 提交状态变更但不 commit，缩短后续删除的锁等待
+
     # 收集该 source 产生的 item id 列表
     item_ids = db.scalars(
         select(Item.id).where(Item.source_id == source_id)

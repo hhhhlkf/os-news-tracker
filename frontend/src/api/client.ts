@@ -195,13 +195,28 @@ export async function deleteAgentSource(sourceId: number): Promise<void> {
     const body = await parseErrorBody(r);
     throw new ApiError(r.status, `failed to delete agent source (HTTP ${r.status})`, body);
   };
+
+  const doDelete = async () => {
+    try {
+      await tryDelete(`${CRAWL_BASE}/${sourceId}`);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        await tryDelete(`${LEGACY_CRAWL_BASE}/${sourceId}`);
+      } else {
+        throw err;
+      }
+    }
+  };
+
   try {
-    await tryDelete(`${CRAWL_BASE}/${sourceId}`);
-  } catch (err) {
-    if (err instanceof ApiError && err.status === 404) {
-      await tryDelete(`${LEGACY_CRAWL_BASE}/${sourceId}`);
+    await doDelete();
+  } catch (firstErr) {
+    // 后台采集线程可能仍持有 DB 锁（竞争条件），等待后自动重试一次
+    if (firstErr instanceof ApiError && firstErr.status === 500) {
+      await new Promise((r) => setTimeout(r, 1500));
+      await doDelete();
     } else {
-      throw err;
+      throw firstErr;
     }
   }
 }
