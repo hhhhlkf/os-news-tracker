@@ -116,6 +116,14 @@ export interface AgentSource {
   config: AgentSourceConfig | null;
 }
 
+export interface AgentSourceCandidate {
+  id: number;
+  name: string;
+  url: string;
+  source_type: string;
+  main_category: string | null;
+}
+
 export interface AgentRunRecord {
   id: number;
   status: AgentRunStatus;
@@ -134,4 +142,12 @@ export interface AgentRunTriggerResponse {
   message: string;
   source_id: number;
   accepted: boolean;
+}
+
+export interface AgentCandidateRunResponse {
+  accepted: boolean;
+  created: boolean;
+  candidate_source_id: number;
+  agent_source_id: number;
+  message: string;
 }

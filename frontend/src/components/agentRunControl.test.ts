@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { AgentRunControl } from "./AgentRunControl";
 import { formatAgentRunStats, formatAgentStageLabel } from "./AgentSourceRunCard";
-import type { AgentRunRecord, AgentSource } from "../types";
+import type { AgentRunRecord, AgentSource, AgentSourceCandidate } from "../types";
 
 const source: AgentSource = {
   id: 1,
@@ -20,6 +20,14 @@ const source: AgentSource = {
     quality_workers: 3,
     summary_workers: 3,
   },
+};
+
+const candidate: AgentSourceCandidate = {
+  id: 9,
+  name: "Fedora Updates",
+  url: "https://example.com/fedora.xml",
+  source_type: "rss",
+  main_category: "OS跟踪来源",
 };
 
 function makeRun(partial: Partial<AgentRunRecord>): AgentRunRecord {
@@ -84,5 +92,22 @@ describe("AgentRunControl", () => {
 
     expect(html).toContain("失败");
     expect(html).toContain("重复触发");
+  });
+
+  it("shows standard source candidates and one-click run button when no agent source exists", () => {
+    const html = renderToStaticMarkup(
+      createElement(AgentRunControl, {
+        sources: [],
+        candidateSources: [candidate],
+        runsBySourceId: {},
+        onTrigger: () => {},
+        onTriggerCandidate: () => {},
+      }),
+    );
+
+    expect(html).toContain("标准抓取来源");
+    expect(html).toContain("Fedora Updates");
+    expect(html).toContain("一键 Agent 运行");
+    expect(html).not.toContain("当前还没有可用的 Agent Crawl source。");
   });
 });

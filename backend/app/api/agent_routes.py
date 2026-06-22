@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
+from app.enums import SourceType, Stream
 from app.models import (
     AgentCrawlRun,
     AgentSiteMemory,
@@ -72,6 +73,69 @@ def _find_active_agent_run(db: Session, source_id: int) -> AgentCrawlRun | None:
     ).first()
 
 
+def _build_default_agent_source_config(candidate: Source) -> AgentSourceConfig:
+    """将标准抓取来源转换成默认 Agent source 配置。"""
+    focus_areas = [candidate.name] if candidate.name else []
+    topic_groups = [candidate.main_category] if candidate.main_category else []
+    return AgentSourceConfig(
+        focus_areas=focus_areas,
+        topic_groups=topic_groups,
+        crawl_depth=1,
+        max_urls_per_run=20,
+        quality_threshold=4,
+        crawl_workers=5,
+        quality_workers=3,
+        summary_workers=3,
+    )
+
+
+def _ensure_agent_source_for_candidate(db: Session, candidate: Source) -> tuple[Source, bool]:
+    """为标准抓取来源复用或创建对应的 agent source。"""
+    existing = db.scalars(
+        select(Source)
+        .where(
+            Source.type == SourceType.AGENT_CRAWL,
+            Source.url == candidate.url,
+        )
+        .limit(1)
+    ).first()
+    if existing is not None:
+        return existing, False
+
+    source = Source(
+        name=candidate.name,
+        type=SourceType.AGENT_CRAWL,
+        url=candidate.url,
+        stream=Stream.NEWS,
+        enabled=True,
+    )
+    db.add(source)
+    db.flush()
+
+    config = _build_default_agent_source_config(candidate)
+    config.source_id = source.id
+    db.add(config)
+    db.commit()
+    db.refresh(source)
+    return source, True
+
+
+def _trigger_response_for_agent_source(source_id: int, db: Session):
+    active_run = _find_active_agent_run(db, source_id)
+    if active_run is not None:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": "Agent source is already running",
+                "run_id": active_run.id,
+                "current_stage": active_run.current_stage or "planning",
+            },
+        )
+
+    _start_agent_source_run(source_id)
+    return None
+
+
 # ── 响应辅助 ──────────────────────────────────────────────────────
 
 def _source_response(source: Source, config: AgentSourceConfig | None) -> dict:
@@ -110,6 +174,62 @@ def list_agent_sources(
         cfg = db.get(AgentSourceConfig, s.id)
         result.append(_source_response(s, cfg))
     return result
+
+
+@router.get("/candidates")
+def list_agent_source_candidates(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """列出可一键转为 Agent Crawl 的标准抓取来源。"""
+    sources = db.scalars(
+        select(Source)
+        .where(
+            Source.enabled.is_(True),
+            Source.stream == Stream.NEWS,
+            Source.type != SourceType.AGENT_CRAWL,
+        )
+        .order_by(Source.name.asc())
+    ).all()
+    return [
+        {
+            "id": source.id,
+            "name": source.name,
+            "url": source.url,
+            "source_type": source.type,
+            "main_category": source.main_category,
+        }
+        for source in sources
+    ]
+
+
+@router.post("/candidates/{candidate_source_id}/run", status_code=202)
+def trigger_agent_run_from_candidate(
+    candidate_source_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """从标准抓取来源一键创建/复用 agent source 并立即运行。"""
+    candidate = db.get(Source, candidate_source_id)
+    if (
+        candidate is None
+        or candidate.type == SourceType.AGENT_CRAWL
+        or candidate.stream != Stream.NEWS
+    ):
+        raise HTTPException(status_code=404, detail="Candidate source not found")
+
+    agent_source, created = _ensure_agent_source_for_candidate(db, candidate)
+    conflict = _trigger_response_for_agent_source(agent_source.id, db)
+    if conflict is not None:
+        return conflict
+
+    return {
+        "accepted": True,
+        "created": created,
+        "candidate_source_id": candidate_source_id,
+        "agent_source_id": agent_source.id,
+        "message": "Agent crawl accepted",
+    }
 
 
 @router.post("", status_code=201)
@@ -242,18 +362,9 @@ def trigger_agent_run(
     if source is None or source.type != "agent_crawl":
         raise HTTPException(status_code=404, detail="Agent source not found")
 
-    active_run = _find_active_agent_run(db, source_id)
-    if active_run is not None:
-        return JSONResponse(
-            status_code=409,
-            content={
-                "detail": "Agent source is already running",
-                "run_id": active_run.id,
-                "current_stage": active_run.current_stage or "planning",
-            },
-        )
-
-    _start_agent_source_run(source_id)
+    conflict = _trigger_response_for_agent_source(source_id, db)
+    if conflict is not None:
+        return conflict
     return {
         "message": "Agent crawl accepted",
         "source_id": source_id,

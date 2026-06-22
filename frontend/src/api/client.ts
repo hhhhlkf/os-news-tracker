@@ -1,6 +1,8 @@
 import type {
+  AgentCandidateRunResponse,
   AgentRunRecord,
   AgentRunTriggerResponse,
+  AgentSourceCandidate,
   AgentSource,
   ItemListResponse,
   ItemDetail,
@@ -134,4 +136,19 @@ export async function triggerAgentRun(sourceId: number): Promise<AgentRunTrigger
     headers: authHeaders(),
   });
   return expectOk<AgentRunTriggerResponse>(r, "failed to trigger agent run");
+}
+
+export async function fetchAgentSourceCandidates(): Promise<AgentSourceCandidate[]> {
+  const r = await fetch(`${BASE}/sources/agent/candidates`, {
+    headers: authHeaders(),
+  });
+  return expectOk<AgentSourceCandidate[]>(r, "failed to load agent source candidates");
+}
+
+export async function triggerAgentRunFromCandidate(sourceId: number): Promise<AgentCandidateRunResponse> {
+  const r = await fetch(`${BASE}/sources/agent/candidates/${sourceId}/run`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return expectOk<AgentCandidateRunResponse>(r, "failed to trigger agent run from candidate");
 }

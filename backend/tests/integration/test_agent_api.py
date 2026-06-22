@@ -229,6 +229,96 @@ class TestTriggerAgentRun:
         assert isinstance(body["run_id"], int)
 
 
+class TestAgentRunCandidates:
+    def test_list_agent_run_candidates_excludes_agent_sources(self, client, auth_headers):
+        """候选列表应来自标准抓取来源，不包含 agent_crawl。"""
+        session = client.app.dependency_overrides[get_db]()
+        session.add_all([
+            Source(
+                name="Fedora Updates",
+                type="rss",
+                url="https://example.com/fedora.xml",
+                stream="news",
+                enabled=True,
+                main_category="OS跟踪来源",
+            ),
+            Source(
+                name="Existing Agent",
+                type="agent_crawl",
+                url="https://example.com/agent",
+                stream="news",
+                enabled=True,
+            ),
+        ])
+        session.commit()
+
+        r = client.get("/sources/agent/candidates", headers=auth_headers)
+
+        assert r.status_code == 200
+        assert len(r.json()) == 1
+        assert r.json()[0]["name"] == "Fedora Updates"
+        assert r.json()[0]["source_type"] == "rss"
+
+    def test_trigger_from_candidate_creates_agent_source_and_runs(self, client, auth_headers):
+        """从标准抓取来源一键运行时，应创建 agent source 并立即触发。"""
+        session = client.app.dependency_overrides[get_db]()
+        source = Source(
+            name="Ubuntu Security",
+            type="rss",
+            url="https://example.com/ubuntu.xml",
+            stream="news",
+            enabled=True,
+            main_category="OS跟踪来源",
+        )
+        session.add(source)
+        session.commit()
+        session.refresh(source)
+
+        with patch("app.api.agent_routes._start_agent_source_run") as start_run:
+            r = client.post(f"/sources/agent/candidates/{source.id}/run", headers=auth_headers)
+
+        assert r.status_code == 202
+        body = r.json()
+        assert body["accepted"] is True
+        assert body["created"] is True
+        assert body["candidate_source_id"] == source.id
+        assert isinstance(body["agent_source_id"], int)
+        start_run.assert_called_once_with(body["agent_source_id"])
+
+    def test_trigger_from_candidate_reuses_existing_agent_source(self, client, auth_headers):
+        """同 URL 的 agent source 已存在时，应复用而不是重复创建。"""
+        session = client.app.dependency_overrides[get_db]()
+        candidate = Source(
+            name="Rocky Linux",
+            type="rss",
+            url="https://example.com/rocky.xml",
+            stream="news",
+            enabled=True,
+            main_category="OS跟踪来源",
+        )
+        session.add(candidate)
+        session.flush()
+        agent_source = Source(
+            name="Rocky Linux",
+            type="agent_crawl",
+            url="https://example.com/rocky.xml",
+            stream="news",
+            enabled=True,
+        )
+        session.add(agent_source)
+        session.flush()
+        session.commit()
+
+        with patch("app.api.agent_routes._start_agent_source_run") as start_run:
+            r = client.post(f"/sources/agent/candidates/{candidate.id}/run", headers=auth_headers)
+
+        assert r.status_code == 202
+        body = r.json()
+        assert body["created"] is False
+        assert body["agent_source_id"] == agent_source.id
+        start_run.assert_called_once_with(agent_source.id)
+
+
 class TestViewMemory:
     def test_admin_can_view_memory(self, admin_client, auth_headers):
         """管理员可查看 SiteMemory。"""

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, fetchAgentRuns, fetchAgentSources, fetchFacets, fetchItems, fetchNewsRunLogs, fetchNewsRunStatus, startNewsRun, stopNewsRun, triggerAgentRun } from "../api/client";
+import { ApiError, fetchAgentRuns, fetchAgentSourceCandidates, fetchAgentSources, fetchFacets, fetchItems, fetchNewsRunLogs, fetchNewsRunStatus, startNewsRun, stopNewsRun, triggerAgentRun, triggerAgentRunFromCandidate } from "../api/client";
 import { AgentRunControl } from "../components/AgentRunControl";
 import { FacetSidebar } from "../components/FacetSidebar";
 import { ItemList } from "../components/ItemList";
@@ -22,6 +22,8 @@ export function HomePage() {
   const [runActionPending, setRunActionPending] = useState(false);
   const [agentTriggerPendingSourceId, setAgentTriggerPendingSourceId] = useState<number | null>(null);
   const [agentTriggerErrors, setAgentTriggerErrors] = useState<Record<number, string | null>>({});
+  const [candidateTriggerPendingSourceId, setCandidateTriggerPendingSourceId] = useState<number | null>(null);
+  const [candidateTriggerErrors, setCandidateTriggerErrors] = useState<Record<number, string | null>>({});
   const [agentPollingEnabled, setAgentPollingEnabled] = useState(false);
   const queryClient = useQueryClient();
   const previousRunState = useRef<ManualNewsRunState | null>(null);
@@ -82,6 +84,13 @@ export function HomePage() {
     enabled: mode === "live" && controlMode === "agent",
     retry: false,
     refetchInterval: () => agentPollingEnabled ? 2000 : false,
+  });
+
+  const agentCandidatesQuery = useQuery({
+    queryKey: ["agent-source-candidates"],
+    queryFn: fetchAgentSourceCandidates,
+    enabled: mode === "live" && controlMode === "agent",
+    retry: false,
   });
 
   const agentRunsQueries = useQueries({
@@ -198,13 +207,35 @@ export function HomePage() {
     }
   }
 
+  async function handleTriggerAgentRunFromCandidate(sourceId: number) {
+    setCandidateTriggerPendingSourceId(sourceId);
+    setCandidateTriggerErrors((state) => ({ ...state, [sourceId]: null }));
+    try {
+      await triggerAgentRunFromCandidate(sourceId);
+      setAgentPollingEnabled(true);
+      await queryClient.invalidateQueries({ queryKey: ["agent-sources"] });
+      await queryClient.invalidateQueries({ queryKey: ["agent-source-candidates"] });
+      await queryClient.invalidateQueries({ queryKey: ["items"] });
+    } catch (error) {
+      setCandidateTriggerErrors((state) => ({
+        ...state,
+        [sourceId]: error instanceof ApiError ? error.message : "一键 Agent 运行失败",
+      }));
+    } finally {
+      setCandidateTriggerPendingSourceId(null);
+    }
+  }
+
   const agentRunError = useMemo(() => {
     if (agentSourcesQuery.error instanceof ApiError) {
       return agentSourcesQuery.error.message;
     }
+    if (agentCandidatesQuery.error instanceof ApiError) {
+      return agentCandidatesQuery.error.message;
+    }
     const firstError = agentRunsQueries.find((query) => query.error instanceof ApiError)?.error;
     return firstError instanceof ApiError ? firstError.message : null;
-  }, [agentRunsQueries, agentSourcesQuery.error]);
+  }, [agentCandidatesQuery.error, agentRunsQueries, agentSourcesQuery.error]);
 
   return (
     <div style={{ minHeight: "100vh", background: "#f5f7fb" }}>
@@ -275,12 +306,20 @@ export function HomePage() {
             ) : (
               <AgentRunControl
                 sources={agentSourcesQuery.data ?? []}
+                candidateSources={agentCandidatesQuery.data ?? []}
                 runsBySourceId={agentRunsBySourceId}
-                isLoading={agentSourcesQuery.isLoading || agentRunsQueries.some((query) => query.isLoading)}
+                isLoading={
+                  agentSourcesQuery.isLoading ||
+                  agentCandidatesQuery.isLoading ||
+                  agentRunsQueries.some((query) => query.isLoading)
+                }
                 errorMessage={agentRunError}
                 triggerPendingSourceId={agentTriggerPendingSourceId}
                 triggerErrors={agentTriggerErrors}
+                candidateTriggerPendingSourceId={candidateTriggerPendingSourceId}
+                candidateTriggerErrors={candidateTriggerErrors}
                 onTrigger={handleTriggerAgentRun}
+                onTriggerCandidate={handleTriggerAgentRunFromCandidate}
               />
             )
           }
