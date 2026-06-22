@@ -156,6 +156,47 @@ def test_pipeline_applies_relevance_filter_when_enabled(session, monkeypatch):
     assert session.get(Source, 1).items == []
 
 
+def test_process_item_result_reports_duplicate_reason(session):
+    src = session.get(Source, 1)
+    pipeline = Pipeline(session=session, extractor=_StubExtractor(), enricher=_StubEnricher())
+    raw = RawItem(
+        source_id=1,
+        title="Linux 6.9",
+        url="https://x/a?utm_source=rss",
+        raw_content="body",
+    )
+
+    assert pipeline.process_item(src, raw) is True
+
+    result = pipeline.process_item_result(src, raw)
+
+    assert result.stored is False
+    assert result.reason == "duplicate"
+
+
+def test_process_item_result_reports_relevance_reason(session, monkeypatch):
+    src = session.get(Source, 1)
+    src.relevance_filter = True
+    src.relevance_keywords = "kernel, release"
+    session.commit()
+
+    monkeypatch.setattr("app.pipeline.llm_relevance", lambda *args, **kwargs: False)
+    pipeline = Pipeline(session=session, extractor=_StubExtractor(), enricher=_StubEnricher())
+
+    result = pipeline.process_item_result(
+        src,
+        RawItem(
+            source_id=1,
+            title="Linux 6.9",
+            url="https://x/relevance",
+            raw_content="body",
+        ),
+    )
+
+    assert result.stored is False
+    assert result.reason == "relevance"
+
+
 class _RejectingEnricher:
     def enrich(self, item):
         return EnrichedFields(
@@ -188,6 +229,25 @@ def test_pipeline_skips_non_newsworthy_items_rejected_by_enricher(session):
 
     assert pipeline.run_source(src, fetcher=_StubFetcher()) == 0
     assert session.get(Source, 1).items == []
+
+
+def test_process_item_result_reports_enrich_reject_reason(session):
+    src = session.get(Source, 1)
+    pipeline = Pipeline(session=session, extractor=_StubExtractor(), enricher=_RejectingEnricher())
+
+    result = pipeline.process_item_result(
+        src,
+        RawItem(
+            source_id=1,
+            title="Linux 6.9",
+            url="https://x/rejected",
+            raw_content="body",
+        ),
+    )
+
+    assert result.stored is False
+    assert result.reason == "enrich_reject"
+    assert result.detail == "source page is a docs or landing page without newsworthy content"
 
 
 def test_pipeline_skips_bot_challenge_pages_before_enrichment(session):
@@ -223,3 +283,35 @@ def test_pipeline_skips_bot_challenge_pages_before_enrichment(session):
     assert pipeline.run_source(src, fetcher=_ChallengeFetcher()) == 0
     assert enricher.calls == 0
     assert session.get(Source, 1).items == []
+
+
+def test_process_item_result_reports_bot_challenge_reason(session):
+    src = session.get(Source, 1)
+    challenge = (
+        "确保您不是机器人！ Making sure you're not a bot! "
+        "Anubis uses a Proof-of-Work scheme based on Hashcash to protect "
+        "the website from large-scale scraping. Please enable JavaScript."
+    )
+
+    class _ChallengeExtractor:
+        def extract(self, url):
+            return ExtractedDoc(
+                url=url,
+                title="Making sure you're not a bot!",
+                clean_content=challenge,
+            )
+
+    pipeline = Pipeline(session=session, extractor=_ChallengeExtractor(), enricher=_StubEnricher())
+
+    result = pipeline.process_item_result(
+        src,
+        RawItem(
+            source_id=1,
+            title="Making sure you're not a bot!",
+            url="https://x/anubis-2",
+            raw_content=challenge,
+        ),
+    )
+
+    assert result.stored is False
+    assert result.reason == "bot_challenge"

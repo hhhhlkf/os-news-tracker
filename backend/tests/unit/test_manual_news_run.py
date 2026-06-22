@@ -611,6 +611,35 @@ def test_stop_marks_controller_stopping_until_complete():
     assert controller.should_stop() is False
 
 
+def test_not_stored_log_fields_include_reason_and_detail():
+    from app.manual_news_run import _build_not_stored_log_fields
+    from app.pipeline import ProcessItemResult
+
+    fields = _build_not_stored_log_fields(
+        ProcessItemResult(
+            stored=False,
+            reason="enrich_reject",
+            detail="source page is a docs or landing page without newsworthy content",
+        )
+    )
+
+    assert fields == {
+        "reason": "enrich_reject",
+        "reason_detail": "source page is a docs or landing page without newsworthy content",
+    }
+
+
+def test_not_stored_log_fields_omit_empty_detail():
+    from app.manual_news_run import _build_not_stored_log_fields
+    from app.pipeline import ProcessItemResult
+
+    fields = _build_not_stored_log_fields(
+        ProcessItemResult(stored=False, reason="duplicate", detail=None)
+    )
+
+    assert fields == {"reason": "duplicate"}
+
+
 def test_status_includes_target_count():
     from app.manual_news_run import ManualNewsRunController
 

@@ -95,6 +95,13 @@ _LOW_VALUE_CANDIDATE_MARKERS = (
 logger = logging.getLogger(__name__)
 
 
+def _build_not_stored_log_fields(result: Any) -> dict[str, Any]:
+    fields: dict[str, Any] = {"reason": result.reason}
+    if getattr(result, "detail", None):
+        fields["reason_detail"] = result.detail
+    return fields
+
+
 class _Completer(Protocol):
     def complete(self, prompt: str, **kw) -> str: ...
 
@@ -890,8 +897,8 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
                     ledger.mark_processing(raw.url)
                     _sync_status_from_ledger()
                     try:
-                        saved = pipeline.process_item(source, raw)
-                    except Exception:
+                        result = pipeline.process_item_result(source, raw)
+                    except Exception as exc:
                         logger.exception("manual news run item processing failed for %s", raw.url)
                         ledger.mark_failed(raw.url)
                         append_run_log(
@@ -901,9 +908,11 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
                             level="error",
                             title=raw.title,
                             url=raw.url,
+                            reason="failed",
+                            reason_detail=str(exc),
                         )
                     else:
-                        if saved:
+                        if result.stored:
                             ledger.mark_saved(raw.url)
                             append_run_log(
                                 "process",
@@ -913,13 +922,17 @@ def _run_manual_news_run(request: ManualNewsRunRequest) -> None:
                                 url=raw.url,
                             )
                         else:
-                            ledger.mark_rejected(raw.url)
+                            if result.reason == "duplicate":
+                                ledger.mark_duplicate(raw.url)
+                            else:
+                                ledger.mark_rejected(raw.url)
                             append_run_log(
                                 "process",
                                 "候选未入库",
                                 source=source.name,
                                 title=raw.title,
                                 url=raw.url,
+                                **_build_not_stored_log_fields(result),
                             )
                     source.health_status = "ok"
                     process_session.commit()

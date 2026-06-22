@@ -107,6 +107,16 @@ def test_legacy_page_monitor_short_content_is_skipped_before_enrichment(
     assert enricher.calls == []
     assert session.query(Item).count() == 0
 
+    result = pipeline.process_item_result(
+        source,
+        _raw_item(
+            raw_content="short portal copy",
+            published_at=datetime(2026, 6, 10, tzinfo=timezone.utc),
+        ),
+    )
+    assert result.stored is False
+    assert result.reason == "legacy_page_short_content"
+
 
 def test_legacy_page_monitor_missing_published_at_is_skipped_before_enrichment(
     session: Session,
@@ -127,6 +137,13 @@ def test_legacy_page_monitor_missing_published_at_is_skipped_before_enrichment(
     assert stored is False
     assert enricher.calls == []
     assert session.query(Item).count() == 0
+
+    result = pipeline.process_item_result(
+        source,
+        _raw_item(raw_content="substantial article body " * 40, published_at=None),
+    )
+    assert result.stored is False
+    assert result.reason == "legacy_page_missing_published_at"
 
 
 def test_legacy_page_monitor_long_content_with_date_is_stored(

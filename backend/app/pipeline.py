@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
@@ -28,6 +29,13 @@ BOT_CHALLENGE_MARKERS = (
     "enable javascript",
     "browser verification",
 )
+
+
+@dataclass(frozen=True)
+class ProcessItemResult:
+    stored: bool
+    reason: str
+    detail: str | None = None
 
 
 class Pipeline:
@@ -71,6 +79,9 @@ class Pipeline:
         return new_count
 
     def process_item(self, source: Source, raw) -> bool:
+        return self.process_item_result(source, raw).stored
+
+    def process_item_result(self, source: Source, raw) -> ProcessItemResult:
         doc = self._extract_for(raw, source)
         normalized = normalize(raw, doc)
         if normalized.published_at is None:
@@ -80,17 +91,18 @@ class Pipeline:
             )
         if self._repo.exists_by_canonical(normalized.canonical_url):
             self._repo.merge_source_link(normalized.canonical_url, source.id, raw.url)
-            return False
+            return ProcessItemResult(stored=False, reason="duplicate")
         if self._is_bot_challenge_page(normalized):
             logger.info(
                 "bot challenge page filtered out %s (source=%s)",
                 normalized.canonical_url,
                 source.name,
             )
-            return False
+            return ProcessItemResult(stored=False, reason="bot_challenge")
         if self._is_legacy_page_monitor_item(source, raw):
-            if not self._passes_legacy_page_quality_gate(source, normalized):
-                return False
+            gate_result = self._legacy_page_quality_gate_result(source, normalized)
+            if gate_result is not None:
+                return gate_result
         if source.relevance_filter:
             if not llm_relevance(
                 normalized.title,
@@ -102,7 +114,7 @@ class Pipeline:
                     normalized.canonical_url,
                     source.name,
                 )
-                return False
+                return ProcessItemResult(stored=False, reason="relevance")
         try:
             try:
                 fields = self._enricher.enrich(
@@ -113,7 +125,7 @@ class Pipeline:
                 fields = self._enricher.enrich(normalized)
         except Exception:
             logger.exception("enrich failed for %s", normalized.canonical_url)
-            return False
+            return ProcessItemResult(stored=False, reason="enrich_failed")
         if not fields.should_store:
             logger.info(
                 "enricher rejected %s (source=%s, reason=%s)",
@@ -121,10 +133,14 @@ class Pipeline:
                 source.name,
                 fields.reject_reason or "unknown",
             )
-            return False
+            return ProcessItemResult(
+                stored=False,
+                reason="enrich_reject",
+                detail=fields.reject_reason or "unknown",
+            )
         fields = self._apply_category_constraints(source, fields)
         self._repo.save_enriched(normalized, fields)
-        return True
+        return ProcessItemResult(stored=True, reason="stored")
 
     def _extract_for(self, raw, source: Source):
         from app.schemas import ExtractedDoc
@@ -178,11 +194,11 @@ class Pipeline:
             and raw.raw_content is not None
         )
 
-    def _passes_legacy_page_quality_gate(
+    def _legacy_page_quality_gate_result(
         self,
         source: Source,
         item: NormalizedItem,
-    ) -> bool:
+    ) -> ProcessItemResult | None:
         if len(item.clean_content) < MIN_CONTENT_LEN:
             logger.info(
                 "legacy page_monitor skipped %s (source=%s, reason=short_content, len=%s)",
@@ -190,12 +206,16 @@ class Pipeline:
                 source.name,
                 len(item.clean_content),
             )
-            return False
+            return ProcessItemResult(
+                stored=False,
+                reason="legacy_page_short_content",
+                detail=f"len={len(item.clean_content)} < {MIN_CONTENT_LEN}",
+            )
         if item.published_at is None:
             logger.info(
                 "legacy page_monitor skipped %s (source=%s, reason=missing_published_at)",
                 item.canonical_url,
                 source.name,
             )
-            return False
-        return True
+            return ProcessItemResult(stored=False, reason="legacy_page_missing_published_at")
+        return None
