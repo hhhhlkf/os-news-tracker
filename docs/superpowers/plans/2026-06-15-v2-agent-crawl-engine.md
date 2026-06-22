@@ -1279,15 +1279,22 @@ cd backend && git add app/agent/plan_agent.py tests/unit/test_agent_plan_agent.p
 
 ---
 
-### Task 14: AgentCrawlFetcher + API Routes
+### Task 14: AgentCrawlFetcher + API Routes ✅
 
 **Files:**
 - Create: `backend/app/fetchers/agent_crawl.py`
 - Create: `backend/app/api/agent_routes.py`
+- Create: `backend/tests/unit/test_agent_crawl.py`
+- Create: `backend/tests/integration/test_agent_api.py`
 - Modify: `backend/app/api/main.py`
 - Modify: `backend/app/scheduler.py`
+- Modify: `backend/app/schemas.py` (RawItem.extra field)
+- Modify: `backend/app/pipeline.py` (agent bypass)
+- Modify: `backend/app/repository.py` (save_agent_enriched)
 
-- [ ] **Step 1: Create `backend/app/fetchers/agent_crawl.py`**
+**Tests:** 18 new (7 unit + 11 integration), 284 total pass.
+
+- [x] **Step 1: Create `backend/app/fetchers/agent_crawl.py`**
 
 ```python
 import asyncio
@@ -1389,7 +1396,7 @@ def _to_raw_item(item: AgentItem) -> RawItem:
     )
 ```
 
-- [ ] **Step 2: Update RawItem schema to accept `extra` field**
+- [x] **Step 2: Update RawItem schema to accept `extra` field**
 
 In `backend/app/schemas.py`, in the `RawItem` model, add:
 
@@ -1397,7 +1404,7 @@ In `backend/app/schemas.py`, in the `RawItem` model, add:
 extra: dict | None = None
 ```
 
-- [ ] **Step 3: Wire agent_crawl in `app/scheduler.py`**
+- [x] **Step 3: Wire agent_crawl in `app/scheduler.py`**
 
 In `backend/app/scheduler.py`, find the `build_fetcher()` function and add a branch for `agent_crawl`:
 
@@ -1411,7 +1418,7 @@ def build_fetcher(source: Source, extractor, search, db=None):
     # ... existing branches follow
 ```
 
-- [ ] **Step 4: Create `backend/app/api/agent_routes.py`**
+- [x] **Step 4: Create `backend/app/api/agent_routes.py`**
 
 ```python
 import logging
@@ -1605,14 +1612,14 @@ def delete_memory_record(
         db.commit()
 ```
 
-- [ ] **Step 5: Register agent_routes in `app/api/main.py`**
+- [x] **Step 5: Register agent_routes in `app/api/main.py`**
 
 ```python
 from app.api.agent_routes import router as agent_router
 app.include_router(agent_router)
 ```
 
-- [ ] **Step 6: Run full test suite**
+- [x] **Step 6: Run full test suite**
 
 ```bash
 cd backend && ENABLE_SCHEDULER=0 python -m pytest tests/ -v 2>&1 | tail -20
@@ -1620,8 +1627,23 @@ cd backend && ENABLE_SCHEDULER=0 python -m pytest tests/ -v 2>&1 | tail -20
 
 Expected: all tests PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cd backend && git add app/fetchers/agent_crawl.py app/agent/plan_agent.py app/api/agent_routes.py app/api/main.py app/scheduler.py app/schemas.py && git commit -m "feat: add AgentCrawlFetcher and /sources/agent API"
 ```
+
+**Implementation notes:**
+
+与计划的差异：
+
+| 方面 | 计划 | 实际 |
+|------|------|------|
+| Fetcher 依赖注入 | `__init__(db)` 直接创建所有组件 | `__init__(db, *, plan_agent, crawl_dag, quality_pool, summary_pool)` 支持注入 mock |
+| Pipeline 修改 | 未列出 | 新增 `_process_agent_item()` 方法 + `raw.extra.agent_item` 检查，绕过 Enricher |
+| Repository 修改 | 未列出 | 新增 `save_agent_enriched()` 方法，直接从 extra 读取富化字段 |
+| Scheduler | `build_fetcher` 新增 `db` 参数 + `agent_crawl` 分支 | 同时添加到 `SUPPORTED_NEWS_SOURCE_TYPES` |
+| RawItem.extra | `dict` 类型 | `dict \| None` 默认值 `None`（向后兼容） |
+| PlanAgent 修复 | — | `skip_urls` 使用字符串（而非 dict），日志变量名 `skip_patterns`→`skip_urls` |
+| API 路由注释 | 无 | 中英文模块/方法文档字符串 |
+| 测试 | 无（计划未列出） | 18 个新测试：7 个单元（`_to_raw_item` + `fetch` 编排）+ 11 个集成（CRUD + runs + memory） |
