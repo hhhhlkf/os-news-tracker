@@ -343,17 +343,38 @@ def delete_agent_source(
 ):
     """删除 agent_crawl 源及其所有关联数据。
 
-    agent_crawl_runs 的外键约束建立时未设 ON DELETE CASCADE，
-    需手动先删关联行，再删 source，避免 ForeignKeyViolation。
+    多张关联表（items、item_sources、agent_crawl_runs）的 source_id 外键
+    未设 ON DELETE CASCADE，需按依赖顺序手动清理，避免 ForeignKeyViolation。
+
+    清理顺序：
+    1. item_sources（引用 items 和 sources）
+    2. items（引用 sources）
+    3. agent_crawl_runs（引用 sources）
+    4. source 本身（agent_source_configs + agent_site_memory 有 CASCADE，自动清理）
     """
+    from sqlalchemy import delete as sa_delete
+    from app.models import Item, ItemSource
+
     source = db.get(Source, source_id)
     if source is None or source.type != "agent_crawl":
         raise HTTPException(status_code=404, detail="Agent source not found")
 
-    # 手动清理 agent_crawl_runs（外键未设 ON DELETE CASCADE）
-    from sqlalchemy import delete as sa_delete
+    # 1. 删除 item_sources（同时覆盖：该 source 的直接 item_sources 行）
+    db.execute(sa_delete(ItemSource).where(ItemSource.source_id == source_id))
+
+    # 2. 删除该 source 直接产生的 items（source_id 列记录主来源）
+    #    先删 item_sources 中指向这些 item 的其他行，再删 items 本身
+    item_ids = db.scalars(
+        select(Item.id).where(Item.source_id == source_id)
+    ).all()
+    if item_ids:
+        db.execute(sa_delete(ItemSource).where(ItemSource.item_id.in_(item_ids)))
+        db.execute(sa_delete(Item).where(Item.id.in_(item_ids)))
+
+    # 3. 删除 agent_crawl_runs（无 CASCADE）
     db.execute(sa_delete(AgentCrawlRun).where(AgentCrawlRun.source_id == source_id))
 
+    # 4. 删除 source（agent_source_configs + agent_site_memory 有 CASCADE，自动删）
     db.delete(source)
     db.commit()
 
