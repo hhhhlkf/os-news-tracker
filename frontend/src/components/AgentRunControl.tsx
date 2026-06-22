@@ -23,10 +23,12 @@ interface AgentRunControlProps {
   triggerPendingSourceId?: number | null;
   triggerErrors?: Record<number, string | null | undefined>;
   cancelPendingSourceId?: number | null;
+  deletePendingSourceId?: number | null;
   candidateTriggerPendingSourceId?: number | null;
   candidateTriggerErrors?: Record<number, string | null | undefined>;
   onTrigger: (sourceId: number) => Promise<void> | void;
   onCancel?: (sourceId: number, runId: number) => Promise<void> | void;
+  onDelete?: (sourceId: number) => Promise<void> | void;
   onTriggerCandidate?: (sourceId: number) => Promise<void> | void;
   onCandidatePageChange?: (page: number) => void;
 }
@@ -41,10 +43,12 @@ export function AgentRunControl(props: AgentRunControlProps) {
     triggerPendingSourceId = null,
     triggerErrors = {},
     cancelPendingSourceId = null,
+    deletePendingSourceId = null,
     candidateTriggerPendingSourceId = null,
     candidateTriggerErrors = {},
     onTrigger,
     onCancel,
+    onDelete,
     onTriggerCandidate,
     onCandidatePageChange,
   } = props;
@@ -188,9 +192,11 @@ export function AgentRunControl(props: AgentRunControlProps) {
           latestRun={runsBySourceId[source.id]?.[0] ?? null}
           isTriggering={triggerPendingSourceId === source.id}
           isCancelling={cancelPendingSourceId === source.id}
+          isDeleting={deletePendingSourceId === source.id}
           errorMessage={triggerErrors[source.id] ?? null}
           onTrigger={onTrigger}
           onCancel={onCancel}
+          onDelete={onDelete}
         />
       ))}
     </div>

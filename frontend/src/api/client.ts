@@ -188,6 +188,24 @@ export async function triggerAgentRun(sourceId: number): Promise<AgentRunTrigger
   );
 }
 
+export async function deleteAgentSource(sourceId: number): Promise<void> {
+  const tryDelete = async (url: string) => {
+    const r = await fetch(url, { method: "DELETE", headers: authHeaders() });
+    if (r.status === 204 || r.ok) return;
+    const body = await parseErrorBody(r);
+    throw new ApiError(r.status, `failed to delete agent source (HTTP ${r.status})`, body);
+  };
+  try {
+    await tryDelete(`${CRAWL_BASE}/${sourceId}`);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) {
+      await tryDelete(`${LEGACY_CRAWL_BASE}/${sourceId}`);
+    } else {
+      throw err;
+    }
+  }
+}
+
 export async function cancelAgentRun(sourceId: number, runId: number): Promise<{ cancelled: boolean; run_id: number }> {
   return fetchJsonWithFallback(
     `${CRAWL_BASE}/${sourceId}/runs/${runId}/cancel`,

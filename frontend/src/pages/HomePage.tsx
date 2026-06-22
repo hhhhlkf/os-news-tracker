@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, cancelAgentRun, fetchAgentRuns, fetchAgentSourceCandidates, fetchAgentSources, fetchFacets, fetchItems, fetchNewsRunLogs, fetchNewsRunStatus, startNewsRun, stopNewsRun, triggerAgentRun, triggerAgentRunFromCandidate } from "../api/client";
+import { ApiError, cancelAgentRun, deleteAgentSource, fetchAgentRuns, fetchAgentSourceCandidates, fetchAgentSources, fetchFacets, fetchItems, fetchNewsRunLogs, fetchNewsRunStatus, startNewsRun, stopNewsRun, triggerAgentRun, triggerAgentRunFromCandidate } from "../api/client";
 import { AgentRunControl } from "../components/AgentRunControl";
 import { FacetSidebar } from "../components/FacetSidebar";
 import { ItemList } from "../components/ItemList";
@@ -31,6 +31,7 @@ export function HomePage() {
   const [agentCandidatePage, setAgentCandidatePage] = useState(1);
   const [agentTriggerPendingSourceId, setAgentTriggerPendingSourceId] = useState<number | null>(null);
   const [agentCancelPendingSourceId, setAgentCancelPendingSourceId] = useState<number | null>(null);
+  const [agentDeletePendingSourceId, setAgentDeletePendingSourceId] = useState<number | null>(null);
   const [agentTriggerErrors, setAgentTriggerErrors] = useState<Record<number, string | null>>({});
   const [candidateTriggerPendingSourceId, setCandidateTriggerPendingSourceId] = useState<number | null>(null);
   const [candidateTriggerErrors, setCandidateTriggerErrors] = useState<Record<number, string | null>>({});
@@ -225,6 +226,22 @@ export function HomePage() {
     }
   }
 
+  async function handleDeleteAgentSource(sourceId: number) {
+    setAgentDeletePendingSourceId(sourceId);
+    try {
+      await deleteAgentSource(sourceId);
+      await queryClient.invalidateQueries({ queryKey: ["agent-sources"] });
+      await queryClient.invalidateQueries({ queryKey: ["agent-source-candidates"] });
+    } catch (error) {
+      setAgentTriggerErrors((state) => ({
+        ...state,
+        [sourceId]: error instanceof ApiError ? error.message : "删除失败",
+      }));
+    } finally {
+      setAgentDeletePendingSourceId(null);
+    }
+  }
+
   async function handleCancelAgentRun(sourceId: number, runId: number) {
     setAgentCancelPendingSourceId(sourceId);
     try {
@@ -362,10 +379,12 @@ export function HomePage() {
                 triggerPendingSourceId={agentTriggerPendingSourceId}
                 triggerErrors={agentTriggerErrors}
                 cancelPendingSourceId={agentCancelPendingSourceId}
+                deletePendingSourceId={agentDeletePendingSourceId}
                 candidateTriggerPendingSourceId={candidateTriggerPendingSourceId}
                 candidateTriggerErrors={candidateTriggerErrors}
                 onTrigger={handleTriggerAgentRun}
                 onCancel={handleCancelAgentRun}
+                onDelete={handleDeleteAgentSource}
                 onTriggerCandidate={handleTriggerAgentRunFromCandidate}
                 onCandidatePageChange={setAgentCandidatePage}
               />

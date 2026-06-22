@@ -6,9 +6,11 @@ interface AgentSourceRunCardProps {
   latestRun?: AgentRunRecord | null;
   isTriggering?: boolean;
   isCancelling?: boolean;
+  isDeleting?: boolean;
   errorMessage?: string | null;
   onTrigger: (sourceId: number) => Promise<void> | void;
   onCancel?: (sourceId: number, runId: number) => Promise<void> | void;
+  onDelete?: (sourceId: number) => Promise<void> | void;
 }
 
 const stageLabels: Record<AgentRunStage, string> = {
@@ -40,7 +42,7 @@ function formatList(values: string[] | undefined): string {
 }
 
 export function AgentSourceRunCard(props: AgentSourceRunCardProps) {
-  const { source, latestRun, isTriggering = false, isCancelling = false, errorMessage, onTrigger, onCancel } = props;
+  const { source, latestRun, isTriggering = false, isCancelling = false, isDeleting = false, errorMessage, onTrigger, onCancel, onDelete } = props;
   const running = isAgentSourceRunning(latestRun);
   const stageLabel = formatAgentStageLabel(latestRun?.current_stage);
   const buttonDisabled = isTriggering || running;
@@ -65,6 +67,7 @@ export function AgentSourceRunCard(props: AgentSourceRunCardProps) {
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+          {/* 取消：仅运行时显示 */}
           {running && onCancel && latestRun?.id != null && (
             <button
               type="button"
@@ -83,6 +86,28 @@ export function AgentSourceRunCard(props: AgentSourceRunCardProps) {
               }}
             >
               {isCancelling ? "取消中" : "取消"}
+            </button>
+          )}
+          {/* 删除：始终显示（运行时禁用） */}
+          {onDelete && (
+            <button
+              type="button"
+              disabled={isDeleting || running}
+              onClick={() => void onDelete(source.id)}
+              title="删除此来源"
+              style={{
+                border: "1px solid #fecdca",
+                borderRadius: 999,
+                padding: "10px 14px",
+                minWidth: 64,
+                background: "#fff",
+                color: isDeleting || running ? "#98a2b3" : "#b42318",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: isDeleting || running ? "not-allowed" : "pointer",
+              }}
+            >
+              {isDeleting ? "删除中" : "删除"}
             </button>
           )}
           <button
