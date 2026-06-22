@@ -118,16 +118,6 @@
 
 ---
 
-## 采集状态汇总
-
-| 状态 | 数量 | 源 |
-| ---- | ---- | --- |
-| ✅ 成功采集 | 21 | 全部 RSS/API/HTML 源（含 Phoronix、LKML Latest Topics、arXiv cs.OS + cs.PF 分类页面） |
-| ⚠️ 部分数据 | 1 | Fedora COPR（RSS 无时间戳字段） |
-| ❌ 访问拒绝 | 0 | — |
-
----
-
 ## 亮点摘要
 
 1. **安全态势紧张**：Red Hat 今日连发 RHSA-2026:27707 和 RHSA-2026:27706 两条 Important 级内核安全公告；SUSE 和 Rocky Linux 同步大规模修复 CVE。

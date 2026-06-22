@@ -72,7 +72,7 @@ export function NewsRunLogPanel({ logs, isLoading = false }: Props) {
         style={{
           display: "grid",
           gap: 8,
-          maxHeight: expanded ? "70vh" : 300,
+          maxHeight: expanded ? 300 : "4vh",
           overflowY: "auto",
           fontFamily: "JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace",
           fontSize: 12,
