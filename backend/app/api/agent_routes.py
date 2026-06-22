@@ -341,13 +341,19 @@ def delete_agent_source(
     source_id: int,
     db: Session = Depends(get_db),
 ):
-    """删除 agent_crawl 源。
+    """删除 agent_crawl 源及其所有关联数据。
 
-    AgentSourceConfig、AgentSiteMemory、AgentCrawlRun 通过外键 CASCADE 自动清理。
+    agent_crawl_runs 的外键约束建立时未设 ON DELETE CASCADE，
+    需手动先删关联行，再删 source，避免 ForeignKeyViolation。
     """
     source = db.get(Source, source_id)
     if source is None or source.type != "agent_crawl":
         raise HTTPException(status_code=404, detail="Agent source not found")
+
+    # 手动清理 agent_crawl_runs（外键未设 ON DELETE CASCADE）
+    from sqlalchemy import delete as sa_delete
+    db.execute(sa_delete(AgentCrawlRun).where(AgentCrawlRun.source_id == source_id))
+
     db.delete(source)
     db.commit()
 
