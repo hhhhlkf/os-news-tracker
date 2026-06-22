@@ -23,10 +23,15 @@ SUPPORTED_NEWS_SOURCE_TYPES = (
     SourceType.PAGE_MONITOR,
     SourceType.SEARCH,
     SourceType.API,
+    SourceType.AGENT_CRAWL,
 )
 
 
-def build_fetcher(source: Source, extractor, search):
+def build_fetcher(source: Source, extractor, search, *, db=None):
+    """根据源类型构建对应的 Fetcher 实例。
+
+    agent_crawl 类型需要 db 会话参数，其他类型忽略。
+    """
     if source.type == SourceType.RSS:
         return RssFetcher()
     if source.type == SourceType.PAGE_MONITOR:
@@ -35,6 +40,11 @@ def build_fetcher(source: Source, extractor, search):
         return SearchFetcher(search=search, extractor=extractor)
     if source.type == SourceType.API and source.adapter == "generic_json_list":
         return GenericJsonApiFetcher()
+    if source.type == SourceType.AGENT_CRAWL:
+        from app.fetchers.agent_crawl import AgentCrawlFetcher
+        if db is None:
+            raise ValueError("agent_crawl fetcher requires a db session")
+        return AgentCrawlFetcher(db=db)
     raise ValueError(f"unknown source type {source.type}")
 
 
@@ -59,7 +69,7 @@ def run_source_job(source_id: int):
             return
         extractor = ScraplingExtractor(use_stealth=source.stealth)
         search = get_search_provider()
-        fetcher = build_fetcher(source, extractor, search)
+        fetcher = build_fetcher(source, extractor, search, db=session)
         pipeline = Pipeline(session=session, extractor=extractor, enricher=Enricher())
         count = pipeline.run_source(source, fetcher=fetcher)
         logger.info("source %s produced %d new items", source.name, count)

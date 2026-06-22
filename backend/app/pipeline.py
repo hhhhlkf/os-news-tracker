@@ -82,6 +82,10 @@ class Pipeline:
         return self.process_item_result(source, raw).stored
 
     def process_item_result(self, source: Source, raw) -> ProcessItemResult:
+        # Agent crawl 条目绕过 Enricher — 摘要已由 SummaryWorkerPool 完成
+        if raw.extra and raw.extra.get("agent_item"):
+            return self._process_agent_item(source, raw)
+
         doc = self._extract_for(raw, source)
         normalized = normalize(raw, doc)
         if normalized.published_at is None:
@@ -140,6 +144,18 @@ class Pipeline:
             )
         fields = self._apply_category_constraints(source, fields)
         self._repo.save_enriched(normalized, fields)
+        return ProcessItemResult(stored=True, reason="stored")
+
+    def _process_agent_item(self, source: Source, raw) -> ProcessItemResult:
+        """处理 agent crawl 条目：跳过 LLM 富化，直接存储。
+
+        Agent 条目已经由 SummaryWorkerPool 完成了摘要、关键词提取和重要性评估，
+        Pipeline 只需做去重检查后直接写入。
+        """
+        if self._repo.exists_by_canonical(raw.url):
+            self._repo.merge_source_link(raw.url, source.id, raw.url)
+            return ProcessItemResult(stored=False, reason="duplicate")
+        self._repo.save_agent_enriched(raw)
         return ProcessItemResult(stored=True, reason="stored")
 
     def _extract_for(self, raw, source: Source):

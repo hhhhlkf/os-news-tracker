@@ -11,6 +11,7 @@ class RawItem(BaseModel):
     url: str
     raw_content: str | None = None
     published_at: datetime | None = None
+    extra: dict | None = None
 
 
 class ExtractedDoc(BaseModel):

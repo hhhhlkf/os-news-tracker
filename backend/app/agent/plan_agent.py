@@ -227,10 +227,10 @@ class PlanAgent:
 
         # ── 2. 过滤已知 discard（按 URL 检查）──
         skip_urls = {
-            link["url"] for link in links
-            if self._memory.should_skip(db=db, source_id=config.source_id, url=link["url"])
+            link for link in links
+            if self._memory.should_skip(db=db, source_id=config.source_id, url=link)
         }
-        candidate_links = [l for l in links if l["url"] not in skip_urls]
+        candidate_links = [l for l in links if l not in skip_urls]
 
         # ── 3. LLM 语义筛选 ──
         prompt = _PROMPT.format(
@@ -279,6 +279,6 @@ class PlanAgent:
 
         logger.info(
             "plan_agent: 为源 %d 规划了 %d 个 URL（候选 %d，skip %d）",
-            config.source_id, len(validated), len(candidate_links), len(skip_patterns),
+            config.source_id, len(validated), len(candidate_links), len(skip_urls),
         )
         return CrawlPlan(source_id=config.source_id, urls=validated)

@@ -3,6 +3,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.agent_routes import router as agent_router
 from app.api.auth_routes import router as auth_router
 from app.api.routes import router
 
@@ -17,6 +18,7 @@ def create_app(*, lifespan: Any = None) -> FastAPI:
     )
     app.include_router(router)
     app.include_router(auth_router)
+    app.include_router(agent_router)
     return app
 
 

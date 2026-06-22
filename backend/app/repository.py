@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.enums import ItemStatus, TagKind
 from app.models import Entity, Item, ItemSource, ItemTag, Tag, TagAlias
 from app.processing.dedup import content_hash, url_hash
-from app.schemas import EnrichedFields, NormalizedItem
+from app.schemas import EnrichedFields, NormalizedItem, RawItem
 
 MAX_TAGS_PER_ITEM = 5
 
@@ -151,6 +151,41 @@ class Repository:
         self._s.flush()
         self._record_tag_alias_suggestions(fields)
         self._add_source_link_if_new(db_item.id, item.source_id, item.canonical_url)
+        self._s.commit()
+        return db_item
+
+    def save_agent_enriched(self, item: RawItem) -> Item:
+        """存储 agent crawl 产出的已富化条目，跳过 LLM Enricher。
+
+        AgentItem 的摘要数据通过 RawItem.extra 字段传入（agent_item=True）。
+        此方法直接从 extra 读取 main_category、importance、key_points 等字段，
+        无需再调用 LLM 富化。
+        """
+        extra = item.extra or {}
+
+        db_item = Item(
+            source_id=item.source_id,
+            title=item.title,
+            url=item.url,
+            url_hash=url_hash(item.url),
+            content_hash=content_hash(item.raw_content or ""),
+            clean_content=item.raw_content,
+            published_at=item.published_at,
+            main_category=extra.get("main_category", "agent_crawl"),
+            summary=item.raw_content or "",
+            key_points=extra.get("key_points", []),
+            importance=extra.get("importance", "低"),
+            info_type=extra.get("info_type", "其他"),
+            status=ItemStatus.AGENT_ENRICHED,
+            llm_confidence=None,
+        )
+        # 添加 main_category tag
+        db_item.tags.append(
+            self._get_or_create_tag(extra.get("main_category", "agent_crawl"), TagKind.MAIN_CATEGORY),
+        )
+        self._s.add(db_item)
+        self._s.flush()
+        self._add_source_link_if_new(db_item.id, item.source_id, item.url)
         self._s.commit()
         return db_item
 
