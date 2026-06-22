@@ -101,12 +101,12 @@
 | **ServeTheHome** | [servethehome.com](https://www.servethehome.com/) | 服务器硬件评测与基础设施 | Minisforum MS-03 SFF PC：小身材大能量 | 2026-06-20 20:04 UTC |
 | **ServeTheHome** | [servethehome.com](https://www.servethehome.com/) | 服务器硬件评测与基础设施 | 构建高密度 Agentic AI CPU 机架 | 2026-06-19 22:38 UTC |
 | **ServeTheHome** | [servethehome.com](https://www.servethehome.com/) | 服务器硬件评测与基础设施 | Intel E835 NIC 系列新品（HPE Discover 2026） | 2026-06-18 19:55 UTC |
-| **Phoronix** | [phoronix.com](https://www.phoronix.com/) | Linux 性能评测（内核/GPU/CPU/编译器） | Early AMD GCN GPUs Seeing Improved GPU Recovery - Another Valve-Led Linux Improvement | 2026-06-22 00:37 UTC |
-| **Phoronix** | [phoronix.com](https://www.phoronix.com/) | Linux 性能评测（内核/GPU/CPU/编译器） | zlib-rs 0.6.4 Released With Fix For Intel Raptor Lake Crash, SIMD Optimizations | 2026-06-21 19:33 UTC |
-| **Phoronix** | [phoronix.com](https://www.phoronix.com/) | Linux 性能评测（内核/GPU/CPU/编译器） | Qualcomm Posts Linux Patches For HP EliteBook X G2q X2 Elite Laptop | 2026-06-21 14:38 UTC |
-| **LKML Latest Topics** | [lore.kernel.org/lkml](https://lore.kernel.org/lkml/) | Linux 内核邮件列表实时讨论 | Re: [PATCH] mm/page_alloc: unify __alloc_frozen_pages[_nolock]_noprof() | 2026-06-22 01:58 UTC |
-| **LKML Latest Topics** | [lore.kernel.org/lkml](https://lore.kernel.org/lkml/) | Linux 内核邮件列表实时讨论 | Re: [PATCH] drm/amdgpu: do not enter fs_reclaim under notifier_lock in lockdep training | 2026-06-22 01:56 UTC |
-| **LKML Latest Topics** | [lore.kernel.org/lkml](https://lore.kernel.org/lkml/) | Linux 内核邮件列表实时讨论 | Re: [PATCH] erofs: remove fscache backend entirely | 2026-06-22 01:54 UTC |
+| **Phoronix** | [phoronix.com](https://www.phoronix.com/) | Linux 性能评测（内核/GPU/CPU/编译器） | 早期 AMD GCN GPU 的恢复机制获得改进，又一项由 Valve 主导的 Linux 改进 | 2026-06-22 00:37 UTC |
+| **Phoronix** | [phoronix.com](https://www.phoronix.com/) | Linux 性能评测（内核/GPU/CPU/编译器） | zlib-rs 0.6.4 发布，修复 Intel Raptor Lake 崩溃问题并加入 SIMD 优化 | 2026-06-21 19:33 UTC |
+| **Phoronix** | [phoronix.com](https://www.phoronix.com/) | Linux 性能评测（内核/GPU/CPU/编译器） | 高通提交 HP EliteBook X G2q X2 Elite 笔记本的 Linux 支持补丁 | 2026-06-21 14:38 UTC |
+| **LKML Latest Topics** | [lore.kernel.org/lkml](https://lore.kernel.org/lkml/) | Linux 内核邮件列表实时讨论 | 回复：[PATCH] mm/page_alloc: 统一 __alloc_frozen_pages[_nolock]_noprof() | 2026-06-22 01:58 UTC |
+| **LKML Latest Topics** | [lore.kernel.org/lkml](https://lore.kernel.org/lkml/) | Linux 内核邮件列表实时讨论 | 回复：[PATCH] drm/amdgpu: 在 lockdep 训练期间不要在 notifier_lock 下进入 fs_reclaim | 2026-06-22 01:56 UTC |
+| **LKML Latest Topics** | [lore.kernel.org/lkml](https://lore.kernel.org/lkml/) | Linux 内核邮件列表实时讨论 | 回复：[PATCH] erofs: 完全移除 fscache 后端 | 2026-06-22 01:54 UTC |
 | **arXiv cs.OS** | [arxiv.org/cs.OS](https://arxiv.org/list/cs.OS/recent) | 操作系统学术论文预印本 | CloakLM: 混淆 GPU 内存布局以缓解模型泄露 | 2026-06-18 |
 | **arXiv cs.OS** | [arxiv.org/cs.OS](https://arxiv.org/list/cs.OS/recent) | 操作系统学术论文预印本 | LiveStack: 集群级全栈实时模拟的 OS 支持 (cs.DC) | 2026-06-18 |
 | **arXiv cs.OS** | [arxiv.org/cs.OS](https://arxiv.org/list/cs.OS/recent) | 操作系统学术论文预印本 | Cordon: 面向工具调用型 LLM Agent 的语义事务 | 2026-06-17 |
