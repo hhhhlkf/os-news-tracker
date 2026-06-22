@@ -1,6 +1,6 @@
 # OS 新闻情报汇总 — 2026-06-22
 
-> 采集时间：2026-06-22 | 覆盖范围：近 2-3 天 | 数据源：22 个 seed_sources（成功 19 / 部分数据 1 / 失败 2）
+> 采集时间：2026-06-22 | 覆盖范围：近 2-3 天 | 数据源：22 个 seed_sources（成功 21 / 部分数据 1 / 失败 0）
 
 ---
 
@@ -101,8 +101,12 @@
 | **ServeTheHome** | [servethehome.com](https://www.servethehome.com/) | 服务器硬件评测与基础设施 | Minisforum MS-03 SFF PC：小身材大能量 | 2026-06-20 20:04 UTC |
 | **ServeTheHome** | [servethehome.com](https://www.servethehome.com/) | 服务器硬件评测与基础设施 | 构建高密度 Agentic AI CPU 机架 | 2026-06-19 22:38 UTC |
 | **ServeTheHome** | [servethehome.com](https://www.servethehome.com/) | 服务器硬件评测与基础设施 | Intel E835 NIC 系列新品（HPE Discover 2026） | 2026-06-18 19:55 UTC |
-| **Phoronix** | [phoronix.com](https://www.phoronix.com/) | Linux 性能评测（内核/GPU/CPU/编译器） | ⚠️ HTTP 403 Forbidden — 网站反爬严格，RSS 与主页均拒绝抓取 | — |
-| **LKML Latest Topics** | [lore.kernel.org/lkml](https://lore.kernel.org/lkml/) | Linux 内核邮件列表实时讨论 | ⚠️ Anubis JS 挑战拦截 — 需浏览器执行 JavaScript，无法程序化抓取 | — |
+| **Phoronix** | [phoronix.com](https://www.phoronix.com/) | Linux 性能评测（内核/GPU/CPU/编译器） | Early AMD GCN GPUs Seeing Improved GPU Recovery - Another Valve-Led Linux Improvement | 2026-06-22 00:37 UTC |
+| **Phoronix** | [phoronix.com](https://www.phoronix.com/) | Linux 性能评测（内核/GPU/CPU/编译器） | zlib-rs 0.6.4 Released With Fix For Intel Raptor Lake Crash, SIMD Optimizations | 2026-06-21 19:33 UTC |
+| **Phoronix** | [phoronix.com](https://www.phoronix.com/) | Linux 性能评测（内核/GPU/CPU/编译器） | Qualcomm Posts Linux Patches For HP EliteBook X G2q X2 Elite Laptop | 2026-06-21 14:38 UTC |
+| **LKML Latest Topics** | [lore.kernel.org/lkml](https://lore.kernel.org/lkml/) | Linux 内核邮件列表实时讨论 | Re: [PATCH] mm/page_alloc: unify __alloc_frozen_pages[_nolock]_noprof() | 2026-06-22 01:58 UTC |
+| **LKML Latest Topics** | [lore.kernel.org/lkml](https://lore.kernel.org/lkml/) | Linux 内核邮件列表实时讨论 | Re: [PATCH] drm/amdgpu: do not enter fs_reclaim under notifier_lock in lockdep training | 2026-06-22 01:56 UTC |
+| **LKML Latest Topics** | [lore.kernel.org/lkml](https://lore.kernel.org/lkml/) | Linux 内核邮件列表实时讨论 | Re: [PATCH] erofs: remove fscache backend entirely | 2026-06-22 01:54 UTC |
 | **arXiv cs.OS** | [arxiv.org/cs.OS](https://arxiv.org/list/cs.OS/recent) | 操作系统学术论文预印本 | CloakLM: 混淆 GPU 内存布局以缓解模型泄露 | 2026-06-18 |
 | **arXiv cs.OS** | [arxiv.org/cs.OS](https://arxiv.org/list/cs.OS/recent) | 操作系统学术论文预印本 | LiveStack: 集群级全栈实时模拟的 OS 支持 (cs.DC) | 2026-06-18 |
 | **arXiv cs.OS** | [arxiv.org/cs.OS](https://arxiv.org/list/cs.OS/recent) | 操作系统学术论文预印本 | Cordon: 面向工具调用型 LLM Agent 的语义事务 | 2026-06-17 |
@@ -116,9 +120,9 @@
 
 | 状态 | 数量 | 源 |
 | ---- | ---- | --- |
-| ✅ 成功采集 | 19 | openEuler Forum、Release ML、Kernel ML、RHSA、Planet Ubuntu、Red Hat Blog、RHEL Blog、Ubuntu Blog、OpenAnolis News、Fedora Bodhi ×3、AlmaLinux Blog、LinuxCompatible、LWN headlines、LWN Features、ServeTheHome、arXiv（cs.OS + cs.PF） |
+| ✅ 成功采集 | 21 | openEuler Forum、Release ML、Kernel ML、RHSA、Planet Ubuntu、Red Hat Blog、RHEL Blog、Ubuntu Blog、OpenAnolis News、Fedora Bodhi ×3、AlmaLinux Blog、LinuxCompatible、LWN headlines、LWN Features、ServeTheHome、Phoronix、LKML Latest Topics、arXiv（cs.OS + cs.PF） |
 | ⚠️ 部分数据 | 1 | Fedora COPR（无时间戳） |
-| ❌ 访问拒绝 | 2 | Phoronix（403 — 两次尝试均失败）、LKML（Anubis JS 挑战 — 无法程序化绕过） |
+| ❌ 访问拒绝 | 0 | — |
 
 ---
 
@@ -132,4 +136,4 @@
 6. **AlmaLinux**：9.8/10.2 稳定版正式发布（5月26日），CIFSwitch CVE 补丁已推送，社区治理改革（新章程+选举）。
 7. **Fedora 包生态**：Bodhi 系统每日高频更新，新包 python-tlv8（TLV 序列化库）首次导入 Fedora/EPEL 全系列；pydantic-settings 修复 GHSA 安全漏洞。
 8. **arXiv 学术前沿**：通过 cs.OS + cs.PF 分类页面成功抓取 6 篇近 3 天新论文。亮点：CloakLM（GPU 模型防泄露）、LiveStack（集群全栈实时模拟）、Cordon（LLM Agent 语义事务）、UltraQuant（4-bit KV 缓存）、uringscope（io_uring 可移植低开销可观测性）。
-9. **Phoronix / LKML 仍然不可达**：Phoronix 返回 403（两次尝试均失败），LKML 的 Anubis JS 挑战需要浏览器执行环境。建议后端 fetcher 配置浏览器 UA 或考虑使用 lore.kernel.org 的 IMAP/maildir 归档替代方案。
+9. **Phoronix / LKML 已恢复抓取**：Phoronix 的 RSS feed 直接可用；LKML 的 `new.atom` feed 在带常规 `User-Agent` / `Accept` 请求头时可正常返回 Atom 内容，主页仍会触发 Anubis 挑战，但不影响 feed 采集。
