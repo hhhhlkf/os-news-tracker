@@ -353,28 +353,42 @@ def delete_agent_source(
     4. source 本身（agent_source_configs + agent_site_memory 有 CASCADE，自动清理）
     """
     from sqlalchemy import delete as sa_delete
-    from app.models import Item, ItemSource
+    from app.models import Item, ItemSource, ItemTag, ItemEntity
+
+    # 这些模型可能不在顶部 import，按需导入
+    try:
+        from app.models import UserItemScore, UserItemInteraction
+        _has_user_tables = True
+    except ImportError:
+        _has_user_tables = False
 
     source = db.get(Source, source_id)
     if source is None or source.type != "agent_crawl":
         raise HTTPException(status_code=404, detail="Agent source not found")
 
-    # 1. 删除 item_sources（同时覆盖：该 source 的直接 item_sources 行）
-    db.execute(sa_delete(ItemSource).where(ItemSource.source_id == source_id))
-
-    # 2. 删除该 source 直接产生的 items（source_id 列记录主来源）
-    #    先删 item_sources 中指向这些 item 的其他行，再删 items 本身
+    # 收集该 source 产生的 item id 列表
     item_ids = db.scalars(
         select(Item.id).where(Item.source_id == source_id)
     ).all()
+
     if item_ids:
+        # 1a. 清理 items 的下游依赖（无 CASCADE）
+        db.execute(sa_delete(ItemTag).where(ItemTag.item_id.in_(item_ids)))
+        db.execute(sa_delete(ItemEntity).where(ItemEntity.item_id.in_(item_ids)))
         db.execute(sa_delete(ItemSource).where(ItemSource.item_id.in_(item_ids)))
+        if _has_user_tables:
+            db.execute(sa_delete(UserItemScore).where(UserItemScore.item_id.in_(item_ids)))
+            db.execute(sa_delete(UserItemInteraction).where(UserItemInteraction.item_id.in_(item_ids)))
+        # 1b. 删除 items 本身
         db.execute(sa_delete(Item).where(Item.id.in_(item_ids)))
+
+    # 2. 清理 item_sources 中该 source 的直接关联行（source_id 维度）
+    db.execute(sa_delete(ItemSource).where(ItemSource.source_id == source_id))
 
     # 3. 删除 agent_crawl_runs（无 CASCADE）
     db.execute(sa_delete(AgentCrawlRun).where(AgentCrawlRun.source_id == source_id))
 
-    # 4. 删除 source（agent_source_configs + agent_site_memory 有 CASCADE，自动删）
+    # 4. 删除 source（agent_source_configs + agent_site_memory 有 CASCADE，自动清理）
     db.delete(source)
     db.commit()
 
