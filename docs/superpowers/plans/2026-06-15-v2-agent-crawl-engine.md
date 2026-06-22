@@ -1132,22 +1132,30 @@ cd backend && git add app/agent/summary_pool.py tests/unit/test_agent_summary_po
 Create `backend/tests/unit/test_agent_plan_agent.py`:
 
 ```python
+"""PlanAgent 单元测试 — 验证 URL 规划、同域过滤、SiteMemory 跳过、上限截断。"""
+
 import json
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
+
 from app.agent.plan_agent import PlanAgent
 from app.agent.schemas import AgentSourceConfig
 
 
-def _config():
-    return AgentSourceConfig(
+def _config(**kwargs):
+    """构造 AgentSourceConfig，提供合理的默认值。"""
+    defaults = dict(
         source_id=1, focus_areas=["kernel", "eBPF"], topic_groups=[],
         crawl_workers=5, quality_workers=3, summary_workers=3,
         quality_threshold=4, crawl_depth=1, max_urls_per_run=5,
     )
+    defaults.update(kwargs)
+    return AgentSourceConfig(**defaults)
 
 
 def _make_source(url="https://blog.example.com"):
+    """构造一个 mock Source 对象。"""
     s = MagicMock()
     s.id = 1
     s.url = url
@@ -1155,25 +1163,34 @@ def _make_source(url="https://blog.example.com"):
 
 
 def _make_llm(urls):
+    """构造一个 mock LLM，返回指定的 URL 列表及其 guessed_topic。"""
     llm = MagicMock()
-    llm.complete.return_value = json.dumps({"urls": [{"url": u, "guessed_topic": "kernel"} for u in urls]})
+    llm.complete.return_value = json.dumps({
+        "urls": [{"url": u, "guessed_topic": "kernel"} for u in urls],
+    })
     return llm
 
 
 def test_plan_filters_off_domain_urls():
+    """LLM 可能返回跨域 URL，确定性验证层应将其过滤掉。"""
     llm = _make_llm([
         "https://blog.example.com/post/1",
-        "https://evil.com/phishing",           # off-domain — should be filtered
+        "https://evil.com/phishing",           # 跨域 — 应被过滤
         "https://blog.example.com/post/2",
     ])
     agent = PlanAgent(llm=llm)
     db = MagicMock()
-    with patch.object(agent, "_fetch_links", return_value=["https://blog.example.com/post/1", "https://blog.example.com/post/2"]):
+    with patch.object(agent, "_fetch_links", return_value=[
+        "https://blog.example.com/post/1",
+        "https://blog.example.com/post/2",
+    ]):
         plan = agent.plan(_make_source(), _config(), db=db)
     assert all("evil.com" not in u.url for u in plan.urls)
+    assert len(plan.urls) == 2
 
 
 def test_plan_respects_max_urls():
+    """即使 LLM 返回超过 max_urls_per_run 的 URL，也应被截断。"""
     urls = [f"https://blog.example.com/post/{i}" for i in range(20)]
     llm = _make_llm(urls)
     agent = PlanAgent(llm=llm)
@@ -1184,6 +1201,7 @@ def test_plan_respects_max_urls():
 
 
 def test_plan_skips_known_discard_urls():
+    """SiteMemory 标记为 discard 的 URL 应在规划阶段就被排除。"""
     mock_memory = MagicMock()
     mock_memory.should_skip.side_effect = lambda db, source_id, url: "discard" in url
 
@@ -1192,9 +1210,32 @@ def test_plan_skips_known_discard_urls():
         "https://blog.example.com/discard-me",
     ]), memory=mock_memory)
     db = MagicMock()
-    with patch.object(agent, "_fetch_links", return_value=["https://blog.example.com/good", "https://blog.example.com/discard-me"]):
+    with patch.object(agent, "_fetch_links", return_value=[
+        "https://blog.example.com/good",
+        "https://blog.example.com/discard-me",
+    ]):
         plan = agent.plan(_make_source(), _config(), db=db)
     assert all("discard" not in u.url for u in plan.urls)
+    assert len(plan.urls) == 1
+
+
+def test_plan_returns_empty_when_no_links():
+    """当页面没有可提取的链接时，应返回空计划。"""
+    agent = PlanAgent(llm=MagicMock())
+    db = MagicMock()
+    with patch.object(agent, "_fetch_links", return_value=[]):
+        plan = agent.plan(_make_source(), _config(), db=db)
+    assert len(plan.urls) == 0
+
+
+def test_plan_includes_source_id():
+    """返回的 CrawlPlan 应正确携带 source_id。"""
+    llm = _make_llm(["https://blog.example.com/post/1"])
+    agent = PlanAgent(llm=llm)
+    db = MagicMock()
+    with patch.object(agent, "_fetch_links", return_value=["https://blog.example.com/post/1"]):
+        plan = agent.plan(_make_source(), _config(source_id=42), db=db)
+    assert plan.source_id == 42
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1208,10 +1249,20 @@ Expected: ImportError.
 - [ ] **Step 3: Create `backend/app/agent/plan_agent.py`**
 
 ```python
+"""PlanAgent — LLM 驱动的 URL 发现与规划（Pre-Act + DFSDT 角色）。
+
+从源站首页提取所有出站链接，由 LLM 根据用户关注领域进行语义过滤和排序，
+选出最有价值的候选 URL。随后经过确定性验证层（同域、http 协议、SiteMemory 跳过）
+做安全兜底，确保 LLM 的不可预测输出不会污染下游阶段。
+
+这是 Handoff Chain 的第①阶段。
+"""
+
 import json
 import logging
 import re
-from urllib.parse import urlparse
+from html.parser import HTMLParser
+from urllib.parse import urljoin, urlparse
 
 from sqlalchemy.orm import Session
 
@@ -1221,47 +1272,96 @@ from app.models import Source
 
 logger = logging.getLogger(__name__)
 
-_PROMPT = """你是一个网页内容分析助手。给定以下网页的链接列表和用户的关注点，
-识别哪些链接最可能包含用户感兴趣的内容，并按优先级排序。
+# ── URL 规划 prompt ──────────────────────────────────────────────
+# 参考 Enricher 的 prompt 风格：角色定位、筛选标准、输出格式约束。
+_PROMPT = """你是操作系统维护团队的信息采集规划助手……
 
-用户关注点：{focus_areas}
-页面中发现的链接：{links_json}
-已知低质量 URL pattern（跳过）：{skip_patterns}
+## 筛选标准（高优先级）
+- 版本发布公告、技术博客文章（内核、驱动、文件系统、网络栈、虚拟化等）
+- 性能基准测试报告、安全公告、CVE 报告
+- 新工具/新项目介绍、技术讨论、RFC、设计文档
+
+## 排除标准
+- 首页、关于页、联系页、赞助页、招聘/HR 相关
+- 活动通知、用户文档/入门教程、社交媒体链接
+- RSS/Atom feed 链接、登录/注册页面
+
+## 输出格式
+严格输出 JSON：
+{{
+  "urls": [
+    {{"url": "...", "guessed_topic": "Linux Kernel"}},
+  ]
+}}
+
+用户关注领域：{focus_areas}
+页面 URL：{source_url}
+候选链接（共 {total_count} 个）：{links_json}
+已知低质量 URL（请跳过）：{skip_patterns}
 最多返回：{max_urls} 个
-
-只输出 JSON：{{"urls": [{{"url": "...", "guessed_topic": "..."}}]}}
 """
 
 
+class _LinkExtractor(HTMLParser):
+    """从 HTML 中提取所有 <a href> 链接的 HTMLParser 子类。
+    使用 stdlib html.parser（无额外依赖），自动处理相对 URL 和去重。"""
+    def __init__(self, base_url: str):
+        super().__init__()
+        self._base_url = base_url
+        self._links: list[str] = []
+        self._seen: set[str] = set()
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "a":
+            return
+        for name, value in attrs:
+            if name == "href" and value:
+                if value.startswith("#"):
+                    continue
+                if ":" in value and not value.startswith(("http://", "https://")):
+                    continue
+                absolute = urljoin(self._base_url, value)
+                if absolute not in self._seen:
+                    self._seen.add(absolute)
+                    self._links.append(absolute)
+                break
+
+
+def _extract_json(text: str) -> dict:
+    """从 LLM 原始响应中提取 JSON。支持围栏代码块和裸 JSON。"""
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if fenced:
+        return json.loads(fenced.group(1))
+    brace = re.search(r"\{.*\}", text, re.DOTALL)
+    if brace:
+        return json.loads(brace.group(0))
+    raise ValueError(f"No JSON found in plan response: {text[:200]}")
+
+
 class PlanAgent:
+    """LLM 驱动的 URL 发现与规划器。
+    1. 从源站首页提取所有出站链接（确定性 _fetch_links）
+    2. 调用 LLM 按 focus_areas 进行语义筛选和排序（随机性）
+    3. 确定性验证：同域 + http 协议 + SiteMemory 跳过"""
+
     def __init__(self, llm=None, memory: SiteMemory | None = None):
         from app.llm.client import LlmClient
         self._llm = llm or LlmClient()
         self._memory = memory or SiteMemory()
 
     def _fetch_links(self, url: str) -> list[str]:
-        from app.extract.scrapling_extractor import ScraplingExtractor
+        """使用 httpx + _LinkExtractor（stdlib HTMLParser）提取链接。最多 100 个。"""
+        import httpx
         try:
-            extractor = ScraplingExtractor()
-            doc = extractor.extract(url)
-            # Extract all href links from the page
-            # ScraplingExtractor doesn't return raw links — we use httpx fallback
-            import httpx
-            from bs4 import BeautifulSoup  # scrapling already depends on bs4
             resp = httpx.get(url, timeout=15, follow_redirects=True)
-            soup = BeautifulSoup(resp.text, "html.parser")
-            base = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
-            links = []
-            for a in soup.find_all("a", href=True):
-                href = a["href"]
-                if href.startswith("/"):
-                    href = base + href
-                if href.startswith("http"):
-                    links.append(href)
-            return list(dict.fromkeys(links))[:100]  # dedup, cap at 100
+            resp.raise_for_status()
         except Exception as e:
-            logger.warning("plan_agent: fetch_links failed for %s: %s", url, e)
+            logger.warning("plan_agent: 获取页面失败 %s: %s", url, e)
             return []
+        base_url = str(resp.url) if resp.url != url else url
+        parser = _LinkExtractor(base_url)
+        parser.feed(resp.text)
+        return parser._links[:100]
 
     def plan(self, source: Source, config: AgentSourceConfig, *, db: Session) -> CrawlPlan:
         root_url = source.url
@@ -1269,49 +1369,49 @@ class PlanAgent:
 
         links = self._fetch_links(root_url)
         if not links:
-            logger.warning("plan_agent: no links found for %s, returning empty plan", root_url)
             return CrawlPlan(source_id=config.source_id, urls=[])
 
-        # Filter known discard URLs before sending to LLM
+        # 过滤已知 discard
         skip_patterns = [
             link for link in links
             if self._memory.should_skip(db=db, source_id=config.source_id, url=link)
         ]
         candidate_links = [l for l in links if l not in skip_patterns]
 
+        # LLM 语义筛选
         prompt = _PROMPT.format(
             focus_areas=", ".join(config.focus_areas),
-            links_json=json.dumps(candidate_links[:50]),
-            skip_patterns=json.dumps(skip_patterns[:10]),
+            source_url=root_url,
+            total_count=len(candidate_links),
+            links_json=json.dumps(candidate_links[:50], ensure_ascii=False),
+            skip_patterns=json.dumps(skip_patterns[:10], ensure_ascii=False) if skip_patterns else "无",
             max_urls=config.max_urls_per_run,
         )
         raw = self._llm.complete(prompt)
 
-        # Deterministic validation
         try:
-            m = re.search(r"\{.*\}", raw, re.DOTALL)
-            data = json.loads(m.group(0)) if m else {"urls": []}
+            data = _extract_json(raw)
             raw_urls = data.get("urls", [])
         except Exception:
             raw_urls = []
 
+        # 确定性验证
         validated: list[PlanUrl] = []
         for entry in raw_urls:
             url = entry.get("url", "")
-            # Must be same domain
+            if not isinstance(url, str) or not url:
+                continue
+            if not url.startswith(("http://", "https://")):
+                continue
             if urlparse(url).netloc != base_domain:
                 continue
-            # Must be valid http/https
-            if not url.startswith("http"):
-                continue
-            # Must not be in skip list
             if self._memory.should_skip(db=db, source_id=config.source_id, url=url):
                 continue
             validated.append(PlanUrl(url=url, guessed_topic=entry.get("guessed_topic", "")))
             if len(validated) >= config.max_urls_per_run:
                 break
 
-        logger.info("plan_agent: planned %d URLs for source %d", len(validated), config.source_id)
+        logger.info("plan_agent: 为源 %d 规划了 %d 个 URL", config.source_id, len(validated))
         return CrawlPlan(source_id=config.source_id, urls=validated)
 ```
 
@@ -1321,12 +1421,12 @@ class PlanAgent:
 cd backend && ENABLE_SCHEDULER=0 python -m pytest tests/unit/test_agent_plan_agent.py -v
 ```
 
-Expected: 3 tests PASS.
+Expected: 5 tests PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd backend && git add app/agent/plan_agent.py tests/unit/test_agent_plan_agent.py && git commit -m "feat: add PlanAgent with deterministic URL validation and SiteMemory"
+cd backend && git add app/agent/plan_agent.py tests/unit/test_agent_plan_agent.py && git commit -m "feat: add PlanAgent with LLM URL discovery and deterministic validation"
 ```
 
 ---
