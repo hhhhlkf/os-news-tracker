@@ -293,5 +293,8 @@ class AgentCrawlRun(Base):
     fetched_count: Mapped[int] = mapped_column(Integer, default=0)
     quality_passed: Mapped[int] = mapped_column(Integer, default=0)
     items_created: Mapped[int] = mapped_column(Integer, default=0)
+    current_stage: Mapped[str] = mapped_column(String(20), default="planning")
+    stage_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    triggered_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="running")   # running | completed | failed | plan_failed
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

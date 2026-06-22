@@ -124,7 +124,16 @@ class AgentCrawlFetcher:
         )
 
         # ── 2. 创建运行记录 ──
-        run = AgentCrawlRun(source_id=source.id)
+        run = AgentCrawlRun(
+            source_id=source.id,
+            status="running",
+            current_stage="planning",
+            stage_message="开始规划 URL",
+            plan_urls_count=0,
+            fetched_count=0,
+            quality_passed=0,
+            items_created=0,
+        )
         self._db.add(run)
         self._db.flush()
 
@@ -133,21 +142,30 @@ class AgentCrawlFetcher:
             # ③ PlanAgent: URL 规划
             plan = self._plan_agent.plan(source, config, db=self._db)
             run.plan_urls_count = len(plan.urls)
+            run.current_stage = "planning"
+            run.stage_message = f"已规划 {run.plan_urls_count} 个 URL"
             self._db.commit()
 
             # ④ CrawlDAG: 并行抓取
+            run.current_stage = "crawling"
+            run.stage_message = f"并行抓取 {run.plan_urls_count} 个 URL"
             pages = await self._crawl_dag.execute(plan, config)
             run.fetched_count = len(pages)
             self._db.commit()
 
             # ⑤ QualityWorkerPool: 质量评估
+            run.current_stage = "quality"
             qualified = await self._quality_pool.assess_all(
                 pages, config, db=self._db,
             )
             run.quality_passed = len(qualified)
+            run.stage_message = f"质量通过 {run.quality_passed} / {run.fetched_count}"
             self._db.commit()
 
             # ⑥ SummaryWorkerPool: 摘要生成
+            run.current_stage = "summarizing"
+            run.stage_message = f"正在生成 {run.quality_passed} 条摘要"
+            self._db.commit()
             items = await self._summary_pool.summarize_all(qualified, config)
             return items
 
@@ -155,6 +173,8 @@ class AgentCrawlFetcher:
             agent_items = asyncio.run(_pipeline())
         except Exception as e:
             run.status = "failed"
+            run.current_stage = "failed"
+            run.stage_message = str(e)
             run.error_message = str(e)
             run.completed_at = datetime.now(timezone.utc)
             self._db.commit()
@@ -167,6 +187,8 @@ class AgentCrawlFetcher:
         raw_items = [_to_raw_item(item) for item in agent_items]
         run.items_created = len(raw_items)
         run.status = "completed"
+        run.current_stage = "completed"
+        run.stage_message = f"已生成 {run.items_created} 条候选"
         run.completed_at = datetime.now(timezone.utc)
         self._db.commit()
 

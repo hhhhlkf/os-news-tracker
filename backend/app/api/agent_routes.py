@@ -11,8 +11,10 @@
 """
 
 import logging
+import threading
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -25,6 +27,7 @@ from app.models import (
     Source,
     User,
 )
+from app.scheduler import run_source_job
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sources/agent", tags=["agent-sources"])
@@ -44,6 +47,29 @@ class AgentSourceCreate(BaseModel):
     crawl_workers: int = 5
     quality_workers: int = 3
     summary_workers: int = 3
+
+
+def _start_agent_source_run(source_id: int) -> None:
+    """在后台线程中触发单源 agent crawl。"""
+    threading.Thread(
+        target=run_source_job,
+        args=(source_id,),
+        daemon=True,
+        name=f"agent-source-run-{source_id}",
+    ).start()
+
+
+def _find_active_agent_run(db: Session, source_id: int) -> AgentCrawlRun | None:
+    """查找同源当前活跃的运行记录。"""
+    return db.scalars(
+        select(AgentCrawlRun)
+        .where(
+            AgentCrawlRun.source_id == source_id,
+            AgentCrawlRun.status == "running",
+        )
+        .order_by(AgentCrawlRun.started_at.desc())
+        .limit(1)
+    ).first()
 
 
 # ── 响应辅助 ──────────────────────────────────────────────────────
@@ -191,6 +217,8 @@ def list_runs(
         {
             "id": r.id,
             "status": r.status,
+            "current_stage": r.current_stage,
+            "stage_message": r.stage_message,
             "plan_urls_count": r.plan_urls_count,
             "fetched_count": r.fetched_count,
             "quality_passed": r.quality_passed,
@@ -201,6 +229,36 @@ def list_runs(
         }
         for r in runs
     ]
+
+
+@router.post("/{source_id}/run", status_code=202)
+def trigger_agent_run(
+    source_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """立即触发指定 agent source 的一次抓取。"""
+    source = db.get(Source, source_id)
+    if source is None or source.type != "agent_crawl":
+        raise HTTPException(status_code=404, detail="Agent source not found")
+
+    active_run = _find_active_agent_run(db, source_id)
+    if active_run is not None:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": "Agent source is already running",
+                "run_id": active_run.id,
+                "current_stage": active_run.current_stage or "planning",
+            },
+        )
+
+    _start_agent_source_run(source_id)
+    return {
+        "message": "Agent crawl accepted",
+        "source_id": source_id,
+        "accepted": True,
+    }
 
 
 # ── SiteMemory 管理（管理员专用）──────────────────────────────────

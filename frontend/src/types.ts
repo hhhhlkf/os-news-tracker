@@ -86,3 +86,52 @@ export interface NewsRunLogEntry {
 export interface NewsRunLogsResponse {
   logs: NewsRunLogEntry[];
 }
+
+export type AgentRunStage =
+  | "planning"
+  | "crawling"
+  | "quality"
+  | "summarizing"
+  | "completed"
+  | "failed";
+
+export type AgentRunStatus = "running" | "completed" | "failed";
+
+export interface AgentSourceConfig {
+  focus_areas: string[];
+  topic_groups: string[];
+  crawl_depth: number;
+  max_urls_per_run: number;
+  quality_threshold: number;
+  crawl_workers: number;
+  quality_workers: number;
+  summary_workers: number;
+}
+
+export interface AgentSource {
+  id: number;
+  name: string;
+  url: string;
+  enabled: boolean;
+  config: AgentSourceConfig | null;
+}
+
+export interface AgentRunRecord {
+  id: number;
+  status: AgentRunStatus;
+  current_stage: AgentRunStage;
+  stage_message: string | null;
+  plan_urls_count: number;
+  fetched_count: number;
+  quality_passed: number;
+  items_created: number;
+  started_at: string | null;
+  completed_at: string | null;
+  error_message: string | null;
+}
+
+export interface AgentRunTriggerResponse {
+  message: string;
+  source_id: number;
+  accepted: boolean;
+}

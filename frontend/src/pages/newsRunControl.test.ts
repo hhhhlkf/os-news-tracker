@@ -1,5 +1,8 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
+  NewsRunControl,
   buildNewsRunFormState,
   formatNewsRunWindowLabel,
   isNewsRunBusy,
@@ -144,5 +147,59 @@ describe("buildNewsRunFormState with time_filter_stats", () => {
     // The date input values should reflect the UTC dates.
     expect(formatNewsRunWindowLabel(status)).toContain("2026-06-04");
     expect(formatNewsRunWindowLabel(status)).toContain("2026-06-11");
+  });
+});
+
+describe("NewsRunControl mode switch shell", () => {
+  const status: ManualNewsRunStatus = {
+    state: "idle",
+    time_mode: "relative",
+    relative_range: "7d",
+    start_at: null,
+    end_at: null,
+    target_count: 50,
+    discovered_count: 0,
+    queued_count: 0,
+    processed_count: 0,
+    saved_count: 0,
+    fulfilled: false,
+    gap_reason: null,
+    started_at: null,
+    finished_at: null,
+    last_error: null,
+    time_filter_stats: null,
+  };
+
+  it("defaults to standard mode and keeps manual control text", () => {
+    const html = renderToStaticMarkup(
+      createElement(NewsRunControl, {
+        mode: "standard",
+        status,
+        isLoading: false,
+        onStart: () => {},
+        onStop: () => {},
+      }),
+    );
+
+    expect(html).toContain("标准抓取");
+    expect(html).toContain("开始处理");
+    expect(html).not.toContain("Agent 模式内容");
+  });
+
+  it("renders agent content when agent mode is selected", () => {
+    const html = renderToStaticMarkup(
+      createElement(NewsRunControl, {
+        mode: "agent",
+        agentContent: createElement("div", null, "Agent 模式内容"),
+        status,
+        isLoading: false,
+        onStart: () => {},
+        onStop: () => {},
+      }),
+    );
+
+    expect(html).toContain("Agent Crawl");
+    expect(html).toContain("Agent 模式内容");
+    expect(html).not.toContain("开始处理");
   });
 });

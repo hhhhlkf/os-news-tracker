@@ -91,6 +91,23 @@ class TestAgentCrawlFetcherFetch:
         """完整 pipeline 成功时应返回 RawItem 列表。"""
         db = MagicMock()
         db.get.return_value = _make_config_model()
+        stage_snapshots: list[tuple[str | None, str | None, int, int, int, int, str | None]] = []
+
+        def record_stage():
+            run = db.add.call_args_list[0].args[0]
+            stage_snapshots.append(
+                (
+                    getattr(run, "current_stage", None),
+                    getattr(run, "stage_message", None),
+                    run.plan_urls_count,
+                    run.fetched_count,
+                    run.quality_passed,
+                    run.items_created,
+                    run.status,
+                )
+            )
+
+        db.commit.side_effect = record_stage
 
         # Mock 四个阶段
         mock_plan = CrawlPlan(source_id=1, urls=[
@@ -116,11 +133,32 @@ class TestAgentCrawlFetcherFetch:
         assert len(result) == 1
         assert isinstance(result[0], RawItem)
         assert result[0].title == "Linux 6.12 发布"
+        assert stage_snapshots == [
+            ("planning", "已规划 1 个 URL", 1, 0, 0, 0, "running"),
+            ("crawling", "并行抓取 1 个 URL", 1, 1, 0, 0, "running"),
+            ("quality", "质量通过 1 / 1", 1, 1, 1, 0, "running"),
+            ("summarizing", "正在生成 1 条摘要", 1, 1, 1, 0, "running"),
+            ("completed", "已生成 1 条候选", 1, 1, 1, 1, "completed"),
+        ]
 
     def test_pipeline_failure_returns_empty(self):
         """Pipeline 中任何阶段抛出异常时应返回空列表并记录失败。"""
         db = MagicMock()
         db.get.return_value = _make_config_model()
+        stage_snapshots: list[tuple[str | None, str | None, str, str | None]] = []
+
+        def record_stage():
+            run = db.add.call_args_list[0].args[0]
+            stage_snapshots.append(
+                (
+                    getattr(run, "current_stage", None),
+                    getattr(run, "stage_message", None),
+                    run.status,
+                    run.error_message,
+                )
+            )
+
+        db.commit.side_effect = record_stage
 
         fetcher = AgentCrawlFetcher(
             db=db,
@@ -133,3 +171,4 @@ class TestAgentCrawlFetcherFetch:
         # 验证 run 被标记为 failed
         calls = db.add.call_args_list
         assert len(calls) >= 1  # 至少创建了 AgentCrawlRun
+        assert stage_snapshots[-1] == ("failed", "LLM 不可用", "failed", "LLM 不可用")

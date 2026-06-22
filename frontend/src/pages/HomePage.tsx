@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, fetchFacets, fetchItems, fetchNewsRunLogs, fetchNewsRunStatus, startNewsRun, stopNewsRun } from "../api/client";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ApiError, fetchAgentRuns, fetchAgentSources, fetchFacets, fetchItems, fetchNewsRunLogs, fetchNewsRunStatus, startNewsRun, stopNewsRun, triggerAgentRun } from "../api/client";
+import { AgentRunControl } from "../components/AgentRunControl";
 import { FacetSidebar } from "../components/FacetSidebar";
 import { ItemList } from "../components/ItemList";
 import { ItemDetail } from "../components/ItemDetail";
 import { NewsRunControl } from "../components/NewsRunControl";
 import { NewsRunLogPanel } from "../components/NewsRunLogPanel";
 import { demoItems } from "../demoData";
-import { buildDemoFacets, filterDemoItems, isManualNewsRunActive, makeListResponse, resolveHomeDataMode } from "./homeData";
+import { buildDemoFacets, filterDemoItems, isAgentSourceRunning, isManualNewsRunActive, makeListResponse, resolveHomeDataMode } from "./homeData";
 import type { ManualNewsRunRequest, ManualNewsRunState } from "../types";
 
 const PAGE_SIZE = 10;
@@ -16,10 +17,15 @@ export function HomePage() {
   const [filters, setFilters] = useState<Record<string, string>>({ q: "", sort_by: "published_at", sort_dir: "desc" });
   const [page, setPage] = useState(1);
   const [openId, setOpenId] = useState<number | null>(null);
+  const [controlMode, setControlMode] = useState<"standard" | "agent">("standard");
   const [runActionError, setRunActionError] = useState<string | null>(null);
   const [runActionPending, setRunActionPending] = useState(false);
+  const [agentTriggerPendingSourceId, setAgentTriggerPendingSourceId] = useState<number | null>(null);
+  const [agentTriggerErrors, setAgentTriggerErrors] = useState<Record<number, string | null>>({});
+  const [agentPollingEnabled, setAgentPollingEnabled] = useState(false);
   const queryClient = useQueryClient();
   const previousRunState = useRef<ManualNewsRunState | null>(null);
+  const previousActiveAgentSourceIds = useRef<number[]>([]);
 
   const setFilter = (key: string, value: string) => {
     setPage(1);
@@ -70,6 +76,24 @@ export function HomePage() {
     facetsFailed: facetsQuery.isError,
   });
 
+  const agentSourcesQuery = useQuery({
+    queryKey: ["agent-sources"],
+    queryFn: fetchAgentSources,
+    enabled: mode === "live" && controlMode === "agent",
+    retry: false,
+    refetchInterval: () => agentPollingEnabled ? 2000 : false,
+  });
+
+  const agentRunsQueries = useQueries({
+    queries: (agentSourcesQuery.data ?? []).map((source) => ({
+      queryKey: ["agent-runs", source.id],
+      queryFn: () => fetchAgentRuns(source.id),
+      enabled: mode === "live" && controlMode === "agent",
+      retry: false,
+      refetchInterval: () => agentPollingEnabled ? 2000 : false,
+    })),
+  });
+
   const demoFilteredItems = useMemo(() => filterDemoItems(demoItems, filters), [filters]);
   const demoList = useMemo(
     () => makeListResponse(demoFilteredItems, PAGE_SIZE, (page - 1) * PAGE_SIZE),
@@ -84,6 +108,20 @@ export function HomePage() {
 
   const hasLiveEmptyState = mode === "live" && listData?.total === 0;
   const activeFilterCount = Object.entries(filters).filter(([key, value]) => value && key !== "sort_by" && key !== "sort_dir").length;
+  const agentRunsBySourceId = useMemo(
+    () =>
+      Object.fromEntries(
+        (agentSourcesQuery.data ?? []).map((source, index) => [source.id, agentRunsQueries[index]?.data]),
+      ) as Record<number, typeof agentRunsQueries[number]["data"]>,
+    [agentRunsQueries, agentSourcesQuery.data],
+  );
+  const activeAgentSourceIds = useMemo(
+    () =>
+      (agentSourcesQuery.data ?? [])
+        .filter((source) => isAgentSourceRunning(agentRunsBySourceId[source.id]?.[0]))
+        .map((source) => source.id),
+    [agentRunsBySourceId, agentSourcesQuery.data],
+  );
 
   useEffect(() => {
     const nextState = newsRunQuery.data?.state ?? null;
@@ -99,6 +137,17 @@ export function HomePage() {
     }
     previousRunState.current = nextState;
   }, [newsRunQuery.data?.state, queryClient]);
+
+  useEffect(() => {
+    const previous = previousActiveAgentSourceIds.current;
+    const finishedSources = previous.filter((sourceId) => !activeAgentSourceIds.includes(sourceId));
+    if (finishedSources.length > 0) {
+      void queryClient.invalidateQueries({ queryKey: ["items"] });
+      void queryClient.invalidateQueries({ queryKey: ["agent-sources"] });
+    }
+    previousActiveAgentSourceIds.current = activeAgentSourceIds;
+    setAgentPollingEnabled(activeAgentSourceIds.length > 0);
+  }, [activeAgentSourceIds, queryClient]);
 
   async function handleStartNewsRun(request: ManualNewsRunRequest) {
     setRunActionPending(true);
@@ -130,6 +179,32 @@ export function HomePage() {
       setRunActionPending(false);
     }
   }
+
+  async function handleTriggerAgentRun(sourceId: number) {
+    setAgentTriggerPendingSourceId(sourceId);
+    setAgentTriggerErrors((state) => ({ ...state, [sourceId]: null }));
+    try {
+      await triggerAgentRun(sourceId);
+      setAgentPollingEnabled(true);
+      await queryClient.invalidateQueries({ queryKey: ["agent-runs", sourceId] });
+      await queryClient.invalidateQueries({ queryKey: ["agent-sources"] });
+    } catch (error) {
+      setAgentTriggerErrors((state) => ({
+        ...state,
+        [sourceId]: error instanceof ApiError ? error.message : "触发 Agent Crawl 失败",
+      }));
+    } finally {
+      setAgentTriggerPendingSourceId(null);
+    }
+  }
+
+  const agentRunError = useMemo(() => {
+    if (agentSourcesQuery.error instanceof ApiError) {
+      return agentSourcesQuery.error.message;
+    }
+    const firstError = agentRunsQueries.find((query) => query.error instanceof ApiError)?.error;
+    return firstError instanceof ApiError ? firstError.message : null;
+  }, [agentRunsQueries, agentSourcesQuery.error]);
 
   return (
     <div style={{ minHeight: "100vh", background: "#f5f7fb" }}>
@@ -192,21 +267,44 @@ export function HomePage() {
         )}
 
         <NewsRunControl
+          mode={controlMode}
+          onModeChange={setControlMode}
+          agentContent={
+            mode === "demo" ? (
+              <div style={{ fontSize: 13, color: "#667085" }}>演示模式下不连接 Agent Crawl 接口。</div>
+            ) : (
+              <AgentRunControl
+                sources={agentSourcesQuery.data ?? []}
+                runsBySourceId={agentRunsBySourceId}
+                isLoading={agentSourcesQuery.isLoading || agentRunsQueries.some((query) => query.isLoading)}
+                errorMessage={agentRunError}
+                triggerPendingSourceId={agentTriggerPendingSourceId}
+                triggerErrors={agentTriggerErrors}
+                onTrigger={handleTriggerAgentRun}
+              />
+            )
+          }
           status={newsRunQuery.data}
           isLoading={newsRunQuery.isLoading}
           errorMessage={
-            runActionError ??
-            (newsRunQuery.error instanceof ApiError ? newsRunQuery.error.message : null)
+            controlMode === "agent"
+              ? agentRunError
+              : (
+                runActionError ??
+                (newsRunQuery.error instanceof ApiError ? newsRunQuery.error.message : null)
+              )
           }
           isSubmitting={runActionPending}
           onStart={handleStartNewsRun}
           onStop={handleStopNewsRun}
         />
 
-        <NewsRunLogPanel
-          logs={newsRunLogsQuery.data?.logs ?? []}
-          isLoading={newsRunLogsQuery.isLoading}
-        />
+        {controlMode === "standard" && (
+          <NewsRunLogPanel
+            logs={newsRunLogsQuery.data?.logs ?? []}
+            isLoading={newsRunLogsQuery.isLoading}
+          />
+        )}
 
         <section
           style={{

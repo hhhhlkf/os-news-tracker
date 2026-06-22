@@ -1,14 +1,15 @@
-"""Agent API 集成测试 — 验证 /sources/agent CRUD 和管理端点。"""
+"""Agent API 集成测试 — 验证 /sources/agent CRUD、触发和管理端点。"""
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+from unittest.mock import patch
 
 from app.api.deps import get_db, get_current_user
 from app.api.main import create_app
-from app.models import Base, User
+from app.models import AgentCrawlRun, Base, Source, User
 
 TEST_DB = "sqlite+pysqlite:///:memory:"
 
@@ -161,6 +162,71 @@ class TestListRuns:
         r = client.get(f"/sources/agent/{source_id}/runs", headers=auth_headers)
         assert r.status_code == 200
         assert r.json() == []
+
+
+class TestTriggerAgentRun:
+    def test_trigger_agent_run_accepts_agent_source(self, client, auth_headers):
+        """agent source 应可被立即触发。"""
+        created = client.post("/sources/agent", json={
+            "name": "Trigger Test", "root_url": "https://trigger.com/",
+            "focus_areas": ["kernel"], "topic_groups": [],
+        }, headers=auth_headers)
+        source_id = created.json()["id"]
+
+        with patch("app.api.agent_routes._start_agent_source_run", create=True) as start_run:
+            r = client.post(f"/sources/agent/{source_id}/run", headers=auth_headers)
+
+        assert r.status_code == 202
+        assert r.json() == {
+            "message": "Agent crawl accepted",
+            "source_id": source_id,
+            "accepted": True,
+        }
+        start_run.assert_called_once_with(source_id)
+
+    def test_trigger_agent_run_returns_404_for_non_agent_source(self, client, auth_headers):
+        """非 agent_crawl source 不应走该触发端点。"""
+        session = client.app.dependency_overrides[get_db]()
+        source = Source(
+            name="RSS Source",
+            type="rss",
+            url="https://example.com/rss.xml",
+            stream="news",
+            enabled=True,
+        )
+        session.add(source)
+        session.commit()
+        session.refresh(source)
+
+        r = client.post(f"/sources/agent/{source.id}/run", headers=auth_headers)
+
+        assert r.status_code == 404
+        assert r.json()["detail"] == "Agent source not found"
+
+    def test_trigger_agent_run_returns_409_when_same_source_is_running(self, client, auth_headers):
+        """同一 source 已有运行态记录时应拒绝重复触发。"""
+        created = client.post("/sources/agent", json={
+            "name": "Busy Source", "root_url": "https://busy.com/",
+            "focus_areas": [], "topic_groups": [],
+        }, headers=auth_headers)
+        source_id = created.json()["id"]
+
+        session = client.app.dependency_overrides[get_db]()
+        session.add(
+            AgentCrawlRun(
+                source_id=source_id,
+                status="running",
+            )
+        )
+        session.commit()
+
+        r = client.post(f"/sources/agent/{source_id}/run", headers=auth_headers)
+
+        assert r.status_code == 409
+        body = r.json()
+        assert body["detail"] == "Agent source is already running"
+        assert body["current_stage"] == "planning"
+        assert isinstance(body["run_id"], int)
 
 
 class TestViewMemory:

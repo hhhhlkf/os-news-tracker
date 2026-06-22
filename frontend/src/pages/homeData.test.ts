@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDemoFacets, filterDemoItems, isManualNewsRunActive, resolveHomeDataMode } from "./homeData";
+import { buildDemoFacets, filterDemoItems, isAgentSourceRunning, isManualNewsRunActive, resolveHomeDataMode } from "./homeData";
 import { demoItems } from "../demoData";
 
 describe("resolveHomeDataMode", () => {
@@ -25,6 +25,67 @@ describe("isManualNewsRunActive", () => {
     expect(isManualNewsRunActive("failed")).toBe(false);
     expect(isManualNewsRunActive("stopped")).toBe(false);
     expect(isManualNewsRunActive(null)).toBe(false);
+  });
+});
+
+describe("isAgentSourceRunning", () => {
+  it("treats in-progress agent stages as active", () => {
+    expect(isAgentSourceRunning({
+      id: 1,
+      status: "running",
+      current_stage: "planning",
+      stage_message: null,
+      plan_urls_count: 0,
+      fetched_count: 0,
+      quality_passed: 0,
+      items_created: 0,
+      started_at: null,
+      completed_at: null,
+      error_message: null,
+    })).toBe(true);
+    expect(isAgentSourceRunning({
+      id: 2,
+      status: "completed",
+      current_stage: "quality",
+      stage_message: null,
+      plan_urls_count: 3,
+      fetched_count: 2,
+      quality_passed: 1,
+      items_created: 0,
+      started_at: null,
+      completed_at: null,
+      error_message: null,
+    })).toBe(true);
+  });
+
+  it("treats terminal stages as inactive", () => {
+    expect(isAgentSourceRunning({
+      id: 3,
+      status: "completed",
+      current_stage: "completed",
+      stage_message: null,
+      plan_urls_count: 3,
+      fetched_count: 3,
+      quality_passed: 2,
+      items_created: 2,
+      started_at: null,
+      completed_at: null,
+      error_message: null,
+    })).toBe(false);
+    expect(isAgentSourceRunning({
+      id: 4,
+      status: "failed",
+      current_stage: "failed",
+      stage_message: null,
+      plan_urls_count: 3,
+      fetched_count: 1,
+      quality_passed: 0,
+      items_created: 0,
+      started_at: null,
+      completed_at: null,
+      error_message: "boom",
+    })).toBe(false);
+    expect(isAgentSourceRunning(null)).toBe(false);
   });
 });
 

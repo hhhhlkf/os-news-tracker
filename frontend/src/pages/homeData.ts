@@ -1,4 +1,4 @@
-import type { FacetValue, ItemDetail, ItemListResponse, ManualNewsRunState } from "../types";
+import type { AgentRunRecord, AgentRunStage, FacetValue, ItemDetail, ItemListResponse, ManualNewsRunState } from "../types";
 
 type ModeInputs = {
   itemsFailed: boolean;
@@ -11,6 +11,13 @@ export function resolveHomeDataMode({ itemsFailed, facetsFailed }: ModeInputs): 
 
 export function isManualNewsRunActive(state: ManualNewsRunState | null | undefined): boolean {
   return state === "collecting" || state === "processing" || state === "stopping";
+}
+
+const activeAgentStages: AgentRunStage[] = ["planning", "crawling", "quality", "summarizing"];
+
+export function isAgentSourceRunning(run: AgentRunRecord | null | undefined): boolean {
+  if (!run) return false;
+  return run.status === "running" || activeAgentStages.includes(run.current_stage);
 }
 
 function normalize(value: string | null | undefined): string {
