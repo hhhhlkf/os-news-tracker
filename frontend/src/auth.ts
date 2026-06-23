@@ -1,6 +1,9 @@
 const TOKEN_KEY = "os_tracker_token";
 
 export function getToken(): string | null {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return null;
+  }
   return localStorage.getItem(TOKEN_KEY);
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDemoFacets, filterDemoItems, isAgentSourceRunning, isManualNewsRunActive, resolveHomeDataMode } from "./homeData";
+import { agentCandidateRunRefreshKeys, buildDemoFacets, filterDemoItems, isAgentSourceRunning, isManualNewsRunActive, resolveHomeDataMode } from "./homeData";
 import { demoItems } from "../demoData";
 
 describe("resolveHomeDataMode", () => {
@@ -86,6 +86,17 @@ describe("isAgentSourceRunning", () => {
       error_message: "boom",
     })).toBe(false);
     expect(isAgentSourceRunning(null)).toBe(false);
+  });
+});
+
+describe("agentCandidateRunRefreshKeys", () => {
+  it("includes the newly created agent source run query", () => {
+    expect(agentCandidateRunRefreshKeys(83)).toEqual([
+      ["agent-sources"],
+      ["agent-source-candidates"],
+      ["agent-runs", 83],
+      ["items"],
+    ]);
   });
 });
 

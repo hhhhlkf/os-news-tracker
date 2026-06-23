@@ -186,11 +186,12 @@ describe("NewsRunControl mode switch shell", () => {
     expect(html).not.toContain("Agent 模式内容");
   });
 
-  it("renders agent content when agent mode is selected", () => {
+  it("keeps agent content collapsed by default when agent mode is selected", () => {
     const html = renderToStaticMarkup(
       createElement(NewsRunControl, {
         mode: "agent",
         agentContent: createElement("div", null, "Agent 模式内容"),
+        sourceManagerContent: createElement("div", null, "来源管理内容"),
         status,
         isLoading: false,
         onStart: () => {},
@@ -199,7 +200,43 @@ describe("NewsRunControl mode switch shell", () => {
     );
 
     expect(html).toContain("Agent Crawl");
-    expect(html).toContain("Agent 模式内容");
+    expect(html).toContain("展开设置");
+    expect(html).not.toContain("Agent 模式内容");
+    expect(html).not.toContain("来源管理内容");
     expect(html).not.toContain("开始处理");
+  });
+
+  it("renders source manager and agent content when agent mode auto-expands", () => {
+    const failedStatus = { ...status, state: "failed" as const };
+    const html = renderToStaticMarkup(
+      createElement(NewsRunControl, {
+        mode: "agent",
+        agentContent: createElement("div", null, "Agent 模式内容"),
+        sourceManagerContent: createElement("div", null, "来源管理内容"),
+        status: failedStatus,
+        isLoading: false,
+        onStart: () => {},
+        onStop: () => {},
+      }),
+    );
+
+    expect(html).toContain("收起设置");
+    expect(html).toContain("Agent 模式内容");
+    expect(html).toContain("来源管理内容");
+  });
+
+  it("keeps agent mode entry visible by default", () => {
+    const html = renderToStaticMarkup(
+      createElement(NewsRunControl, {
+        mode: "standard",
+        status,
+        isLoading: false,
+        onStart: () => {},
+        onStop: () => {},
+      }),
+    );
+
+    expect(html).toContain("标准抓取");
+    expect(html).toContain("Agent Crawl");
   });
 });

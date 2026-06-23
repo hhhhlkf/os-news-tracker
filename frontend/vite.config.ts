@@ -22,6 +22,18 @@ export default defineConfig({
         target: "http://backend:8000",
         changeOrigin: true,
       },
+      "/sources": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
+      "/sources/agent": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
+      "/crawl-sources": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
     },
   },
 });

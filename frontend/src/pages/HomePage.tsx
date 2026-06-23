@@ -5,11 +5,12 @@ import { AgentRunControl } from "../components/AgentRunControl";
 import { FacetSidebar } from "../components/FacetSidebar";
 import { ItemList } from "../components/ItemList";
 import { ItemDetail } from "../components/ItemDetail";
-import { NewsRunControl } from "../components/NewsRunControl";
+import { buildNewsRunFormState, NewsRunControl, toAbsoluteDateTime } from "../components/NewsRunControl";
 import { NewsRunLogPanel } from "../components/NewsRunLogPanel";
+import { SourceManager } from "../components/SourceManager";
 import { demoItems } from "../demoData";
-import { buildDemoFacets, filterDemoItems, isAgentSourceRunning, isManualNewsRunActive, makeListResponse, resolveHomeDataMode } from "./homeData";
-import type { ManualNewsRunRequest, ManualNewsRunState } from "../types";
+import { agentCandidateRunRefreshKeys, buildDemoFacets, filterDemoItems, isAgentSourceRunning, isManualNewsRunActive, makeListResponse, resolveHomeDataMode } from "./homeData";
+import type { AgentCrawlRunRequest, ManualNewsRunRequest, ManualNewsRunState } from "../types";
 
 const PAGE_SIZE = 10;
 const AGENT_CANDIDATE_PAGE_SIZE = 5;
@@ -36,6 +37,8 @@ export function HomePage() {
   const [candidateTriggerPendingSourceId, setCandidateTriggerPendingSourceId] = useState<number | null>(null);
   const [candidateTriggerErrors, setCandidateTriggerErrors] = useState<Record<number, string | null>>({});
   const [agentPollingEnabled, setAgentPollingEnabled] = useState(false);
+  const [agentWarmupSourceId, setAgentWarmupSourceId] = useState<number | null>(null);
+  const [agentRunFormState, setAgentRunFormState] = useState(() => buildNewsRunFormState(undefined));
   const queryClient = useQueryClient();
   const previousRunState = useRef<ManualNewsRunState | null>(null);
   const previousActiveAgentSourceIds = useRef<number[]>([]);
@@ -95,7 +98,7 @@ export function HomePage() {
     queryFn: fetchAgentSources,
     enabled: agentFeatureEnabled && mode === "live" && controlMode === "agent",
     retry: false,
-    refetchInterval: () => agentPollingEnabled ? 2000 : false,
+    refetchInterval: () => (agentPollingEnabled || agentWarmupSourceId !== null) ? 2000 : false,
   });
 
   const agentCandidatesQuery = useQuery({
@@ -111,7 +114,7 @@ export function HomePage() {
       queryFn: () => fetchAgentRuns(source.id),
       enabled: agentFeatureEnabled && mode === "live" && controlMode === "agent",
       retry: false,
-      refetchInterval: () => agentPollingEnabled ? 2000 : false,
+      refetchInterval: () => (agentPollingEnabled || agentWarmupSourceId !== null) ? 2000 : false,
     })),
   });
 
@@ -177,6 +180,19 @@ export function HomePage() {
     setAgentPollingEnabled(activeAgentSourceIds.length > 0);
   }, [activeAgentSourceIds, queryClient]);
 
+  useEffect(() => {
+    if (agentWarmupSourceId == null) return;
+    if (agentRunsBySourceId[agentWarmupSourceId]?.[0]) {
+      setAgentWarmupSourceId(null);
+    }
+  }, [agentRunsBySourceId, agentWarmupSourceId]);
+
+  useEffect(() => {
+    if (agentWarmupSourceId == null) return;
+    const timer = window.setTimeout(() => setAgentWarmupSourceId(null), 10000);
+    return () => window.clearTimeout(timer);
+  }, [agentWarmupSourceId]);
+
   async function handleStartNewsRun(request: ManualNewsRunRequest) {
     setRunActionPending(true);
     setRunActionError(null);
@@ -212,7 +228,12 @@ export function HomePage() {
     setAgentTriggerPendingSourceId(sourceId);
     setAgentTriggerErrors((state) => ({ ...state, [sourceId]: null }));
     try {
-      await triggerAgentRun(sourceId);
+      const request = buildAgentCrawlRunRequest();
+      if (!request) {
+        setAgentTriggerErrors((state) => ({ ...state, [sourceId]: "Agent 时间范围需要同时选择开始和结束日期" }));
+        return;
+      }
+      await triggerAgentRun(sourceId, request);
       setAgentPollingEnabled(true);
       await queryClient.invalidateQueries({ queryKey: ["agent-runs", sourceId] });
       await queryClient.invalidateQueries({ queryKey: ["agent-sources"] });
@@ -261,14 +282,21 @@ export function HomePage() {
     setCandidateTriggerPendingSourceId(sourceId);
     setCandidateTriggerErrors((state) => ({ ...state, [sourceId]: null }));
     try {
-      await triggerAgentRunFromCandidate(sourceId);
+      const request = buildAgentCrawlRunRequest();
+      if (!request) {
+        setCandidateTriggerErrors((state) => ({ ...state, [sourceId]: "Agent 时间范围需要同时选择开始和结束日期" }));
+        return;
+      }
+      const response = await triggerAgentRunFromCandidate(sourceId, request);
       setAgentPollingEnabled(true);
+      setAgentWarmupSourceId(response.agent_source_id);
       if ((agentCandidatesQuery.data?.items.length ?? 0) === 1 && agentCandidatePage > 1) {
         setAgentCandidatePage((page) => Math.max(1, page - 1));
       }
-      await queryClient.invalidateQueries({ queryKey: ["agent-sources"] });
-      await queryClient.invalidateQueries({ queryKey: ["agent-source-candidates"] });
-      await queryClient.invalidateQueries({ queryKey: ["items"] });
+      for (const queryKey of agentCandidateRunRefreshKeys(response.agent_source_id)) {
+        await queryClient.invalidateQueries({ queryKey });
+      }
+      await queryClient.refetchQueries({ queryKey: ["agent-runs", response.agent_source_id] });
     } catch (error) {
       setCandidateTriggerErrors((state) => ({
         ...state,
@@ -277,6 +305,27 @@ export function HomePage() {
     } finally {
       setCandidateTriggerPendingSourceId(null);
     }
+  }
+
+  async function handleSourcesChanged() {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["agent-sources"] }),
+      queryClient.invalidateQueries({ queryKey: ["agent-source-candidates"] }),
+      queryClient.invalidateQueries({ queryKey: ["items"] }),
+      queryClient.invalidateQueries({ queryKey: ["facets"] }),
+    ]);
+  }
+
+  function buildAgentCrawlRunRequest(): AgentCrawlRunRequest | null {
+    if (agentRunFormState.timeMode === "absolute" && (!agentRunFormState.startDate || !agentRunFormState.endDate)) {
+      return null;
+    }
+    return {
+      time_mode: agentRunFormState.timeMode,
+      relative_range: agentRunFormState.timeMode === "relative" ? agentRunFormState.relativeRange : null,
+      start_at: agentRunFormState.timeMode === "absolute" ? toAbsoluteDateTime(agentRunFormState.startDate, false) : null,
+      end_at: agentRunFormState.timeMode === "absolute" ? toAbsoluteDateTime(agentRunFormState.endDate, true) : null,
+    };
   }
 
   const agentRunError = useMemo(() => {
@@ -362,6 +411,13 @@ export function HomePage() {
         <NewsRunControl
           mode={controlMode}
           onModeChange={setControlMode}
+          sourceManagerContent={
+            mode === "demo" ? (
+              <div style={{ fontSize: 13, color: "#667085" }}>演示模式下不连接抓取来源接口。</div>
+            ) : (
+              <SourceManager onSourcesChanged={handleSourcesChanged} />
+            )
+          }
           agentContent={
             mode === "demo" ? (
               <div style={{ fontSize: 13, color: "#667085" }}>演示模式下不连接 Agent Crawl 接口。</div>
@@ -382,11 +438,20 @@ export function HomePage() {
                 deletePendingSourceId={agentDeletePendingSourceId}
                 candidateTriggerPendingSourceId={candidateTriggerPendingSourceId}
                 candidateTriggerErrors={candidateTriggerErrors}
+                agentTimeMode={agentRunFormState.timeMode}
+                agentRelativeRange={agentRunFormState.relativeRange}
+                agentStartDate={agentRunFormState.startDate}
+                agentEndDate={agentRunFormState.endDate}
+                sourceManagerContent={<SourceManager onSourcesChanged={handleSourcesChanged} />}
                 onTrigger={handleTriggerAgentRun}
                 onCancel={handleCancelAgentRun}
                 onDelete={handleDeleteAgentSource}
                 onTriggerCandidate={handleTriggerAgentRunFromCandidate}
                 onCandidatePageChange={setAgentCandidatePage}
+                onAgentTimeModeChange={(value) => setAgentRunFormState((state) => ({ ...state, timeMode: value }))}
+                onAgentRelativeRangeChange={(value) => setAgentRunFormState((state) => ({ ...state, relativeRange: value }))}
+                onAgentStartDateChange={(value) => setAgentRunFormState((state) => ({ ...state, startDate: value }))}
+                onAgentEndDateChange={(value) => setAgentRunFormState((state) => ({ ...state, endDate: value }))}
               />
             )
           }
@@ -405,12 +470,10 @@ export function HomePage() {
           onStop={handleStopNewsRun}
         />
 
-        {controlMode === "standard" && (
-          <NewsRunLogPanel
-            logs={newsRunLogsQuery.data?.logs ?? []}
-            isLoading={newsRunLogsQuery.isLoading}
-          />
-        )}
+        <NewsRunLogPanel
+          logs={newsRunLogsQuery.data?.logs ?? []}
+          isLoading={newsRunLogsQuery.isLoading}
+        />
 
         <section
           style={{

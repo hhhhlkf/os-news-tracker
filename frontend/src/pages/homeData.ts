@@ -20,6 +20,15 @@ export function isAgentSourceRunning(run: AgentRunRecord | null | undefined): bo
   return run.status === "running" || activeAgentStages.includes(run.current_stage);
 }
 
+export function agentCandidateRunRefreshKeys(agentSourceId: number): (string | number)[][] {
+  return [
+    ["agent-sources"],
+    ["agent-source-candidates"],
+    ["agent-runs", agentSourceId],
+    ["items"],
+  ];
+}
+
 function normalize(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase();
 }

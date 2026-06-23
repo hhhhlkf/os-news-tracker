@@ -1,16 +1,20 @@
 import type {
   AgentCandidateRunResponse,
+  AgentCrawlRunRequest,
   AgentRunRecord,
   AgentRunTriggerResponse,
   AgentSourceCandidatesResponse,
   AgentSource,
   AgentSourceCandidate,
+  CrawlSource,
   ItemListResponse,
   ItemDetail,
   Facets,
   ManualNewsRunRequest,
   ManualNewsRunStatus,
   NewsRunLogsResponse,
+  SourceCreateRequest,
+  SourceDetectResponse,
 } from "../types";
 import { authHeaders } from "../auth";
 
@@ -161,6 +165,43 @@ export async function stopNewsRun(): Promise<ManualNewsRunStatus> {
   return expectOk<ManualNewsRunStatus>(r, "failed to stop news run");
 }
 
+export async function fetchSources(): Promise<CrawlSource[]> {
+  const r = await fetch(`${BASE}/sources`);
+  return expectOk<CrawlSource[]>(r, "failed to load sources");
+}
+
+export async function detectSource(url: string): Promise<SourceDetectResponse> {
+  const r = await fetch(`${BASE}/sources/detect`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  return expectOk<SourceDetectResponse>(r, "failed to detect source");
+}
+
+export async function createSource(request: SourceCreateRequest): Promise<CrawlSource> {
+  const r = await fetch(`${BASE}/sources`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  return expectOk<CrawlSource>(r, "failed to create source");
+}
+
+export async function deleteSource(sourceId: number): Promise<void> {
+  const r = await fetch(`${BASE}/sources/${sourceId}`, { method: "DELETE" });
+  if (r.status === 204 || r.ok) return;
+  const body = await parseErrorBody(r);
+  const message =
+    typeof body === "object" &&
+    body !== null &&
+    "detail" in body &&
+    typeof (body as { detail?: unknown }).detail === "string"
+      ? (body as { detail: string }).detail
+      : `failed to delete source (HTTP ${r.status})`;
+  throw new ApiError(r.status, message, body);
+}
+
 export async function fetchAgentSources(): Promise<AgentSource[]> {
   return fetchJsonWithFallback<AgentSource[]>(
     CRAWL_BASE,
@@ -179,11 +220,18 @@ export async function fetchAgentRuns(sourceId: number): Promise<AgentRunRecord[]
   );
 }
 
-export async function triggerAgentRun(sourceId: number): Promise<AgentRunTriggerResponse> {
+export async function triggerAgentRun(
+  sourceId: number,
+  request?: AgentCrawlRunRequest,
+): Promise<AgentRunTriggerResponse> {
   return fetchJsonWithFallback<AgentRunTriggerResponse>(
     `${CRAWL_BASE}/${sourceId}/run`,
     `${LEGACY_CRAWL_BASE}/${sourceId}/run`,
-    { method: "POST", headers: authHeaders() },
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: request ? JSON.stringify(request) : undefined,
+    },
     "failed to trigger agent run",
   );
 }
@@ -256,11 +304,18 @@ export async function fetchAgentSourceCandidates(
   return payload;
 }
 
-export async function triggerAgentRunFromCandidate(sourceId: number): Promise<AgentCandidateRunResponse> {
+export async function triggerAgentRunFromCandidate(
+  sourceId: number,
+  request?: AgentCrawlRunRequest,
+): Promise<AgentCandidateRunResponse> {
   return fetchJsonWithFallback<AgentCandidateRunResponse>(
     `${CRAWL_BASE}/candidates/${sourceId}/run`,
     `${LEGACY_CRAWL_BASE}/candidates/${sourceId}/run`,
-    { method: "POST", headers: authHeaders() },
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: request ? JSON.stringify(request) : undefined,
+    },
     "failed to trigger agent run from candidate",
   );
 }

@@ -47,6 +47,13 @@ export interface ManualNewsRunRequest {
   target_count: number;
 }
 
+export interface AgentCrawlRunRequest {
+  time_mode: ManualNewsTimeMode;
+  relative_range?: ManualNewsRelativeRange | null;
+  start_at?: string | null;
+  end_at?: string | null;
+}
+
 export interface TimeFilterStats {
   missing_published_at: number;
   before_start: number;
@@ -87,6 +94,40 @@ export interface NewsRunLogsResponse {
   logs: NewsRunLogEntry[];
 }
 
+export type SourceShape = "rss" | "api" | "page_monitor" | "search" | "agent_crawl";
+
+export const MAIN_CATEGORIES = [
+  "OS跟踪来源",
+  "友商产品信息",
+  "软件包适配",
+  "OS性能发展",
+  "司内AI工具",
+] as const;
+
+export type MainCategory = typeof MAIN_CATEGORIES[number];
+
+export interface CrawlSource {
+  id: number;
+  name: string;
+  url: string;
+  type: SourceShape | string;
+  main_category: string | null;
+  enabled: boolean;
+}
+
+export interface SourceDetectResponse {
+  detected_type: SourceShape | string;
+  name_suggestion: string;
+  api_config: Record<string, unknown> | null;
+  notes: string[];
+}
+
+export interface SourceCreateRequest {
+  url: string;
+  name?: string | null;
+  main_category: string;
+}
+
 export type AgentRunStage =
   | "planning"
   | "crawling"
@@ -122,6 +163,14 @@ export interface AgentSourceCandidate {
   url: string;
   source_type: string;
   main_category: string | null;
+}
+
+export interface AgentSourceCandidatesResponse {
+  items: AgentSourceCandidate[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
 }
 
 export interface AgentRunRecord {

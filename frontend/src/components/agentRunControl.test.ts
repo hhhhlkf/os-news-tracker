@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { AgentRunControl } from "./AgentRunControl";
 import { formatAgentRunStats, formatAgentStageLabel } from "./AgentSourceRunCard";
-import type { AgentRunRecord, AgentSource, AgentSourceCandidate } from "../types";
+import type { AgentRunRecord, AgentSource, AgentSourceCandidate, AgentSourceCandidatesResponse } from "../types";
 
 const source: AgentSource = {
   id: 1,
@@ -28,6 +28,14 @@ const candidate: AgentSourceCandidate = {
   url: "https://example.com/fedora.xml",
   source_type: "rss",
   main_category: "OS跟踪来源",
+};
+
+const candidatePage: AgentSourceCandidatesResponse = {
+  items: [candidate],
+  total: 1,
+  page: 1,
+  page_size: 5,
+  total_pages: 1,
 };
 
 function makeRun(partial: Partial<AgentRunRecord>): AgentRunRecord {
@@ -98,16 +106,60 @@ describe("AgentRunControl", () => {
     const html = renderToStaticMarkup(
       createElement(AgentRunControl, {
         sources: [],
-        candidateSources: [candidate],
+        candidatePage,
         runsBySourceId: {},
+        agentTimeMode: "relative",
+        agentRelativeRange: "7d",
+        agentStartDate: "",
+        agentEndDate: "",
         onTrigger: () => {},
         onTriggerCandidate: () => {},
+        onAgentTimeModeChange: () => {},
+        onAgentRelativeRangeChange: () => {},
+        onAgentStartDateChange: () => {},
+        onAgentEndDateChange: () => {},
       }),
     );
 
+    expect(html).toContain("Agent 时间范围");
+    expect(html).toContain("7d");
     expect(html).toContain("标准抓取来源");
     expect(html).toContain("Fedora Updates");
     expect(html).toContain("一键 Agent 运行");
     expect(html).not.toContain("当前还没有可用的 Agent Crawl source。");
+  });
+
+  it("renders backend pagination controls for standard source candidates", () => {
+    const manyCandidates: AgentSourceCandidatesResponse = {
+      items: Array.from({ length: 5 }, (_, index) => ({
+        id: index + 1,
+        name: `Candidate ${index + 1}`,
+        url: `https://example.com/${index + 1}.xml`,
+        source_type: "rss",
+        main_category: "OS跟踪来源",
+      })),
+      total: 12,
+      page: 2,
+      page_size: 5,
+      total_pages: 3,
+    };
+
+    const html = renderToStaticMarkup(
+      createElement(AgentRunControl, {
+        sources: [],
+        candidatePage: manyCandidates,
+        runsBySourceId: {},
+        onTrigger: () => {},
+        onTriggerCandidate: () => {},
+        onCandidatePageChange: () => {},
+      }),
+    );
+
+    expect(html).toContain("Candidate 1");
+    expect(html).toContain("Candidate 5");
+    expect(html).toContain("共 12 条");
+    expect(html).toContain("第 2 / 3 页");
+    expect(html).toContain("上一页");
+    expect(html).toContain("下一页");
   });
 });

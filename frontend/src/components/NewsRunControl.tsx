@@ -21,6 +21,7 @@ interface NewsRunControlProps {
   mode?: "standard" | "agent";
   onModeChange?: (mode: "standard" | "agent") => void;
   agentContent?: ReactNode;
+  sourceManagerContent?: ReactNode;
   status?: ManualNewsRunStatus;
   isLoading: boolean;
   errorMessage?: string | null;
@@ -88,6 +89,7 @@ export function NewsRunControl(props: NewsRunControlProps) {
     mode = "standard",
     onModeChange,
     agentContent,
+    sourceManagerContent,
     status,
     isLoading,
     errorMessage,
@@ -259,25 +261,25 @@ export function NewsRunControl(props: NewsRunControlProps) {
               );
             })}
           </div>
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            style={{
+              border: "1px solid #d0d5dd",
+              borderRadius: 999,
+              padding: "10px 14px",
+              minWidth: 92,
+              background: "#ffffff",
+              color: "#344054",
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            {expanded ? "收起设置" : "展开设置"}
+          </button>
           {!isAgentMode && (
             <>
-              <button
-                type="button"
-                onClick={() => setExpanded((value) => !value)}
-                style={{
-                  border: "1px solid #d0d5dd",
-                  borderRadius: 999,
-                  padding: "10px 14px",
-                  minWidth: 92,
-                  background: "#ffffff",
-                  color: "#344054",
-                  fontSize: 13,
-                  fontWeight: 700,
-                  cursor: "pointer",
-                }}
-              >
-                {expanded ? "收起设置" : "展开设置"}
-              </button>
               <button
                 type="button"
                 onClick={() => void handlePrimaryAction()}
@@ -318,7 +320,25 @@ export function NewsRunControl(props: NewsRunControlProps) {
               {localError ?? errorMessage}
             </div>
           )}
-          {agentContent}
+          {!expanded && (
+            <div style={{ fontSize: 13, color: "#667085" }}>
+              设置已收起，可展开管理抓取来源或触发单源 Agent Crawl。
+            </div>
+          )}
+          <div
+            style={{
+              maxHeight: expanded ? "1600px" : "0",
+              opacity: expanded ? 1 : 0,
+              overflow: "hidden",
+              transition: "max-height 0.35s ease, opacity 0.3s ease",
+            }}
+          >
+            {expanded && (
+              <div style={{ display: "grid", gap: 12 }}>
+                {agentContent}
+              </div>
+            )}
+          </div>
         </div>
       ) : (
         <div style={{ display: "grid", gap: 16 }}>
@@ -337,116 +357,119 @@ export function NewsRunControl(props: NewsRunControlProps) {
 
           <div
             style={{
-              maxHeight: expanded ? "600px" : "0",
+              maxHeight: expanded ? "1800px" : "0",
               opacity: expanded ? 1 : 0,
               overflow: "hidden",
               transition: "max-height 0.35s ease, opacity 0.3s ease",
             }}
           >
-            <div style={{ display: "grid", gap: 16 }}>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-                  gap: 12,
-                }}
-              >
-                <StatusBlock label="当前状态" value={status ? stateLabels[status.state] : isLoading ? "加载中" : "空闲"} />
-                <StatusBlock label="时间范围" value={formatNewsRunWindowLabel(status)} />
-                <StatusBlock label="目标条目数" value={status?.target_count ? String(status.target_count) : formState.targetCount} />
-                <StatusBlock label="原始发现" value={status ? String(status.discovered_count) : "0"} />
-                <StatusBlock label="入队候选" value={status ? String(status.queued_count) : "0"} />
-                <StatusBlock label="已处理" value={status ? String(status.processed_count) : "0"} />
-                <StatusBlock label="新增入库" value={status ? String(status.saved_count) : "0"} />
-                <StatusBlock label="达标" value={fulfilledLabel} />
-              </div>
-
-              {collectingHint && (
+            {expanded && (
+              <div style={{ display: "grid", gap: 16 }}>
                 <div
                   style={{
-                    border: "1px solid #bfd7ff",
-                    background: "#eff6ff",
-                    color: "#175cd3",
-                    borderRadius: 8,
-                    padding: "10px 12px",
-                    fontSize: 13,
-                  }}
-                >
-                  {collectingHint}
-                </div>
-              )}
-
-              {status?.time_filter_stats && (
-                <div
-                  style={{
-                    border: "1px solid #eaecf0",
-                    background: "#fcfcfd",
-                    borderRadius: 8,
-                    padding: "10px 12px",
-                    fontSize: 13,
-                    color: "#475467",
                     display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
-                    gap: 8,
+                    gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                    gap: 12,
                   }}
                 >
-                  <div><span style={{ fontWeight: 600 }}>时间命中</span> {status.time_filter_stats.matched}</div>
-                  <div><span style={{ fontWeight: 600 }}>缺少发布时间</span> {status.time_filter_stats.missing_published_at}</div>
-                  <div><span style={{ fontWeight: 600 }}>早于开始</span> {status.time_filter_stats.before_start}</div>
-                  <div><span style={{ fontWeight: 600 }}>晚于结束</span> {status.time_filter_stats.after_end}</div>
+                  <StatusBlock label="当前状态" value={status ? stateLabels[status.state] : isLoading ? "加载中" : "空闲"} />
+                  <StatusBlock label="时间范围" value={formatNewsRunWindowLabel(status)} />
+                  <StatusBlock label="目标条目数" value={status?.target_count ? String(status.target_count) : formState.targetCount} />
+                  <StatusBlock label="原始发现" value={status ? String(status.discovered_count) : "0"} />
+                  <StatusBlock label="入队候选" value={status ? String(status.queued_count) : "0"} />
+                  <StatusBlock label="已处理" value={status ? String(status.processed_count) : "0"} />
+                  <StatusBlock label="新增入库" value={status ? String(status.saved_count) : "0"} />
+                  <StatusBlock label="达标" value={fulfilledLabel} />
                 </div>
-              )}
 
-              {status?.gap_reason &&
-                (status.state === "completed" || status.state === "failed" || status.state === "stopped") && (
+                {collectingHint && (
                   <div
                     style={{
-                      border: "1px solid #fecdca",
-                      background: "#fef3f2",
-                      color: "#b42318",
+                      border: "1px solid #bfd7ff",
+                      background: "#eff6ff",
+                      color: "#175cd3",
                       borderRadius: 8,
                       padding: "10px 12px",
                       fontSize: 13,
                     }}
                   >
-                    {status.gap_reason}
+                    {collectingHint}
                   </div>
                 )}
 
-              <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
-                <TimeRangePicker
-                  timeMode={formState.timeMode}
-                  relativeRange={formState.relativeRange}
-                  startDate={formState.startDate}
-                  endDate={formState.endDate}
-                  disabled={disabled}
-                  onTimeModeChange={(value) => setFormState((state) => ({ ...state, timeMode: value }))}
-                  onRelativeRangeChange={(value) => setFormState((state) => ({ ...state, relativeRange: value }))}
-                  onStartDateChange={(value) => setFormState((state) => ({ ...state, startDate: value }))}
-                  onEndDateChange={(value) => setFormState((state) => ({ ...state, endDate: value }))}
-                />
-
-                <label style={{ display: "grid", gap: 6, minWidth: 140, color: "#475467", fontSize: 13 }}>
-                  <span>目标条目数</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={500}
-                    value={formState.targetCount}
-                    disabled={disabled}
-                    onChange={(event) => setFormState((state) => ({ ...state, targetCount: event.target.value }))}
+                {status?.time_filter_stats && (
+                  <div
                     style={{
-                      border: "1px solid #d0d5dd",
+                      border: "1px solid #eaecf0",
+                      background: "#fcfcfd",
                       borderRadius: 8,
                       padding: "10px 12px",
-                      fontSize: 14,
-                      color: "#101828",
-                      background: "#fff",
+                      fontSize: 13,
+                      color: "#475467",
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
+                      gap: 8,
                     }}
+                  >
+                    <div><span style={{ fontWeight: 600 }}>时间命中</span> {status.time_filter_stats.matched}</div>
+                    <div><span style={{ fontWeight: 600 }}>缺少发布时间</span> {status.time_filter_stats.missing_published_at}</div>
+                    <div><span style={{ fontWeight: 600 }}>早于开始</span> {status.time_filter_stats.before_start}</div>
+                    <div><span style={{ fontWeight: 600 }}>晚于结束</span> {status.time_filter_stats.after_end}</div>
+                  </div>
+                )}
+
+                {status?.gap_reason &&
+                  (status.state === "completed" || status.state === "failed" || status.state === "stopped") && (
+                    <div
+                      style={{
+                        border: "1px solid #fecdca",
+                        background: "#fef3f2",
+                        color: "#b42318",
+                        borderRadius: 8,
+                        padding: "10px 12px",
+                        fontSize: 13,
+                      }}
+                    >
+                      {status.gap_reason}
+                    </div>
+                  )}
+
+                <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
+                  <TimeRangePicker
+                    timeMode={formState.timeMode}
+                    relativeRange={formState.relativeRange}
+                    startDate={formState.startDate}
+                    endDate={formState.endDate}
+                    disabled={disabled}
+                    onTimeModeChange={(value) => setFormState((state) => ({ ...state, timeMode: value }))}
+                    onRelativeRangeChange={(value) => setFormState((state) => ({ ...state, relativeRange: value }))}
+                    onStartDateChange={(value) => setFormState((state) => ({ ...state, startDate: value }))}
+                    onEndDateChange={(value) => setFormState((state) => ({ ...state, endDate: value }))}
                   />
-                </label>
+
+                  <label style={{ display: "grid", gap: 6, minWidth: 140, color: "#475467", fontSize: 13 }}>
+                    <span>目标条目数</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={500}
+                      value={formState.targetCount}
+                      disabled={disabled}
+                      onChange={(event) => setFormState((state) => ({ ...state, targetCount: event.target.value }))}
+                      style={{
+                        border: "1px solid #d0d5dd",
+                        borderRadius: 8,
+                        padding: "10px 12px",
+                        fontSize: 14,
+                        color: "#101828",
+                        background: "#fff",
+                      }}
+                    />
+                  </label>
+                </div>
+                {sourceManagerContent}
               </div>
-            </div>
+            )}
           </div>
 
           {(localError || errorMessage || status?.last_error) && (
