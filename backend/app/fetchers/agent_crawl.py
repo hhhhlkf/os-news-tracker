@@ -9,24 +9,50 @@ Agent crawl 条目绕过 LLM Enricher，直接以 status=agent_enriched 存入�
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
 from app.agent.crawl_dag import CrawlDAG
 from app.agent.plan_agent import PlanAgent
 from app.agent.quality_pool import QualityWorkerPool
-from app.agent.schemas import AgentItem, AgentSourceConfig
+from app.agent.schemas import AgentItem, AgentSourceConfig, CrawlPlan, PlanUrl
 from app.agent.site_memory import SiteMemory
 from app.agent.summary_pool import SummaryWorkerPool
 from app.enums import ItemStatus
+from app.fetchers.rss import RssFetcher
 from app.models import AgentCrawlRun, AgentSourceConfig as AgentSourceConfigModel, Source
-from app.schemas import RawItem
+from app.schemas import AgentCrawlRunRequest, RawItem
 
 logger = logging.getLogger(__name__)
 
 
-def _to_raw_item(item: AgentItem) -> RawItem:
+def _looks_like_feed_url(url: str) -> bool:
+    path = urlparse(url).path.lower().rstrip("/")
+    return (
+        path.endswith((".rss", ".xml", ".atom"))
+        or path.endswith("/feed")
+        or path.endswith("/rss")
+        or "/rss/" in path
+        or "/feed/" in path
+    )
+
+
+_RELATIVE_RANGE_TO_DELTA = {
+    "24h": timedelta(hours=24),
+    "7d": timedelta(days=7),
+    "30d": timedelta(days=30),
+}
+
+
+def _as_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _to_raw_item(item: AgentItem, default_main_category: str | None = None) -> RawItem:
     """将 AgentItem 转换为 RawItem，富化数据编码在 extra 字段中。
 
     content_type 通过 key_points 的首元素 __type: 前缀传递，
@@ -41,7 +67,7 @@ def _to_raw_item(item: AgentItem) -> RawItem:
         published_at=None,
         extra={
             "agent_item": True,
-            "main_category": item.topic_group or "agent_crawl",
+            "main_category": item.topic_group or default_main_category or "OS跟踪来源",
             "importance": item.importance,
             "info_type": "其他",
             "key_points": key_points_prefix,
@@ -67,6 +93,8 @@ class AgentCrawlFetcher:
         crawl_dag=None,
         quality_pool=None,
         summary_pool=None,
+        rss_fetcher=None,
+        time_window=None,
     ):
         """初始化 AgentCrawlFetcher。
 
@@ -76,6 +104,8 @@ class AgentCrawlFetcher:
             crawl_dag: 可选的 CrawlDAG 实例。
             quality_pool: 可选的 QualityWorkerPool 实例。
             summary_pool: 可选的 SummaryWorkerPool 实例。
+            rss_fetcher: 可选的 RssFetcher 实例，用于 RSS-backed Agent seed。
+            time_window: 可选的 AgentCrawlRunRequest/dict，用于 RSS seed 时间筛选。
         """
         self._db = db
         self._memory = SiteMemory()
@@ -83,6 +113,70 @@ class AgentCrawlFetcher:
         self._crawl_dag = crawl_dag or CrawlDAG()
         self._quality_pool = quality_pool or QualityWorkerPool(memory=self._memory)
         self._summary_pool = summary_pool or SummaryWorkerPool()
+        self._rss_fetcher = rss_fetcher or RssFetcher()
+        self._time_window = AgentCrawlRunRequest.model_validate(time_window or {})
+
+    def _time_window_label(self) -> str:
+        if self._time_window.time_mode == "relative":
+            return f"最近 {self._time_window.relative_range}"
+        start = self._time_window.start_at.date().isoformat() if self._time_window.start_at else "--"
+        end = self._time_window.end_at.date().isoformat() if self._time_window.end_at else "--"
+        return f"{start} 至 {end}"
+
+    def _matches_time_window(self, item: RawItem, *, now: datetime | None = None) -> bool:
+        if item.published_at is None:
+            return False
+
+        item_ts = _as_utc(item.published_at)
+        if self._time_window.time_mode == "relative":
+            current_time = now or datetime.now(timezone.utc)
+            lower_bound = _as_utc(current_time) - _RELATIVE_RANGE_TO_DELTA[self._time_window.relative_range]
+            return item_ts >= lower_bound
+
+        start_ts = _as_utc(self._time_window.start_at)
+        end_ts = _as_utc(self._time_window.end_at)
+        return start_ts <= item_ts <= end_ts
+
+    def _build_plan(self, source: Source, config: AgentSourceConfig) -> CrawlPlan:
+        """Build the URL plan for either HTML-homepage or RSS-backed sources."""
+        api_config = source.api_config or {}
+        seed_url = str(api_config.get("seed_url") or source.url)
+        if api_config.get("seed_type") != "rss" and not _looks_like_feed_url(seed_url):
+            return self._plan_agent.plan(source, config, db=self._db)
+
+        seed_source = Source(
+            id=source.id,
+            name=source.name,
+            type="rss",
+            url=seed_url,
+            stream=source.stream,
+            enabled=True,
+        )
+        raw_items = self._rss_fetcher.fetch(seed_source)
+        filtered_items = [item for item in raw_items if self._matches_time_window(item)]
+        seen: set[str] = set()
+        urls: list[PlanUrl] = []
+        for item in filtered_items:
+            if not item.url or item.url in seen:
+                continue
+            seen.add(item.url)
+            urls.append(
+                PlanUrl(
+                    url=item.url,
+                    guessed_topic=item.title or (config.topic_groups[0] if config.topic_groups else ""),
+                )
+            )
+            if len(urls) >= config.max_urls_per_run:
+                break
+
+        logger.info(
+            "agent_crawl: RSS seed %s produced %d plan URLs from %d entries (%s)",
+            seed_url,
+            len(urls),
+            len(raw_items),
+            self._time_window_label(),
+        )
+        return CrawlPlan(source_id=config.source_id, urls=urls)
 
     def fetch(self, source: Source) -> list[RawItem]:
         """执行一次完整的 Agent Crawl 管线。
@@ -140,7 +234,7 @@ class AgentCrawlFetcher:
         # ── 3–6. 执行异步管线 ──
         async def _pipeline() -> list[AgentItem]:
             # ③ PlanAgent: URL 规划
-            plan = self._plan_agent.plan(source, config, db=self._db)
+            plan = self._build_plan(source, config)
             run.plan_urls_count = len(plan.urls)
             run.current_stage = "planning"
             run.stage_message = f"已规划 {run.plan_urls_count} 个 URL"
@@ -184,7 +278,11 @@ class AgentCrawlFetcher:
             return []
 
         # ── 7. 转换为 RawItem ──
-        raw_items = [_to_raw_item(item) for item in agent_items]
+        default_main_category = next(
+            (topic for topic in config.topic_groups if topic),
+            source.main_category,
+        )
+        raw_items = [_to_raw_item(item, default_main_category) for item in agent_items]
         run.items_created = len(raw_items)
         run.status = "completed"
         run.current_stage = "completed"

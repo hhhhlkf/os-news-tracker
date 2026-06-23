@@ -1,6 +1,7 @@
 """AgentCrawlFetcher 单元测试 — 验证 Handoff Chain 编排、配置缺失处理、异常隔离。"""
 
 import json
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -57,11 +58,11 @@ class TestToRawItem:
         assert raw.extra["importance"] == "高"
         assert "__type:release_note" in raw.extra["key_points"]
 
-    def test_topic_group_none_falls_back_to_agent_crawl(self):
-        """topic_group 为空时，main_category 应为 'agent_crawl'。"""
+    def test_topic_group_none_falls_back_to_default_main_category(self):
+        """topic_group 为空时，main_category 应继承来源默认主分类。"""
         item = _make_agent_item(topic_group=None)
-        raw = _to_raw_item(item)
-        assert raw.extra["main_category"] == "agent_crawl"
+        raw = _to_raw_item(item, default_main_category="友商产品信息")
+        assert raw.extra["main_category"] == "友商产品信息"
 
     def test_key_points_include_content_type_prefix(self):
         """content_type 通过 __type: 前缀编码到 key_points 首元素。"""
@@ -140,6 +141,151 @@ class TestAgentCrawlFetcherFetch:
             ("summarizing", "正在生成 1 条摘要", 1, 1, 1, 0, "running"),
             ("completed", "已生成 1 条候选", 1, 1, 1, 1, "completed"),
         ]
+
+    def test_rss_seed_source_uses_feed_entries_as_plan_urls(self):
+        """RSS-backed agent sources should seed CrawlDAG from feed entry links."""
+        db = MagicMock()
+        db.get.return_value = _make_config_model(max_urls_per_run=2)
+        plan_agent = MagicMock()
+        crawl_dag = MagicMock(execute=AsyncMock(return_value=[]))
+        rss_fetcher = MagicMock(fetch=MagicMock(return_value=[
+            RawItem(
+                source_id=1,
+                title="Kernel fix",
+                url="https://example.com/post-1",
+                published_at=datetime(2026, 6, 20, tzinfo=timezone.utc),
+            ),
+            RawItem(
+                source_id=1,
+                title="Release notes",
+                url="https://example.com/post-2",
+                published_at=datetime(2026, 6, 21, tzinfo=timezone.utc),
+            ),
+            RawItem(
+                source_id=1,
+                title="Overflow",
+                url="https://example.com/post-3",
+                published_at=datetime(2026, 6, 22, tzinfo=timezone.utc),
+            ),
+        ]))
+
+        fetcher = AgentCrawlFetcher(
+            db=db,
+            plan_agent=plan_agent,
+            crawl_dag=crawl_dag,
+            quality_pool=MagicMock(assess_all=AsyncMock(return_value=[])),
+            summary_pool=MagicMock(summarize_all=AsyncMock(return_value=[])),
+            rss_fetcher=rss_fetcher,
+            time_window={
+                "time_mode": "absolute",
+                "start_at": datetime(2026, 6, 1, tzinfo=timezone.utc),
+                "end_at": datetime(2026, 6, 30, tzinfo=timezone.utc),
+            },
+        )
+        source = MagicMock()
+        source.id = 1
+        source.url = "https://example.com/feed.xml"
+        source.api_config = {
+            "seed_type": "rss",
+            "seed_url": "https://example.com/feed.xml",
+        }
+
+        result = fetcher.fetch(source)
+
+        assert result == []
+        plan_agent.plan.assert_not_called()
+        plan = crawl_dag.execute.call_args.args[0]
+        assert [url.url for url in plan.urls] == [
+            "https://example.com/post-1",
+            "https://example.com/post-2",
+        ]
+
+    def test_legacy_agent_source_with_feed_url_uses_rss_seed(self):
+        """Existing agent sources created from RSS URLs should work without api_config."""
+        db = MagicMock()
+        db.get.return_value = _make_config_model(max_urls_per_run=1)
+        plan_agent = MagicMock()
+        crawl_dag = MagicMock(execute=AsyncMock(return_value=[]))
+        rss_fetcher = MagicMock(fetch=MagicMock(return_value=[
+            RawItem(
+                source_id=1,
+                title="Blog article",
+                url="https://example.com/blog/article",
+                published_at=datetime(2026, 6, 20, tzinfo=timezone.utc),
+            ),
+        ]))
+
+        fetcher = AgentCrawlFetcher(
+            db=db,
+            plan_agent=plan_agent,
+            crawl_dag=crawl_dag,
+            quality_pool=MagicMock(assess_all=AsyncMock(return_value=[])),
+            summary_pool=MagicMock(summarize_all=AsyncMock(return_value=[])),
+            rss_fetcher=rss_fetcher,
+            time_window={
+                "time_mode": "absolute",
+                "start_at": datetime(2026, 6, 1, tzinfo=timezone.utc),
+                "end_at": datetime(2026, 6, 30, tzinfo=timezone.utc),
+            },
+        )
+        source = MagicMock()
+        source.id = 1
+        source.url = "https://example.com/blog/index.xml"
+        source.api_config = None
+
+        fetcher.fetch(source)
+
+        plan_agent.plan.assert_not_called()
+        plan = crawl_dag.execute.call_args.args[0]
+        assert [url.url for url in plan.urls] == ["https://example.com/blog/article"]
+
+    def test_rss_seed_filters_entries_by_absolute_time_window(self):
+        """RSS-backed agent sources should only plan URLs inside the run time window."""
+        db = MagicMock()
+        db.get.return_value = _make_config_model(max_urls_per_run=5)
+        crawl_dag = MagicMock(execute=AsyncMock(return_value=[]))
+        rss_fetcher = MagicMock(fetch=MagicMock(return_value=[
+            RawItem(
+                source_id=1,
+                title="Old",
+                url="https://example.com/old",
+                published_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+            ),
+            RawItem(
+                source_id=1,
+                title="Inside",
+                url="https://example.com/inside",
+                published_at=datetime(2026, 6, 20, tzinfo=timezone.utc),
+            ),
+            RawItem(
+                source_id=1,
+                title="Future",
+                url="https://example.com/future",
+                published_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+            ),
+        ]))
+
+        fetcher = AgentCrawlFetcher(
+            db=db,
+            crawl_dag=crawl_dag,
+            quality_pool=MagicMock(assess_all=AsyncMock(return_value=[])),
+            summary_pool=MagicMock(summarize_all=AsyncMock(return_value=[])),
+            rss_fetcher=rss_fetcher,
+            time_window={
+                "time_mode": "absolute",
+                "start_at": datetime(2026, 6, 10, tzinfo=timezone.utc),
+                "end_at": datetime(2026, 6, 30, tzinfo=timezone.utc),
+            },
+        )
+        source = MagicMock()
+        source.id = 1
+        source.url = "https://example.com/feed.xml"
+        source.api_config = None
+
+        fetcher.fetch(source)
+
+        plan = crawl_dag.execute.call_args.args[0]
+        assert [url.url for url in plan.urls] == ["https://example.com/inside"]
 
     def test_pipeline_failure_returns_empty(self):
         """Pipeline 中任何阶段抛出异常时应返回空列表并记录失败。"""

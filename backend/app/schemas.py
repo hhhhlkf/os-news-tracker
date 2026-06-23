@@ -74,6 +74,30 @@ class ManualNewsRunRequest(BaseModel):
         if self.time_mode == "relative" and self.relative_range is None:
             raise ValueError("relative_range is required for relative mode")
         if self.time_mode == "absolute":
+            self.relative_range = None
+            if self.start_at is None or self.end_at is None:
+                raise ValueError("start_at and end_at are required for absolute mode")
+            if self.start_at > self.end_at:
+                raise ValueError("start_at must be before end_at")
+            if self.start_at.tzinfo is None:
+                raise ValueError("start_at must be timezone-aware (UTC)")
+            if self.end_at.tzinfo is None:
+                raise ValueError("end_at must be timezone-aware (UTC)")
+        return self
+
+
+class AgentCrawlRunRequest(BaseModel):
+    time_mode: TimeMode = "relative"
+    relative_range: RelativeRange | None = "7d"
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_mode(self):
+        if self.time_mode == "relative" and self.relative_range is None:
+            raise ValueError("relative_range is required for relative mode")
+        if self.time_mode == "absolute":
+            self.relative_range = None
             if self.start_at is None or self.end_at is None:
                 raise ValueError("start_at and end_at are required for absolute mode")
             if self.start_at > self.end_at:

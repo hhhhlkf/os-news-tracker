@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.source_cleanup import delete_source_and_related
 from app.api.deps import get_db
 from app.enums import SourceType, Stream
 from app.models import (
@@ -29,6 +30,7 @@ from app.models import (
     Source,
 )
 from app.scheduler import run_source_job
+from app.schemas import AgentCrawlRunRequest
 from app.sources.registry import seed_sources_from_yaml
 
 logger = logging.getLogger(__name__)
@@ -53,11 +55,12 @@ class AgentSourceCreate(BaseModel):
     summary_workers: int = 3
 
 
-def _start_agent_source_run(source_id: int) -> None:
+def _start_agent_source_run(source_id: int, time_window: dict | None = None) -> None:
     """在后台线程中触发单源 agent crawl。"""
     threading.Thread(
         target=run_source_job,
         args=(source_id,),
+        kwargs={"agent_time_window": time_window},
         daemon=True,
         name=f"agent-source-run-{source_id}",
     ).start()
@@ -130,6 +133,14 @@ def _candidate_response(source: Source) -> dict:
 
 def _ensure_agent_source_for_candidate(db: Session, candidate: Source) -> tuple[Source, bool]:
     """为标准抓取来源复用或创建对应的 agent source。"""
+    api_config = None
+    if candidate.type == SourceType.RSS:
+        api_config = {
+            "seed_type": "rss",
+            "seed_url": candidate.url,
+            "candidate_source_id": candidate.id,
+        }
+
     existing = db.scalars(
         select(Source)
         .where(
@@ -139,12 +150,17 @@ def _ensure_agent_source_for_candidate(db: Session, candidate: Source) -> tuple[
         .limit(1)
     ).first()
     if existing is not None:
+        if api_config and not existing.api_config:
+            existing.api_config = api_config
+            db.commit()
         return existing, False
 
     source = Source(
         name=candidate.name,
         type=SourceType.AGENT_CRAWL,
         url=candidate.url,
+        api_config=api_config,
+        main_category=candidate.main_category,
         stream=Stream.NEWS,
         enabled=True,
     )
@@ -159,7 +175,16 @@ def _ensure_agent_source_for_candidate(db: Session, candidate: Source) -> tuple[
     return source, True
 
 
-def _trigger_response_for_agent_source(source_id: int, db: Session):
+def _time_window_payload(body: AgentCrawlRunRequest | None) -> dict:
+    request = body or AgentCrawlRunRequest()
+    return request.model_dump(mode="json")
+
+
+def _trigger_response_for_agent_source(
+    source_id: int,
+    db: Session,
+    time_window: dict | None = None,
+):
     active_run = _find_active_agent_run(db, source_id)
     if active_run is not None:
         return JSONResponse(
@@ -171,7 +196,7 @@ def _trigger_response_for_agent_source(source_id: int, db: Session):
             },
         )
 
-    _start_agent_source_run(source_id)
+    _start_agent_source_run(source_id, time_window)
     return None
 
 
@@ -241,6 +266,7 @@ def list_agent_source_candidates(
 @router.post("/candidates/{candidate_source_id}/run", status_code=202)
 def trigger_agent_run_from_candidate(
     candidate_source_id: int,
+    body: AgentCrawlRunRequest | None = None,
     db: Session = Depends(get_db),
 ):
     """从标准抓取来源一键创建/复用 agent source 并立即运行。"""
@@ -253,7 +279,8 @@ def trigger_agent_run_from_candidate(
         raise HTTPException(status_code=404, detail="Candidate source not found")
 
     agent_source, created = _ensure_agent_source_for_candidate(db, candidate)
-    conflict = _trigger_response_for_agent_source(agent_source.id, db)
+    time_window = _time_window_payload(body)
+    conflict = _trigger_response_for_agent_source(agent_source.id, db, time_window)
     if conflict is not None:
         return conflict
 
@@ -352,60 +379,10 @@ def delete_agent_source(
     3. agent_crawl_runs（引用 sources）
     4. source 本身（agent_source_configs + agent_site_memory 有 CASCADE，自动清理）
     """
-    from sqlalchemy import delete as sa_delete
-    from app.models import Item, ItemSource, ItemTag, ItemEntity
-
-    # 这些模型可能不在顶部 import，按需导入
-    try:
-        from app.models import UserItemScore, UserItemInteraction
-        _has_user_tables = True
-    except ImportError:
-        _has_user_tables = False
-
     source = db.get(Source, source_id)
     if source is None or source.type != "agent_crawl":
         raise HTTPException(status_code=404, detail="Agent source not found")
-
-    # 先将运行中的 run 标记为 failed，减少后台线程持锁的竞争窗口
-    from datetime import datetime, timezone
-    running_runs = db.scalars(
-        select(AgentCrawlRun).where(
-            AgentCrawlRun.source_id == source_id,
-            AgentCrawlRun.status == "running",
-        )
-    ).all()
-    for run in running_runs:
-        run.status = "failed"
-        run.stage_message = "来源已删除"
-        run.completed_at = datetime.now(timezone.utc)
-    if running_runs:
-        db.flush()  # 提交状态变更但不 commit，缩短后续删除的锁等待
-
-    # 收集该 source 产生的 item id 列表
-    item_ids = db.scalars(
-        select(Item.id).where(Item.source_id == source_id)
-    ).all()
-
-    if item_ids:
-        # 1a. 清理 items 的下游依赖（无 CASCADE）
-        db.execute(sa_delete(ItemTag).where(ItemTag.item_id.in_(item_ids)))
-        db.execute(sa_delete(ItemEntity).where(ItemEntity.item_id.in_(item_ids)))
-        db.execute(sa_delete(ItemSource).where(ItemSource.item_id.in_(item_ids)))
-        if _has_user_tables:
-            db.execute(sa_delete(UserItemScore).where(UserItemScore.item_id.in_(item_ids)))
-            db.execute(sa_delete(UserItemInteraction).where(UserItemInteraction.item_id.in_(item_ids)))
-        # 1b. 删除 items 本身
-        db.execute(sa_delete(Item).where(Item.id.in_(item_ids)))
-
-    # 2. 清理 item_sources 中该 source 的直接关联行（source_id 维度）
-    db.execute(sa_delete(ItemSource).where(ItemSource.source_id == source_id))
-
-    # 3. 删除 agent_crawl_runs（无 CASCADE）
-    db.execute(sa_delete(AgentCrawlRun).where(AgentCrawlRun.source_id == source_id))
-
-    # 4. 删除 source（agent_source_configs + agent_site_memory 有 CASCADE，自动清理）
-    db.delete(source)
-    db.commit()
+    delete_source_and_related(db, source)
 
 
 # ── 运行记录 ──────────────────────────────────────────────────────
@@ -445,6 +422,7 @@ def list_runs(
 @router.post("/{source_id}/run", status_code=202)
 def trigger_agent_run(
     source_id: int,
+    body: AgentCrawlRunRequest | None = None,
     db: Session = Depends(get_db),
 ):
     """立即触发指定 agent source 的一次抓取。"""
@@ -452,7 +430,8 @@ def trigger_agent_run(
     if source is None or source.type != "agent_crawl":
         raise HTTPException(status_code=404, detail="Agent source not found")
 
-    conflict = _trigger_response_for_agent_source(source_id, db)
+    time_window = _time_window_payload(body)
+    conflict = _trigger_response_for_agent_source(source_id, db, time_window)
     if conflict is not None:
         return conflict
     return {
