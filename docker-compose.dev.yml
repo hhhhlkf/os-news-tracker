@@ -27,7 +27,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/osnews_empty_test
-      ENABLE_SCHEDULER: "1"
+      ENABLE_SCHEDULER: "0"
       RUN_STARTUP_BACKFILL: "0"
     depends_on:
       db:
