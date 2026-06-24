@@ -21,6 +21,11 @@ _AGENT_PROMPT = """你是 OS News Tracker 的来源抓取配置选择 agent。
 6. 不允许选择候选列表之外的 API。
 7. 如果没有合适候选，selected_index 返回 null，并说明原因。
 
+name_suggestion 要求：
+- 根据网页 URL 和 API 内容，生成一个精简的来源名称。
+- 格式：网站名+用途，如「openEuler 博客」「Red Hat 安全公告」「Fedora 版本发布」。
+- 不超过 15 个字，不要加引号或标点。
+
 输出必须是 JSON，不要输出额外文本。
 
 网页 URL：{page_url}
@@ -31,6 +36,7 @@ _AGENT_PROMPT = """你是 OS News Tracker 的来源抓取配置选择 agent。
 只输出以下 JSON 结构：
 {{
   "selected_index": number | null,
+  "name_suggestion": string,
   "reason": string,
   "api_config": {{
     "mode": "json_list",

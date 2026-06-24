@@ -263,6 +263,9 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
       if (result.selected_index !== null) {
         setXhrSelectedCandidate(result.selected_index);
       }
+      if (result.name_suggestion && !name.trim()) {
+        setName(result.name_suggestion);
+      }
       setError(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Agent 选择失败");

@@ -175,6 +175,7 @@ export interface XhrDetectResponse {
 
 export interface XhrSelectResponse {
   selected_index: number | null;
+  name_suggestion?: string;
   reason: string;
   api_config: ProbeConfig | null;
   field_mapping: Record<string, unknown>;
