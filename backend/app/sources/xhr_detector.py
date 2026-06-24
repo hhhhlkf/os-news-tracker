@@ -9,10 +9,12 @@ from typing import Any
 from urllib.parse import urlparse, parse_qs
 
 _BLOCKLIST_PATTERNS = re.compile(
-    r"analytics|tracking|telemetry|beacon|sentry|log|metric|"
-    r"stat|monitor|health|ping|heartbeat|cart|wishlist|"
-    r"searchsuggest|autocomplete|taglist|config|setting|"
-    r"i18n|locale|translation|csrf|token|captcha|verify",
+    r"/analytics|/tracking|/telemetry|/beacon|/sentry|"
+    r"/log/|/logs/|/metric|/statistic|/monitor|"
+    r"/health|/ping|/heartbeat|/cart|/wishlist|"
+    r"/searchsuggest|/autocomplete|/taglist|"
+    r"/config|/setting|/i18n|/locale|"
+    r"/csrf|/captcha|/verify",
     re.IGNORECASE,
 )
 
@@ -155,18 +157,32 @@ def _build_candidate(
 
 
 def _find_items(payload: Any) -> tuple[str, list]:
+    """在 payload 中查找列表数据，支持顶层和一层嵌套。"""
     if isinstance(payload, list):
         return "", payload
     if not isinstance(payload, dict):
         return "", []
+    # 顶层 key 匹配
     for key in _LIST_KEYS:
         value = payload.get(key)
         if isinstance(value, list) and value:
             return key, value
+    # 顶层任意 key 的列表
     for key, value in payload.items():
         if isinstance(value, list) and len(value) >= 2:
             if all(isinstance(item, dict) for item in value):
                 return key, value
+    # 一层嵌套：obj.records, data.items 等
+    for outer_key, outer_value in payload.items():
+        if isinstance(outer_value, dict):
+            for inner_key in _LIST_KEYS:
+                inner_value = outer_value.get(inner_key)
+                if isinstance(inner_value, list) and inner_value:
+                    return f"{outer_key}.{inner_key}", inner_value
+            for inner_key, inner_value in outer_value.items():
+                if isinstance(inner_value, list) and len(inner_value) >= 2:
+                    if all(isinstance(item, dict) for item in inner_value):
+                        return f"{outer_key}.{inner_key}", inner_value
     return "", []
 
 
