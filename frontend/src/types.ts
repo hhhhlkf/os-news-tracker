@@ -8,6 +8,7 @@ export interface ItemSummary {
   published_at: string | null;
   fetched_at: string | null;
   url: string;
+  why_it_matters?: string | null;
 }
 
 export interface ItemDetail extends ItemSummary {
@@ -52,6 +53,7 @@ export interface AgentCrawlRunRequest {
   relative_range?: ManualNewsRelativeRange | null;
   start_at?: string | null;
   end_at?: string | null;
+  target_count: number;
 }
 
 export interface TimeFilterStats {
@@ -182,6 +184,7 @@ export interface AgentRunRecord {
   fetched_count: number;
   quality_passed: number;
   items_created: number;
+  target_count?: number | null;
   started_at: string | null;
   completed_at: string | null;
   error_message: string | null;

@@ -123,11 +123,22 @@ export function buildDemoFacets(items: ItemDetail[]) {
   return {
     main_category: countBy(items, (item) => item.main_category),
     info_type: countBy(items, (item) => item.info_type),
-    importance: countBy(items, (item) => item.importance),
+    importance: sortImportanceFacets(countBy(items, (item) => item.importance)),
     sub_tags: sortFacetValues(
       Array.from(tagCounts, ([value, count]) => ({ value, count })),
     ).slice(0, 30),
   };
+}
+
+// 重要度筛选项固定顺序：高 → 中 → 低
+const IMPORTANCE_ORDER: Record<string, number> = { "高": 0, "中": 1, "低": 2 };
+
+function sortImportanceFacets(values: FacetValue[]): FacetValue[] {
+  return [...values].sort(
+    (left, right) =>
+      (IMPORTANCE_ORDER[left.value] ?? Object.keys(IMPORTANCE_ORDER).length) -
+      (IMPORTANCE_ORDER[right.value] ?? Object.keys(IMPORTANCE_ORDER).length),
+  );
 }
 
 export function makeListResponse(items: ItemDetail[], limit?: number, offset?: number): ItemListResponse {

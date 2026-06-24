@@ -12,7 +12,61 @@ function parseTechHighlight(text: string): { keyword: string; detail: string } |
   return null;
 }
 
+function domainFromUrl(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+function SourceCta({ url }: { url: string }) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "8px 12px",
+        border: "1px solid #d0d5dd",
+        borderRadius: 8,
+        background: "#fff",
+        color: "#344054",
+        fontSize: 13,
+        textDecoration: "none",
+        lineHeight: 1,
+        width: "fit-content",
+      }}
+    >
+      <span>阅读原文</span>
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width={16}
+        height={16}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+        <polyline points="15 3 21 3 21 9" />
+        <line x1="10" y1="14" x2="21" y2="3" />
+      </svg>
+      <span style={{ color: "#98a2b3", fontSize: 12 }}>{domainFromUrl(url)}</span>
+    </a>
+  );
+}
+
 function ItemDetailBody({ data }: { data: ItemDetailRecord }) {
+  const dedupedSourceLinks = Array.from(
+    new Map(data.source_links.map((s) => [`${s.source_id}:${s.url}`, s])).values(),
+  );
   return (
     <div style={{ padding: 20 }}>
       <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
@@ -69,31 +123,38 @@ function ItemDetailBody({ data }: { data: ItemDetailRecord }) {
         </section>
       )}
 
-      {data.sub_tags.length > 0 && (
-        <section style={{ marginBottom: 16 }}>
-          <h4 style={{ color: "#475467" }}>技术热点</h4>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {data.sub_tags.map((tag, i) => (
-              <span key={i} style={{
-                background: "#f2f4f7", borderRadius: 6, padding: "2px 8px", fontSize: 12,
-              }}>{tag}</span>
-            ))}
-          </div>
-        </section>
-      )}
+      {(data.sub_tags.length > 0 || dedupedSourceLinks.length > 0) && (
+        <section
+          style={{
+            display: "flex",
+            gap: 24,
+            flexWrap: "wrap",
+            alignItems: "flex-start",
+          }}
+        >
+          {data.sub_tags.length > 0 && (
+            <div style={{ flex: "1 1 240px", minWidth: 0 }}>
+              <h4 style={{ color: "#475467", margin: "0 0 8px" }}>技术热点</h4>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {data.sub_tags.map((tag, i) => (
+                  <span key={i} style={{
+                    background: "#f2f4f7", borderRadius: 6, padding: "2px 8px", fontSize: 12,
+                  }}>{tag}</span>
+                ))}
+              </div>
+            </div>
+          )}
 
-      {data.source_links.length > 0 && (
-        <section>
-          <h4 style={{ color: "#475467" }}>来源链接</h4>
-          <ul>
-            {Array.from(
-              new Map(data.source_links.map((s) => [`${s.source_id}:${s.url}`, s])).values(),
-            ).map((s) => (
-              <li key={`${s.source_id}:${s.url}`}>
-                <a href={s.url} target="_blank" rel="noreferrer">{s.url}</a>
-              </li>
-            ))}
-          </ul>
+          {dedupedSourceLinks.length > 0 && (
+            <div style={{ flexShrink: 0 }}>
+              <h4 style={{ color: "#475467", margin: "0 0 8px" }}>来源链接</h4>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {dedupedSourceLinks.map((s) => (
+                  <SourceCta key={`${s.source_id}:${s.url}`} url={s.url} />
+                ))}
+              </div>
+            </div>
+          )}
         </section>
       )}
     </div>

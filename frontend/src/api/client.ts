@@ -134,6 +134,19 @@ export async function fetchItemDetail(id: number): Promise<ItemDetail> {
   return expectOk<ItemDetail>(r, "failed to load item");
 }
 
+export interface ItemReasonResponse {
+  reason: string;
+  generated: boolean;
+}
+
+export async function generateItemReason(id: number): Promise<ItemReasonResponse> {
+  const r = await fetch(`${BASE}/items/${id}/reason`, {
+    method: "POST",
+    headers: { ...authHeaders() },
+  });
+  return expectOk<ItemReasonResponse>(r, "failed to generate item reason");
+}
+
 export async function fetchFacets(): Promise<Facets> {
   const r = await fetch(`${BASE}/facets`);
   return expectOk<Facets>(r, "failed to load facets");
