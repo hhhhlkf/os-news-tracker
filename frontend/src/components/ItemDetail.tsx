@@ -91,11 +91,11 @@ function ItemDetailBody({ data }: { data: ItemDetailRecord }) {
         </section>
       )}
 
-      {data.key_points.length > 0 && (
+      {data.key_points.filter((kp) => !kp.startsWith("__type:")).length > 0 && (
         <section style={{ marginBottom: 16 }}>
           <h4 style={{ color: "#475467" }}>技术要点</h4>
           <div>
-            {data.key_points.map((kp, i) => {
+            {data.key_points.filter((kp) => !kp.startsWith("__type:")).map((kp, i) => {
               const parsed = parseTechHighlight(kp);
               return (
                 <div
