@@ -12,6 +12,7 @@ from app.manual_news_run import (
     stop_manual_news_run,
 )
 from app.models import Item, ItemSource, ItemTag, Tag, TagAlias
+from app.processing.reason import generate_recommendation_reason
 from app.run_logs import list_run_logs
 from app.schemas import ManualNewsRunRequest
 
@@ -32,6 +33,7 @@ def _item_summary(item: Item) -> dict:
         "published_at": item.published_at.isoformat() if item.published_at else None,
         "fetched_at": item.fetched_at.isoformat() if item.fetched_at else None,
         "url": item.url,
+        "why_it_matters": item.why_it_matters,
     }
 
 
@@ -135,6 +137,10 @@ def list_items(
     return {"total": total, "items": [_item_summary(item) for item in rows]}
 
 
+# 重要度筛选项固定顺序：高 → 中 → 低
+_IMPORTANCE_ORDER = {"高": 0, "中": 1, "低": 2}
+
+
 @router.get("/facets")
 def facets(db: Session = Depends(get_db)):
     def _counts(column):
@@ -164,7 +170,10 @@ def facets(db: Session = Depends(get_db)):
     return {
         "main_category": _counts(Item.main_category),
         "info_type": _counts(Item.info_type),
-        "importance": _counts(Item.importance),
+        "importance": sorted(
+            _counts(Item.importance),
+            key=lambda facet: _IMPORTANCE_ORDER.get(facet["value"], len(_IMPORTANCE_ORDER)),
+        ),
         "sub_tags": [{"value": name, "count": count} for name, count in sub_tag_rows],
     }
 
@@ -205,6 +214,25 @@ def item_detail(item_id: int, db: Session = Depends(get_db)):
         "entities": [{"type": entity.type, "name": entity.name} for entity in item.entities],
         "source_links": unique_links,
     }
+
+
+@router.post("/items/{item_id}/reason")
+def item_reason(item_id: int, db: Session = Depends(get_db)):
+    """Return the recommendation reason for an item, generating + caching it on first request."""
+    item = db.get(Item, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="not found")
+    if item.why_it_matters:
+        return {"reason": item.why_it_matters, "generated": False}
+    try:
+        reason = generate_recommendation_reason(item)
+    except Exception:
+        # LLM unavailable — fall back to summary text without persisting.
+        fallback = item.summary or item.title_tldr or item.title
+        return {"reason": fallback, "generated": False}
+    item.why_it_matters = reason
+    db.commit()
+    return {"reason": reason, "generated": True}
 
 
 @router.get("/news-run")
