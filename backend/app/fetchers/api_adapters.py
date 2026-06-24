@@ -33,6 +33,17 @@ def _default_text_requester(url: str) -> str:
         return response.read().decode("utf-8", errors="replace")
 
 
+def _parse_json_lenient(text: str) -> Any:
+    """Parse JSON, tolerating trailing non-JSON data (e.g. openEuler API extra bytes)."""
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        obj, _ = decoder.raw_decode(text)
+        return obj
+
+
 def _http_request(
     url: str,
     *,
@@ -115,7 +126,7 @@ class ConfigurableApiProbeAdapter:
         else:
             url = _probe_url(source, probe)
             text = requester(url)
-        payload = json.loads(text)
+        payload = _parse_json_lenient(text)
         raw_items = _get_path(payload, probe.get("items_path"))
         if not isinstance(raw_items, list):
             return []
@@ -124,7 +135,7 @@ class ConfigurableApiProbeAdapter:
         for raw_item in raw_items:
             if not isinstance(raw_item, dict):
                 continue
-            ctx = {**raw_item, "item": raw_item}
+            ctx = {**raw_item, "item": _DictWrapper(raw_item)}
             title = _render_config_template(fields.get("title_template"), ctx)
             if not title:
                 title = _field_value(raw_item, fields.get("title"))
@@ -335,7 +346,7 @@ def _json_item_url(item: dict, fields: dict) -> str:
         return str(value)
     template = fields.get("url_template")
     if template:
-        return _render_config_template(str(template), {**item, "item": item})
+        return _render_config_template(str(template), {**item, "item": _DictWrapper(item)})
     return ""
 
 
@@ -415,7 +426,7 @@ def _render_config_template(template: object, context: dict) -> str:
 class _TemplateContext(dict):
     def __missing__(self, key: str) -> object:
         if key == "item":
-            return self.get("item", {})
+            return _DictWrapper(self.get("item", {}))
         if key == "cell":
             return self.get("cell", [])
         if key == "link":
@@ -423,6 +434,19 @@ class _TemplateContext(dict):
         if key == "source":
             return self.get("source")
         raise KeyError(key)
+
+
+class _DictWrapper:
+    """Wrap a dict so that ``{item.field}`` template syntax accesses dict keys."""
+
+    def __init__(self, data: dict) -> None:
+        self._data = data
+
+    def __getattr__(self, name: str) -> object:
+        value = self._data.get(name)
+        if isinstance(value, dict):
+            return _DictWrapper(value)
+        return value if value is not None else ""
 
 
 def _parse_datetime(value: object) -> datetime | None:
