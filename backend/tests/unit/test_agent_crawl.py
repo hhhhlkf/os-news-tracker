@@ -50,13 +50,14 @@ class TestToRawItem:
 
     def test_extra_contains_agent_metadata(self):
         """extra 字段应包含 agent 元数据和编码后的 key_points。"""
-        item = _make_agent_item()
+        item = _make_agent_item(sub_tags=["Linux Kernel", "调度器"])
         raw = _to_raw_item(item)
         assert raw.extra is not None
         assert raw.extra["agent_item"] is True
         assert raw.extra["main_category"] == "项目动态"
         assert raw.extra["importance"] == "高"
         assert "__type:release_note" in raw.extra["key_points"]
+        assert raw.extra["sub_tags"] == ["Linux Kernel", "调度器"]
 
     def test_topic_group_none_falls_back_to_default_main_category(self):
         """topic_group 为空时，main_category 应继承来源默认主分类。"""

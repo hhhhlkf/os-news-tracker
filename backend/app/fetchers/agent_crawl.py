@@ -23,6 +23,7 @@ from app.agent.summary_pool import SummaryWorkerPool
 from app.enums import ItemStatus
 from app.fetchers.rss import RssFetcher
 from app.models import AgentCrawlRun, AgentSourceConfig as AgentSourceConfigModel, Source
+from app.repository import Repository
 from app.run_logs import append_run_log, clear_run_logs
 from app.schemas import AgentCrawlRunRequest, RawItem
 
@@ -72,6 +73,8 @@ def _to_raw_item(item: AgentItem, default_main_category: str | None = None) -> R
             "importance": item.importance,
             "info_type": "其他",
             "key_points": key_points_prefix,
+            "sub_tags": item.sub_tags,
+            "merge_suggestions": item.merge_suggestions,
         },
     )
 
@@ -402,7 +405,10 @@ class AgentCrawlFetcher:
             run.stage_message = f"正在生成 {len(qualified)} 条摘要"
             self._db.commit()
             items = await self._summary_pool.summarize_all(
-                qualified, config, source_name=source_name,
+                qualified,
+                config,
+                source_name=source_name,
+                existing_tags=Repository(self._db).list_existing_sub_tags(),
             )
             return items
 

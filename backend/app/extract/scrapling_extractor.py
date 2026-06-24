@@ -106,7 +106,7 @@ class _TextExtractor(HTMLParser):
         text = data.strip()
         if not text:
             return
-        if self._in_title:
+        if self._in_title and self.title is None:
             self.title = text
         elif not self._in_skip:
             self.chunks.append(text)
@@ -160,6 +160,81 @@ def _jsonld_walk(obj, key: str = "datePublished") -> datetime | None:
             if result:
                 return result
     return None
+
+
+def _normalize_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _extract_head_title(html: str) -> str | None:
+    try:
+        from lxml import html as lxml_html
+
+        tree = lxml_html.fromstring(html)
+        title_el = tree.find(".//head/title")
+        if title_el is not None:
+            title = _normalize_text(title_el.text_content())
+            if title:
+                return title
+    except Exception:
+        pass
+    return None
+
+
+def _extract_article_content(html: str) -> str | None:
+    """Extract likely article body before falling back to whole-page text.
+
+    Many vendor sites include large navigation trees, SVG icon titles, and
+    shadow-DOM templates before the article. Feeding that prefix to the quality
+    model makes real articles look like empty navigation pages.
+    """
+    try:
+        from lxml import html as lxml_html
+    except Exception:
+        return None
+
+    try:
+        tree = lxml_html.fromstring(html)
+    except Exception:
+        return None
+
+    for bad in tree.xpath(
+        "//script|//style|//noscript|//template|//svg|//nav|//header|//footer|//form|//aside"
+    ):
+        bad.drop_tree()
+
+    # Custom elements such as Red Hat's rh-navigation-primary are not <nav>
+    # tags, but they still expose navigation text before the article.
+    for bad in tree.xpath(
+        '//*[contains(translate(local-name(), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "navigation")]'
+    ):
+        bad.drop_tree()
+
+    selectors = [
+        '[property="schema:text"]',
+        '[itemprop="articleBody"]',
+        ".field--name-body",
+        ".article-body",
+        ".blog-post__content",
+        ".entry-content",
+        ".post-content",
+        "article",
+        "main",
+    ]
+    best = ""
+    for selector in selectors:
+        try:
+            elements = tree.cssselect(selector)
+        except Exception:
+            continue
+        for element in elements:
+            text = _normalize_text(element.text_content())
+            if len(text) > len(best):
+                best = text
+        if len(best) >= 500:
+            return best
+
+    return best if len(best) >= 200 else None
 
 
 def _extract_published_at(page, url: str = "") -> datetime | None:
@@ -285,13 +360,14 @@ class ScraplingExtractor(ContentExtractor):
         html = getattr(page, "html_content", None) or getattr(page, "body", "") or ""
         parser = _TextExtractor()
         parser.feed(html)
-        clean = re.sub(r"\s+", " ", " ".join(parser.chunks)).strip()
+        title = _extract_head_title(html) or parser.title
+        clean = _extract_article_content(html) or _normalize_text(" ".join(parser.chunks))
         published_at = _extract_published_at(page, url=url)
         if published_at is None:
             logger.warning("no date extracted for %s — all strategies exhausted", url)
         return ExtractedDoc(
             url=url,
-            title=parser.title,
+            title=title,
             clean_content=clean,
             published_at=published_at,
         )

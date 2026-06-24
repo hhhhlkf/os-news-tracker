@@ -20,32 +20,42 @@ function domainFromUrl(url: string): string {
   }
 }
 
+function truncateLinkText(text: string): string {
+  return text.length > 10 ? `${text.slice(0, 9)}…` : text;
+}
+
 function SourceCta({ url }: { url: string }) {
+  const domain = domainFromUrl(url);
+
   return (
     <a
       href={url}
       target="_blank"
       rel="noopener noreferrer"
+      title={url}
+      aria-label={`阅读原文：${url}`}
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 8,
-        padding: "8px 12px",
+        gap: 6,
+        padding: "6px 9px",
         border: "1px solid #d0d5dd",
         borderRadius: 8,
         background: "#fff",
         color: "#344054",
-        fontSize: 13,
+        fontSize: 12,
         textDecoration: "none",
         lineHeight: 1,
+        maxWidth: 168,
         width: "fit-content",
+        whiteSpace: "nowrap",
       }}
     >
       <span>阅读原文</span>
       <svg
         xmlns="http://www.w3.org/2000/svg"
-        width={16}
-        height={16}
+        width={14}
+        height={14}
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
@@ -58,7 +68,9 @@ function SourceCta({ url }: { url: string }) {
         <polyline points="15 3 21 3 21 9" />
         <line x1="10" y1="14" x2="21" y2="3" />
       </svg>
-      <span style={{ color: "#98a2b3", fontSize: 12 }}>{domainFromUrl(url)}</span>
+      <span style={{ color: "#98a2b3", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis" }}>
+        {truncateLinkText(domain)}
+      </span>
     </a>
   );
 }

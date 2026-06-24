@@ -54,6 +54,12 @@ _PROMPT = """你是操作系统维护团队的技术内容分析师。你的任�
   - 「[内核] Linux 6.12 引入 sched_ext 可扩展调度器框架」
   - 「[性能] EEVDF 调度器延迟降低 15%」
   - 「[兼容性] 移除对 ia64 架构的支持」
+- **sub_tags**: 2–4 个可聚合的规范技术热点标签，不是从 key_facts 简单截取。优先复用已有标签。
+  - 使用稳定、短小的 canonical 名称：openEuler、OpenAnolis、Fedora、RHEL、Ubuntu、Linux Kernel、RPM、Koji、glibc、systemd、CVE、安全更新、性能优化、软件包更新。
+  - 合并同义写法和大小写变体，例如 OpenEuler/openEuler/欧拉 统一写作 openEuler；kernel/Linux kernel/内核 统一写作 Linux Kernel。
+  - 不要把完整版本号、CVE 编号、公告编号、日期、URL 片段、过长短语放入 sub_tags；这些细节保留在 key_facts 中。
+  - 如果已有标签里有合适标签，优先复用；如果当前标签比已有旧标签更通用，可以输出 merge_suggestions。
+- **merge_suggestions**: 标签合并建议数组，格式为 {{"child_tag_id": 旧标签id, "parent_tag_id": 可选父标签id, "parent_tag_name": "父标签名", "reason": "原因", "confidence": 0.0-1.0}}。
 
 ## 注意事项
 
@@ -72,12 +78,16 @@ _PROMPT = """你是操作系统维护团队的技术内容分析师。你的任�
   "content_type": "release_note",
   "importance": "高",
   "body": "Linux 6.12 内核正式发布，引入 sched_ext 可扩展调度器框架……",
-  "key_facts": ["[内核] sched_ext 合入主线", "[调度器] EEVDF 多项优化"]
+  "key_facts": ["[内核] sched_ext 合入主线", "[调度器] EEVDF 多项优化"],
+  "sub_tags": ["Linux Kernel", "调度器"],
+  "merge_suggestions": []
 }}
 ```
 
 用户关注领域：{focus_areas}
 用户主题分组：{topic_groups}
+已有技术热点标签 existing_tags：
+{existing_tags}
 页面 URL：{url}
 页面标题：{title}
 页面正文：
@@ -110,6 +120,12 @@ def _extract_json(text: str) -> dict:
     if brace:
         return json.loads(brace.group(0))
     raise ValueError(f"No JSON found in summary response: {text[:200]}")
+
+
+def _normalize_string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _parse_summary(text: str, source_url: str, source_id: int) -> AgentItem:
@@ -153,7 +169,13 @@ def _parse_summary(text: str, source_url: str, source_id: int) -> AgentItem:
         content_type=content_type,
         importance=importance,
         body=data.get("body", ""),
-        key_facts=data.get("key_facts", []),
+        key_facts=_normalize_string_list(data.get("key_facts", [])),
+        sub_tags=_normalize_string_list(data.get("sub_tags", [])),
+        merge_suggestions=(
+            data.get("merge_suggestions", [])
+            if isinstance(data.get("merge_suggestions", []), list)
+            else []
+        ),
     )
 
 
@@ -184,6 +206,7 @@ class SummaryWorkerPool:
         config: AgentSourceConfig,
         *,
         source_name: str | None = None,
+        existing_tags: list[dict] | None = None,
     ) -> list[AgentItem]:
         """并行摘要所有通过质量评估的页面。
 
@@ -211,6 +234,7 @@ class SummaryWorkerPool:
                     prompt = _PROMPT.format(
                         focus_areas=", ".join(config.focus_areas),
                         topic_groups=", ".join(config.topic_groups) if config.topic_groups else "无",
+                        existing_tags=json.dumps(existing_tags or [], ensure_ascii=False),
                         url=qp.page.url,
                         title=qp.page.title,
                         content=qp.page.content[:4000],

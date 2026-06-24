@@ -1,3 +1,5 @@
+import re
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -63,8 +65,34 @@ class Repository:
         return True
 
     def _select_sub_tags(self, fields: EnrichedFields) -> list[str]:
+        return self._select_sub_tag_names(fields.sub_tags)
+
+    def _select_sub_tag_names(self, names: list[str]) -> list[str]:
         max_sub_tags = MAX_TAGS_PER_ITEM - 1  # reserve one tag for main_category
-        return list(dict.fromkeys(fields.sub_tags))[:max_sub_tags]
+        return list(dict.fromkeys(name.strip() for name in names if name.strip()))[:max_sub_tags]
+
+    def _agent_sub_tags_from_key_points(self, key_points: list[str]) -> list[str]:
+        tags: list[str] = []
+        for point in key_points:
+            if point.startswith("__type:"):
+                continue
+            match = re.match(r"^\s*[［\[]([^］\]]{1,40})[］\]]", point)
+            if match:
+                tags.append(self._canonical_agent_sub_tag(match.group(1)))
+        return self._select_sub_tag_names(tags)
+
+    def _canonical_agent_sub_tag(self, name: str) -> str:
+        compact = re.sub(r"\s+", " ", name).strip()
+        lowered = compact.lower()
+        if lowered in {"kernel", "linux kernel", "内核"}:
+            return "Linux Kernel"
+        if lowered in {"openeuler", "open euler", "欧拉"}:
+            return "openEuler"
+        if lowered in {"openanolis", "anolis", "龙蜥"}:
+            return "OpenAnolis"
+        if lowered in {"cve", "漏洞", "安全漏洞"}:
+            return "CVE"
+        return compact
 
     def _record_tag_alias_suggestions(self, fields: EnrichedFields) -> None:
         for suggestion in fields.merge_suggestions:
@@ -162,6 +190,19 @@ class Repository:
         无需再调用 LLM 富化。
         """
         extra = item.extra or {}
+        key_points = extra.get("key_points", [])
+        if not isinstance(key_points, list):
+            key_points = []
+        configured_sub_tags = extra.get("sub_tags", [])
+        if not isinstance(configured_sub_tags, list):
+            configured_sub_tags = []
+        sub_tags = self._select_sub_tag_names(
+            [str(tag) for tag in configured_sub_tags]
+        )
+        if not sub_tags:
+            sub_tags = self._agent_sub_tags_from_key_points(
+                [str(point) for point in key_points]
+            )
 
         db_item = Item(
             source_id=item.source_id,
@@ -173,18 +214,34 @@ class Repository:
             published_at=item.published_at,
             main_category=extra.get("main_category", "agent_crawl"),
             summary=item.raw_content or "",
-            key_points=extra.get("key_points", []),
+            key_points=key_points,
             importance=extra.get("importance", "低"),
             info_type=extra.get("info_type", "其他"),
             status=ItemStatus.AGENT_ENRICHED,
             llm_confidence=None,
         )
+        for tag_name in sub_tags:
+            db_item.tags.append(self._get_or_create_tag(tag_name, TagKind.SUB_TAG))
         # 添加 main_category tag
         db_item.tags.append(
             self._get_or_create_tag(extra.get("main_category", "agent_crawl"), TagKind.MAIN_CATEGORY),
         )
         self._s.add(db_item)
         self._s.flush()
+        merge_suggestions = extra.get("merge_suggestions", [])
+        if isinstance(merge_suggestions, list):
+            fields = EnrichedFields(
+                title_zh=item.title,
+                summary=item.raw_content or "",
+                tech_highlights=key_points,
+                info_type=extra.get("info_type", "其他"),
+                importance=extra.get("importance", "低"),
+                main_category=extra.get("main_category", "agent_crawl"),
+                sub_tags=sub_tags,
+                merge_suggestions=merge_suggestions,
+                confidence=0.0,
+            )
+            self._record_tag_alias_suggestions(fields)
         self._add_source_link_if_new(db_item.id, item.source_id, item.url)
         self._s.commit()
         return db_item

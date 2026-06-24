@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 
 @dataclass
@@ -61,3 +62,5 @@ class AgentItem:
     importance: str         # 高 | 中 | 低
     body: str
     key_facts: list[str] = field(default_factory=list)
+    sub_tags: list[str] = field(default_factory=list)
+    merge_suggestions: list[dict[str, Any]] = field(default_factory=list)

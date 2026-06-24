@@ -39,6 +39,8 @@ def _make_llm(content_type="release_note"):
         "importance": "高",
         "body": "内核 6.12 引入 sched_ext 可扩展调度器框架，并带来多项 EEVDF 调度器改进。",
         "key_facts": ["sched_ext 合入主线", "EEVDF 调度器多项优化"],
+        "sub_tags": ["Linux Kernel", "调度器"],
+        "merge_suggestions": [],
     }, ensure_ascii=False)
     return llm
 
@@ -54,6 +56,7 @@ async def test_summarize_returns_agent_item():
     assert item.importance == "高"
     assert item.content_type == "release_note"
     assert len(item.key_facts) == 2
+    assert item.sub_tags == ["Linux Kernel", "调度器"]
     assert item.source_id == 1
     assert item.url == "https://a.com/1"
 
