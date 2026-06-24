@@ -12,6 +12,7 @@ import random
 from typing import Awaitable, Callable
 
 from app.agent.schemas import AgentSourceConfig, CrawlPlan, PlanUrl, RawPage
+from app.run_logs import append_run_log
 
 logger = logging.getLogger(__name__)
 
@@ -52,18 +53,31 @@ class CrawlDAG:
         self._fetch = fetch_fn or _default_fetch
 
     async def execute(
-        self, plan: CrawlPlan, config: AgentSourceConfig
+        self,
+        plan: CrawlPlan,
+        config: AgentSourceConfig,
+        *,
+        source_name: str | None = None,
     ) -> list[RawPage]:
         """执行并行抓取。
 
         Args:
             plan: PlanAgent 产出的抓取计划，包含待抓取 URL 列表。
             config: Agent 源配置，crawl_workers 控制并发上限。
+            source_name: 可选的源名称，用于运行日志展示。
 
         Returns:
             成功抓取的 RawPage 列表。失败的 URL 被静默跳过并记录日志。
         """
         sem = asyncio.Semaphore(config.crawl_workers)
+
+        append_run_log(
+            "fetch",
+            "开始并行抓取页面",
+            source=source_name,
+            plan_urls=len(plan.urls),
+            workers=config.crawl_workers,
+        )
 
         async def fetch_one(pu: PlanUrl) -> RawPage | None:
             async with sem:
@@ -71,13 +85,30 @@ class CrawlDAG:
                 await asyncio.sleep(random.uniform(0.1, 0.5))
                 try:
                     result = await self._fetch(pu.url)
-                    return RawPage(
+                    page = RawPage(
                         url=pu.url,
                         guessed_topic=pu.guessed_topic,
                         title=result.get("title", ""),
                         content=result.get("content", ""),
                     )
+                    append_run_log(
+                        "fetch",
+                        "页面抓取成功",
+                        source=source_name,
+                        url=pu.url,
+                        title=page.title or "(无标题)",
+                        chars=len(page.content),
+                    )
+                    return page
                 except Exception as e:
+                    append_run_log(
+                        "fetch",
+                        "页面抓取失败",
+                        source=source_name,
+                        level="error",
+                        url=pu.url,
+                        reason=str(e),
+                    )
                     logger.warning(
                         "crawl_dag: 抓取失败 %s: %s", pu.url, e
                     )
@@ -89,6 +120,14 @@ class CrawlDAG:
         )
         pages = [r for r in results if r is not None]
 
+        append_run_log(
+            "fetch",
+            "页面抓取完成",
+            source=source_name,
+            fetched=len(pages),
+            plan_urls=len(plan.urls),
+            failed=len(plan.urls) - len(pages),
+        )
         logger.info(
             "crawl_dag: 抓取完成 %d/%d 页", len(pages), len(plan.urls)
         )

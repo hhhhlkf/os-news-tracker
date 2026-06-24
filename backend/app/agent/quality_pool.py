@@ -21,6 +21,7 @@ from app.agent.schemas import (
     RawPage,
 )
 from app.agent.site_memory import SiteMemory
+from app.run_logs import append_run_log
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,7 @@ class QualityWorkerPool:
         config: AgentSourceConfig,
         *,
         db: Session,
+        source_name: str | None = None,
     ) -> list[QualifiedPage]:
         """并行评估所有页面质量。
 
@@ -189,6 +191,14 @@ class QualityWorkerPool:
         """
         sem = asyncio.Semaphore(config.quality_workers)
 
+        append_run_log(
+            "quality",
+            "开始质量评估",
+            source=source_name,
+            pages=len(pages),
+            threshold=config.quality_threshold,
+        )
+
         async def assess_one(page: RawPage) -> QualifiedPage | None:
             async with sem:
                 # ── 1. 查 SiteMemory 缓存 ──
@@ -197,13 +207,22 @@ class QualityWorkerPool:
                 )
                 if cached is not None:
                     if cached.verdict == "discard":
-                        logger.debug(
-                            "quality_pool: 缓存命中 discard → 跳过 %s", page.url,
+                        append_run_log(
+                            "quality",
+                            "丢弃（缓存命中 discard）",
+                            source=source_name,
+                            url=page.url,
+                            score=cached.quality_score or 0,
+                            reason=cached.quality_reason or "SiteMemory 历史判定为低质量",
                         )
                         return None
                     # keep 缓存命中 → 直接通过，不调 LLM
-                    logger.debug(
-                        "quality_pool: 缓存命中 keep → 直接通过 %s", page.url,
+                    append_run_log(
+                        "quality",
+                        "通过（缓存命中 keep）",
+                        source=source_name,
+                        url=page.url,
+                        score=cached.quality_score or 0,
                     )
                     return QualifiedPage(
                         page=page,
@@ -230,11 +249,29 @@ class QualityWorkerPool:
 
                 # ── 4. 根据 verdict 决定保留或丢弃 ──
                 if result.verdict == "discard":
+                    append_run_log(
+                        "quality",
+                        "丢弃（低于阈值）",
+                        source=source_name,
+                        url=page.url,
+                        score=result.score,
+                        threshold=config.quality_threshold,
+                        reason=result.reason or "质量分低于阈值",
+                    )
                     logger.info(
                         "quality_pool: 丢弃 %s (score=%d)", page.url, result.score,
                     )
                     return None
 
+                append_run_log(
+                    "quality",
+                    "通过质量评估",
+                    source=source_name,
+                    url=page.url,
+                    score=result.score,
+                    topic=result.relevant_topic or None,
+                    reason=result.reason or None,
+                )
                 return QualifiedPage(
                     page=page, verdict=result.verdict, score=result.score,
                 )
@@ -244,6 +281,14 @@ class QualityWorkerPool:
         )
         qualified = [r for r in results if r is not None]
 
+        append_run_log(
+            "quality",
+            "质量评估完成",
+            source=source_name,
+            passed=len(qualified),
+            pages=len(pages),
+            rejected=len(pages) - len(qualified),
+        )
         logger.info(
             "quality_pool: %d/%d 页通过质量评估", len(qualified), len(pages),
         )

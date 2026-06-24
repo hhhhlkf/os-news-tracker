@@ -185,6 +185,49 @@ class TestDeleteAgentSource:
         r = client.delete("/sources/agent/99999", headers=auth_headers)
         assert r.status_code == 404
 
+    def test_delete_keeps_crawled_items(self, client, auth_headers):
+        """删除 Agent 流程保留此前抓取的条目，并改挂到原始候选来源。"""
+        from app.models import Item, ItemSource
+
+        session = client.app.dependency_overrides[get_db]()
+        candidate = Source(
+            name="Origin", type="rss", url="https://keep.com/feed.xml",
+            stream="news", enabled=True,
+        )
+        session.add(candidate)
+        session.flush()
+        agent = Source(
+            name="Agent Keep", type="agent_crawl", url="https://keep.com/feed.xml",
+            stream="news", enabled=True,
+            api_config={"candidate_source_id": candidate.id},
+        )
+        session.add(agent)
+        session.flush()
+        item = Item(
+            source_id=agent.id,
+            title="Crawled Item",
+            url="https://keep.com/article",
+            url_hash="keep-hash",
+            content_hash="keep-content",
+            raw_content="body",
+        )
+        session.add(item)
+        session.flush()
+        session.add(ItemSource(item_id=item.id, source_id=agent.id, url=item.url))
+        session.commit()
+        agent_id, candidate_id, item_id = agent.id, candidate.id, item.id
+
+        r = client.delete(f"/sources/agent/{agent_id}", headers=auth_headers)
+        assert r.status_code == 204
+
+        session.expire_all()
+        assert session.get(Source, agent_id) is None
+        kept = session.get(Item, item_id)
+        assert kept is not None
+        assert kept.source_id == candidate_id
+        assert session.query(ItemSource).filter_by(source_id=agent_id).count() == 0
+        assert session.query(ItemSource).filter_by(item_id=item_id, source_id=candidate_id).count() == 1
+
 
 class TestListRuns:
     def test_empty_runs(self, client, auth_headers):

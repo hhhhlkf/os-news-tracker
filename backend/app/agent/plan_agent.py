@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.agent.schemas import AgentSourceConfig, CrawlPlan, PlanUrl
 from app.agent.site_memory import SiteMemory
 from app.models import Source
+from app.run_logs import append_run_log
 
 logger = logging.getLogger(__name__)
 
@@ -216,10 +217,20 @@ class PlanAgent:
         """
         root_url = source.url
         base_domain = urlparse(root_url).netloc
+        source_name = source.name
+
+        append_run_log("plan", "开始规划 URL", source=source_name, url=root_url)
 
         # ── 1. 提取链接 ──
         links = self._fetch_links(root_url)
         if not links:
+            append_run_log(
+                "plan",
+                "首页未提取到任何链接，返回空计划",
+                source=source_name,
+                level="warning",
+                url=root_url,
+            )
             logger.warning(
                 "plan_agent: %s 未找到任何链接，返回空计划", root_url,
             )
@@ -231,6 +242,14 @@ class PlanAgent:
             if self._memory.should_skip(db=db, source_id=config.source_id, url=link)
         }
         candidate_links = [l for l in links if l not in skip_urls]
+        append_run_log(
+            "plan",
+            "首页链接提取完成",
+            source=source_name,
+            total_links=len(links),
+            skipped_known=len(skip_urls),
+            candidates=len(candidate_links),
+        )
 
         # ── 3. LLM 语义筛选 ──
         prompt = _PROMPT.format(
@@ -254,20 +273,40 @@ class PlanAgent:
 
         # ── 5. 确定性验证 ──
         validated: list[PlanUrl] = []
+        dropped_invalid = 0
+        dropped_cross_domain = 0
+        dropped_memory = 0
         for entry in raw_urls:
             url = entry.get("url", "")
             if not isinstance(url, str) or not url:
+                dropped_invalid += 1
                 continue
             # 必须是 http/https 协议
             if not url.startswith(("http://", "https://")):
+                dropped_invalid += 1
                 continue
             # 必须与源站同域（防止 LLM 幻觉跨域 URL）
             if urlparse(url).netloc != base_domain:
-                logger.debug("plan_agent: 跳过跨域 URL %s", url)
+                dropped_cross_domain += 1
+                append_run_log(
+                    "plan",
+                    "过滤跨域 URL",
+                    source=source_name,
+                    level="warning",
+                    url=url,
+                    reason=f"非同域（期望 {base_domain}）",
+                )
                 continue
             # 不能在 SiteMemory 跳过列表中
             if self._memory.should_skip(db=db, source_id=config.source_id, url=url):
-                logger.debug("plan_agent: 跳过 SiteMemory discard URL %s", url)
+                dropped_memory += 1
+                append_run_log(
+                    "plan",
+                    "过滤已知低质量 URL",
+                    source=source_name,
+                    url=url,
+                    reason="SiteMemory 标记为 discard",
+                )
                 continue
             validated.append(PlanUrl(
                 url=url,
@@ -277,6 +316,16 @@ class PlanAgent:
             if len(validated) >= config.max_urls_per_run:
                 break
 
+        append_run_log(
+            "plan",
+            "URL 规划完成",
+            source=source_name,
+            plan_urls=len(validated),
+            llm_returned=len(raw_urls),
+            dropped_cross_domain=dropped_cross_domain,
+            dropped_memory=dropped_memory,
+            dropped_invalid=dropped_invalid,
+        )
         logger.info(
             "plan_agent: 为源 %d 规划了 %d 个 URL（候选 %d，skip %d）",
             config.source_id, len(validated), len(candidate_links), len(skip_urls),

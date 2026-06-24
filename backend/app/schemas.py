@@ -91,6 +91,7 @@ class AgentCrawlRunRequest(BaseModel):
     relative_range: RelativeRange | None = "7d"
     start_at: datetime | None = None
     end_at: datetime | None = None
+    target_count: int | None = Field(default=None, gt=0, le=500)
 
     @model_validator(mode="after")
     def validate_mode(self):

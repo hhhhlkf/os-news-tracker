@@ -23,6 +23,7 @@ from app.agent.summary_pool import SummaryWorkerPool
 from app.enums import ItemStatus
 from app.fetchers.rss import RssFetcher
 from app.models import AgentCrawlRun, AgentSourceConfig as AgentSourceConfigModel, Source
+from app.run_logs import append_run_log, clear_run_logs
 from app.schemas import AgentCrawlRunRequest, RawItem
 
 logger = logging.getLogger(__name__)
@@ -169,6 +170,15 @@ class AgentCrawlFetcher:
             if len(urls) >= config.max_urls_per_run:
                 break
 
+        append_run_log(
+            "plan",
+            "RSS 种子解析完成",
+            source=source.name,
+            entries=len(raw_items),
+            matched=len(filtered_items),
+            plan_urls=len(urls),
+            window=self._time_window_label(),
+        )
         logger.info(
             "agent_crawl: RSS seed %s produced %d plan URLs from %d entries (%s)",
             seed_url,
@@ -197,20 +207,47 @@ class AgentCrawlFetcher:
             RawItem 列表，每个条目的 extra 字段包含 agent 富化元数据。
             管线失败时返回空列表。
         """
+        clear_run_logs()
+        append_run_log(
+            "run",
+            "Agent 抓取开始",
+            source=source.name,
+            source_id=source.id,
+            url=source.url,
+            target_count=self._time_window.target_count,
+            time_mode=self._time_window.time_mode,
+            window=self._time_window_label(),
+        )
+
         # ── 1. 读取配置 ──
         config_model = self._db.get(AgentSourceConfigModel, source.id)
         if config_model is None:
+            append_run_log(
+                "run",
+                "源缺少 Agent 配置，已跳过",
+                source=source.name,
+                source_id=source.id,
+                level="warning",
+            )
             logger.warning(
                 "agent_crawl: 源 %d 无 AgentSourceConfig，跳过", source.id,
             )
             return []
+
+        # 抓取限制的「数量」限制的是最终查取（入库候选）条数，而不是规划的 URL 数。
+        # 规划广度仍由源配置 max_urls_per_run 决定，但若目标条数更大则相应放宽，
+        # 以保证质量过滤后仍有机会凑足目标条数。最终在摘要前按质量分截断到目标条数。
+        target_count = self._time_window.target_count
+        plan_max_urls = config_model.max_urls_per_run
+        if target_count is not None:
+            plan_max_urls = max(plan_max_urls, target_count)
 
         config = AgentSourceConfig(
             source_id=source.id,
             focus_areas=config_model.focus_areas or [],
             topic_groups=config_model.topic_groups or [],
             crawl_depth=config_model.crawl_depth,
-            max_urls_per_run=config_model.max_urls_per_run,
+            max_urls_per_run=plan_max_urls,
             quality_threshold=config_model.quality_threshold,
             crawl_workers=config_model.crawl_workers,
             quality_workers=config_model.quality_workers,
@@ -227,11 +264,14 @@ class AgentCrawlFetcher:
             fetched_count=0,
             quality_passed=0,
             items_created=0,
+            target_count=target_count,
         )
         self._db.add(run)
         self._db.flush()
 
         # ── 3–6. 执行异步管线 ──
+        source_name = source.name
+
         async def _pipeline() -> list[AgentItem]:
             # ③ PlanAgent: URL 规划
             plan = self._build_plan(source, config)
@@ -243,24 +283,40 @@ class AgentCrawlFetcher:
             # ④ CrawlDAG: 并行抓取
             run.current_stage = "crawling"
             run.stage_message = f"并行抓取 {run.plan_urls_count} 个 URL"
-            pages = await self._crawl_dag.execute(plan, config)
+            pages = await self._crawl_dag.execute(plan, config, source_name=source_name)
             run.fetched_count = len(pages)
             self._db.commit()
 
             # ⑤ QualityWorkerPool: 质量评估
             run.current_stage = "quality"
             qualified = await self._quality_pool.assess_all(
-                pages, config, db=self._db,
+                pages, config, db=self._db, source_name=source_name,
             )
             run.quality_passed = len(qualified)
             run.stage_message = f"质量通过 {run.quality_passed} / {run.fetched_count}"
             self._db.commit()
 
+            # ⑤.5 按目标条数截断（查取条数限制）：保留质量分最高的若干条。
+            if target_count is not None and len(qualified) > target_count:
+                qualified = sorted(
+                    qualified, key=lambda qp: qp.score, reverse=True
+                )[:target_count]
+                append_run_log(
+                    "quality",
+                    "按目标条数截断",
+                    source=source_name,
+                    target_count=target_count,
+                    kept=len(qualified),
+                    passed=run.quality_passed,
+                )
+
             # ⑥ SummaryWorkerPool: 摘要生成
             run.current_stage = "summarizing"
-            run.stage_message = f"正在生成 {run.quality_passed} 条摘要"
+            run.stage_message = f"正在生成 {len(qualified)} 条摘要"
             self._db.commit()
-            items = await self._summary_pool.summarize_all(qualified, config)
+            items = await self._summary_pool.summarize_all(
+                qualified, config, source_name=source_name,
+            )
             return items
 
         try:
@@ -272,6 +328,14 @@ class AgentCrawlFetcher:
             run.error_message = str(e)
             run.completed_at = datetime.now(timezone.utc)
             self._db.commit()
+            append_run_log(
+                "run",
+                "Agent 抓取失败",
+                source=source.name,
+                source_id=source.id,
+                level="error",
+                error=str(e),
+            )
             logger.exception(
                 "agent_crawl: 管线失败 source=%d: %s", source.id, e,
             )
@@ -290,6 +354,16 @@ class AgentCrawlFetcher:
         run.completed_at = datetime.now(timezone.utc)
         self._db.commit()
 
+        append_run_log(
+            "run",
+            "Agent 抓取完成",
+            source=source.name,
+            source_id=source.id,
+            plan_urls=run.plan_urls_count,
+            fetched=run.fetched_count,
+            quality_passed=run.quality_passed,
+            items=run.items_created,
+        )
         logger.info(
             "agent_crawl: source=%d 完成 plan=%d fetch=%d quality=%d items=%d",
             source.id, run.plan_urls_count, run.fetched_count,

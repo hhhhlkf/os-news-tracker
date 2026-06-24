@@ -12,6 +12,7 @@ import logging
 import re
 
 from app.agent.schemas import AgentItem, AgentSourceConfig, QualifiedPage
+from app.run_logs import append_run_log
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +179,11 @@ class SummaryWorkerPool:
         self._llm = llm or LlmClient()
 
     async def summarize_all(
-        self, pages: list[QualifiedPage], config: AgentSourceConfig
+        self,
+        pages: list[QualifiedPage],
+        config: AgentSourceConfig,
+        *,
+        source_name: str | None = None,
     ) -> list[AgentItem]:
         """并行摘要所有通过质量评估的页面。
 
@@ -193,6 +198,13 @@ class SummaryWorkerPool:
         """
         sem = asyncio.Semaphore(config.summary_workers)
 
+        append_run_log(
+            "summary",
+            "开始生成摘要",
+            source=source_name,
+            pages=len(pages),
+        )
+
         async def summarize_one(qp: QualifiedPage) -> AgentItem | None:
             async with sem:
                 try:
@@ -204,10 +216,28 @@ class SummaryWorkerPool:
                         content=qp.page.content[:4000],
                     )
                     raw = await asyncio.to_thread(self._llm.complete, prompt)
-                    return _parse_summary(
+                    item = _parse_summary(
                         raw, source_url=qp.page.url, source_id=config.source_id,
                     )
+                    append_run_log(
+                        "summary",
+                        "摘要生成成功",
+                        source=source_name,
+                        url=qp.page.url,
+                        title=item.title or "(无标题)",
+                        importance=item.importance,
+                        content_type=item.content_type,
+                    )
+                    return item
                 except Exception as e:
+                    append_run_log(
+                        "summary",
+                        "摘要生成失败",
+                        source=source_name,
+                        level="error",
+                        url=qp.page.url,
+                        reason=str(e),
+                    )
                     logger.warning(
                         "summary_pool: 摘要失败 %s: %s", qp.page.url, e,
                     )
@@ -217,6 +247,13 @@ class SummaryWorkerPool:
         results = await asyncio.gather(*[summarize_one(p) for p in pages])
         items = [r for r in results if r is not None]
 
+        append_run_log(
+            "summary",
+            "摘要生成完成",
+            source=source_name,
+            items=len(items),
+            pages=len(pages),
+        )
         logger.info(
             "summary_pool: 摘要完成 %d/%d 页", len(items), len(pages),
         )
