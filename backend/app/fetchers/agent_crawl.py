@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.agent.crawl_dag import CrawlDAG
 from app.agent.plan_agent import PlanAgent
 from app.agent.quality_pool import QualityWorkerPool
-from app.agent.schemas import AgentItem, AgentSourceConfig, CrawlPlan, PlanUrl
+from app.agent.schemas import AgentItem, AgentSourceConfig, CrawlPlan, PlanUrl, RawPage
 from app.agent.site_memory import SiteMemory
 from app.agent.summary_pool import SummaryWorkerPool
 from app.enums import ItemStatus
@@ -97,17 +97,6 @@ class AgentCrawlFetcher:
         rss_fetcher=None,
         time_window=None,
     ):
-        """初始化 AgentCrawlFetcher。
-
-        Args:
-            db: 数据库会话（与调用方共享，生命周期由调用方管理）。
-            plan_agent: 可选的 PlanAgent 实例（用于测试注入）。
-            crawl_dag: 可选的 CrawlDAG 实例。
-            quality_pool: 可选的 QualityWorkerPool 实例。
-            summary_pool: 可选的 SummaryWorkerPool 实例。
-            rss_fetcher: 可选的 RssFetcher 实例，用于 RSS-backed Agent seed。
-            time_window: 可选的 AgentCrawlRunRequest/dict，用于 RSS seed 时间筛选。
-        """
         self._db = db
         self._memory = SiteMemory()
         self._plan_agent = plan_agent or PlanAgent(memory=self._memory)
@@ -116,6 +105,7 @@ class AgentCrawlFetcher:
         self._summary_pool = summary_pool or SummaryWorkerPool()
         self._rss_fetcher = rss_fetcher or RssFetcher()
         self._time_window = AgentCrawlRunRequest.model_validate(time_window or {})
+        self._prefetched_pages: list[RawPage] | None = None
 
     def _time_window_label(self) -> str:
         if self._time_window.time_mode == "relative":
@@ -194,16 +184,23 @@ class AgentCrawlFetcher:
         filtered_items = [item for item in raw_items if self._matches_time_window(item)]
         seen: set[str] = set()
         urls: list[PlanUrl] = []
+        prefetched: list[RawPage] = []
         for item in filtered_items:
             if not item.url or item.url in seen:
                 continue
             seen.add(item.url)
-            urls.append(PlanUrl(
+            guessed = item.title or (config.topic_groups[0] if config.topic_groups else "")
+            urls.append(PlanUrl(url=item.url, guessed_topic=guessed))
+            prefetched.append(RawPage(
                 url=item.url,
-                guessed_topic=item.title or (config.topic_groups[0] if config.topic_groups else ""),
+                guessed_topic=guessed,
+                title=item.title or "",
+                content=item.raw_content or "",
             ))
             if len(urls) >= config.max_urls_per_run:
                 break
+
+        self._prefetched_pages = prefetched
 
         append_run_log(
             "plan",
@@ -354,16 +351,26 @@ class AgentCrawlFetcher:
 
         async def _pipeline() -> list[AgentItem]:
             # ③ PlanAgent: URL 规划
+            self._prefetched_pages = None
             plan = self._build_plan(source, config)
             run.plan_urls_count = len(plan.urls)
             run.current_stage = "planning"
             run.stage_message = f"已规划 {run.plan_urls_count} 个 URL"
             self._db.commit()
 
-            # ④ CrawlDAG: 并行抓取
+            # ④ CrawlDAG: 并行抓取（API 种子模式跳过，直接用预取内容）
             run.current_stage = "crawling"
-            run.stage_message = f"并行抓取 {run.plan_urls_count} 个 URL"
-            pages = await self._crawl_dag.execute(plan, config, source_name=source_name)
+            if self._prefetched_pages is not None:
+                pages = self._prefetched_pages
+                append_run_log(
+                    "fetch",
+                    "API 种子预取内容已就绪，跳过页面抓取",
+                    source=source_name,
+                    pages=len(pages),
+                )
+            else:
+                run.stage_message = f"并行抓取 {run.plan_urls_count} 个 URL"
+                pages = await self._crawl_dag.execute(plan, config, source_name=source_name)
             run.fetched_count = len(pages)
             self._db.commit()
 
