@@ -326,7 +326,7 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
       }
       const request: SourceCreateRequest = {
         url: c.url,
-        name: name.trim() || null,
+        name: name.trim() || inferSourceName(xhrResult.page_url, c.url),
         main_category: mainCategory,
         type: "api",
         api_config: { probe },
@@ -747,6 +747,46 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
 
 function infoBoxStyle(border: string, bg: string, color: string): CSSProperties {
   return { border: `1px solid ${border}`, background: bg, color, borderRadius: 8, padding: 12, fontSize: 13 };
+}
+
+const _DOMAIN_OVERRIDES: Record<string, string> = {
+  "openeuler.org": "openEuler",
+  "redhat.com": "Red Hat",
+  "ubuntu.com": "Ubuntu",
+  "fedoraproject.org": "Fedora",
+  "kernel.org": "Linux Kernel",
+  "centos.org": "CentOS",
+  "debian.org": "Debian",
+  "suse.com": "SUSE",
+  "opensuse.org": "openSUSE",
+  "openanolis.cn": "OpenAnolis",
+};
+
+const _PURPOSE_KEYWORDS: { pattern: RegExp; label: string }[] = [
+  { pattern: /blog|blogs|post|article/i, label: "博客" },
+  { pattern: /news|notice|bulletin|announcement/i, label: "新闻" },
+  { pattern: /security|cve|advisory|vuln/i, label: "安全公告" },
+  { pattern: /release|version|changelog|update/i, label: "版本发布" },
+  { pattern: /compat|hardware|ecosystem/i, label: "兼容性" },
+  { pattern: /life\s?cycle|eol|support/i, label: "生命周期" },
+];
+
+function inferSourceName(pageUrl: string, apiUrl: string): string {
+  let domain: string;
+  try {
+    const host = new URL(pageUrl).hostname.replace(/^www\./, "");
+    domain = _DOMAIN_OVERRIDES[host] ?? host.split(".")[0].charAt(0).toUpperCase() + host.split(".")[0].slice(1);
+  } catch {
+    domain = "未知";
+  }
+
+  const combined = `${pageUrl} ${apiUrl}`;
+  for (const { pattern, label } of _PURPOSE_KEYWORDS) {
+    if (pattern.test(combined)) {
+      return `${domain} ${label}`;
+    }
+  }
+  return domain;
 }
 
 const labelStyle = {
