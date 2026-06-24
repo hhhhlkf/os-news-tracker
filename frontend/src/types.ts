@@ -124,10 +124,64 @@ export interface SourceDetectResponse {
   notes: string[];
 }
 
+export interface ProbeFieldsConfig {
+  title?: string | null;
+  url?: string | null;
+  url_template?: string | null;
+  published_at?: string | null;
+  content?: string[] | string | null;
+}
+
+export interface ProbeConfig {
+  mode: string;
+  method: string;
+  url?: string | null;
+  headers?: Record<string, string> | null;
+  query?: Record<string, string> | null;
+  json_body?: Record<string, unknown> | null;
+  items_path?: string | null;
+  fields: ProbeFieldsConfig;
+}
+
 export interface SourceCreateRequest {
   url: string;
   name?: string | null;
   main_category: string;
+  type?: string | null;
+  adapter?: string | null;
+  api_config?: Record<string, unknown> | null;
+}
+
+export interface XhrCandidate {
+  method: string;
+  url: string;
+  status_code: number;
+  content_type: string;
+  request_headers: Record<string, string>;
+  query: Record<string, string>;
+  json_body: Record<string, unknown> | null;
+  response_sample: unknown;
+  inferred_items_path: string;
+  inferred_fields: Partial<ProbeFieldsConfig>;
+  score: number;
+  notes: string[];
+}
+
+export interface XhrDetectResponse {
+  page_url: string;
+  candidates: XhrCandidate[];
+  total: number;
+}
+
+export interface XhrSelectResponse {
+  selected_index: number | null;
+  reason: string;
+  api_config: ProbeConfig | null;
+  field_mapping: Record<string, unknown>;
+  pagination: { type: string; page_param: string | null; next_path: string | null };
+  rejected_candidates: { index: number; reason: string }[];
+  confidence: "high" | "medium" | "low";
+  raw_response?: string;
 }
 
 export type AgentRunStage =

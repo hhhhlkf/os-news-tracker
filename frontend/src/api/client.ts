@@ -15,6 +15,9 @@ import type {
   NewsRunLogsResponse,
   SourceCreateRequest,
   SourceDetectResponse,
+  XhrCandidate,
+  XhrDetectResponse,
+  XhrSelectResponse,
 } from "../types";
 import { authHeaders } from "../auth";
 
@@ -213,6 +216,27 @@ export async function deleteSource(sourceId: number): Promise<void> {
       ? (body as { detail: string }).detail
       : `failed to delete source (HTTP ${r.status})`;
   throw new ApiError(r.status, message, body);
+}
+
+export async function detectXhrSources(url: string): Promise<XhrDetectResponse> {
+  const r = await fetch(`${BASE}/sources/detect-xhr`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  return expectOk<XhrDetectResponse>(r, "failed to detect XHR sources");
+}
+
+export async function selectXhrCandidate(
+  pageUrl: string,
+  candidates: XhrCandidate[],
+): Promise<XhrSelectResponse> {
+  const r = await fetch(`${BASE}/sources/select-xhr`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ page_url: pageUrl, candidates }),
+  });
+  return expectOk<XhrSelectResponse>(r, "failed to select XHR candidate");
 }
 
 export async function fetchAgentSources(): Promise<AgentSource[]> {
