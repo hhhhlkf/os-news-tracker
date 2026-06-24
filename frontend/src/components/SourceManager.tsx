@@ -14,6 +14,7 @@ interface SourceManagerApi {
 interface SourceManagerProps {
   onSourcesChanged?: () => Promise<void> | void;
   api?: SourceManagerApi;
+  collapseSignal?: number;
 }
 
 const defaultApi: SourceManagerApi = {
@@ -33,7 +34,7 @@ const typeLabels: Record<string, string> = {
 
 const SOURCE_PAGE_SIZE = 5;
 
-export function SourceManager({ onSourcesChanged, api = defaultApi }: SourceManagerProps) {
+export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSignal = 0 }: SourceManagerProps) {
   const [sources, setSources] = useState<CrawlSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
@@ -66,6 +67,13 @@ export function SourceManager({ onSourcesChanged, api = defaultApi }: SourceMana
       setPage(totalPages);
     }
   }, [page, totalPages]);
+
+  useEffect(() => {
+    if (collapseSignal > 0) {
+      setExpanded(false);
+      setOpen(false);
+    }
+  }, [collapseSignal]);
 
   async function loadSources() {
     setLoading(true);

@@ -1,25 +1,33 @@
 import type { CSSProperties } from "react";
-import type { ReactNode } from "react";
 import { useState } from "react";
 import { AgentSourceRunCard } from "./AgentSourceRunCard";
-import { TimeRangePicker } from "./TimeRangePicker";
 import type {
   AgentRunRecord,
   AgentSource,
   AgentSourceCandidatesResponse,
-  ManualNewsRelativeRange,
-  ManualNewsTimeMode,
 } from "../types";
 
-const paginationButtonStyle: CSSProperties = {
-  border: "1px solid #d0d5dd",
-  borderRadius: 999,
-  padding: "8px 12px",
-  minWidth: 88,
-  background: "#ffffff",
-  color: "#344054",
+function pageButtonStyle(disabled: boolean): CSSProperties {
+  return {
+    border: "1px solid #d0d5dd",
+    borderRadius: 8,
+    padding: "6px 10px",
+    background: "#fff",
+    color: disabled ? "#98a2b3" : "#344054",
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: disabled ? "not-allowed" : "pointer",
+  };
+}
+
+const activePageButtonStyle: CSSProperties = {
+  border: "1px solid #175cd3",
+  borderRadius: 8,
+  padding: "6px 10px",
+  background: "#175cd3",
+  color: "#fff",
   fontSize: 12,
-  fontWeight: 600,
+  fontWeight: 700,
   cursor: "pointer",
 };
 
@@ -35,20 +43,11 @@ interface AgentRunControlProps {
   deletePendingSourceId?: number | null;
   candidateTriggerPendingSourceId?: number | null;
   candidateTriggerErrors?: Record<number, string | null | undefined>;
-  agentTimeMode?: ManualNewsTimeMode;
-  agentRelativeRange?: ManualNewsRelativeRange;
-  agentStartDate?: string;
-  agentEndDate?: string;
-  sourceManagerContent?: ReactNode;
   onTrigger: (sourceId: number) => Promise<void> | void;
   onCancel?: (sourceId: number, runId: number) => Promise<void> | void;
   onDelete?: (sourceId: number) => Promise<void> | void;
   onTriggerCandidate?: (sourceId: number) => Promise<void> | void;
   onCandidatePageChange?: (page: number) => void;
-  onAgentTimeModeChange?: (value: ManualNewsTimeMode) => void;
-  onAgentRelativeRangeChange?: (value: ManualNewsRelativeRange) => void;
-  onAgentStartDateChange?: (value: string) => void;
-  onAgentEndDateChange?: (value: string) => void;
 }
 
 export function AgentRunControl(props: AgentRunControlProps) {
@@ -64,24 +63,15 @@ export function AgentRunControl(props: AgentRunControlProps) {
     deletePendingSourceId = null,
     candidateTriggerPendingSourceId = null,
     candidateTriggerErrors = {},
-    agentTimeMode = "relative",
-    agentRelativeRange = "7d",
-    agentStartDate = "",
-    agentEndDate = "",
-    sourceManagerContent,
     onTrigger,
     onCancel,
     onDelete,
     onTriggerCandidate,
     onCandidatePageChange,
-    onAgentTimeModeChange = () => {},
-    onAgentRelativeRangeChange = () => {},
-    onAgentStartDateChange = () => {},
-    onAgentEndDateChange = () => {},
   } = props;
   const candidateSources = candidatePage?.items ?? [];
-  const [timeExpanded, setTimeExpanded] = useState(false);
   const [candidatesExpanded, setCandidatesExpanded] = useState(false);
+  const hasAgentEntries = sources.length > 0 || candidateSources.length > 0;
 
   if (isLoading) {
     return <div style={{ fontSize: 13, color: "#667085" }}>正在加载 Agent 源…</div>;
@@ -95,62 +85,22 @@ export function AgentRunControl(props: AgentRunControlProps) {
     );
   }
 
-  if (sources.length === 0 && candidateSources.length === 0) {
-    return (
-      <div
-        style={{
-          border: "1px dashed #d0d5dd",
-          borderRadius: 8,
-          padding: 16,
-          color: "#667085",
-          background: "#fcfcfd",
-          fontSize: 13,
-        }}
-      >
-        当前还没有可用的 Agent Crawl source。
-      </div>
-    );
-  }
-
   return (
     <div style={{ display: "grid", gap: 12 }}>
-      <section
-        style={{
-          border: "1px solid #d0d5dd",
-          borderRadius: 8,
-          background: "linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)",
-          padding: 14,
-          display: "grid",
-          gap: 10,
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
-          <div style={{ display: "grid", gap: 4 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "#101828" }}>Agent 时间范围</div>
-            <div style={{ fontSize: 13, color: "#667085" }}>
-              RSS Agent 只会深抓这个时间范围内的 feed 条目。
-            </div>
-          </div>
-          <button type="button" onClick={() => setTimeExpanded((value) => !value)} style={sectionToggleStyle}>
-            {timeExpanded ? "收起" : "展开"}
-          </button>
+      {!hasAgentEntries && (
+        <div
+          style={{
+            border: "1px dashed #d0d5dd",
+            borderRadius: 8,
+            padding: 16,
+            color: "#667085",
+            background: "#fcfcfd",
+            fontSize: 13,
+          }}
+        >
+          当前还没有可用的 Agent Crawl source。
         </div>
-        {timeExpanded && (
-          <TimeRangePicker
-            timeMode={agentTimeMode}
-            relativeRange={agentRelativeRange}
-            startDate={agentStartDate}
-            endDate={agentEndDate}
-            disabled={candidateTriggerPendingSourceId !== null || triggerPendingSourceId !== null}
-            onTimeModeChange={onAgentTimeModeChange}
-            onRelativeRangeChange={onAgentRelativeRangeChange}
-            onStartDateChange={onAgentStartDateChange}
-            onEndDateChange={onAgentEndDateChange}
-          />
-        )}
-      </section>
-
-      {sourceManagerContent}
+      )}
 
       {candidateSources.length > 0 && (
         <section
@@ -229,31 +179,38 @@ export function AgentRunControl(props: AgentRunControlProps) {
                 ))}
               </div>
               {candidatePage && candidatePage.total_pages > 1 && (
-                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                  <button
-                    type="button"
-                    disabled={candidatePage.page <= 1}
-                    onClick={() => onCandidatePageChange?.(candidatePage.page - 1)}
-                    style={{
-                      ...paginationButtonStyle,
-                      cursor: candidatePage.page <= 1 ? "not-allowed" : "pointer",
-                      color: candidatePage.page <= 1 ? "#98a2b3" : "#344054",
-                    }}
-                  >
-                    上一页
-                  </button>
-                  <button
-                    type="button"
-                    disabled={candidatePage.page >= candidatePage.total_pages}
-                    onClick={() => onCandidatePageChange?.(candidatePage.page + 1)}
-                    style={{
-                      ...paginationButtonStyle,
-                      cursor: candidatePage.page >= candidatePage.total_pages ? "not-allowed" : "pointer",
-                      color: candidatePage.page >= candidatePage.total_pages ? "#98a2b3" : "#344054",
-                    }}
-                  >
-                    下一页
-                  </button>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                  <div style={{ fontSize: 12, color: "#667085" }}>
+                    第 {candidatePage.page} / {candidatePage.total_pages} 页，每页 {candidatePage.page_size} 条，共 {candidatePage.total} 条
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      onClick={() => onCandidatePageChange?.(Math.max(1, candidatePage.page - 1))}
+                      disabled={candidatePage.page === 1}
+                      style={pageButtonStyle(candidatePage.page === 1)}
+                    >
+                      上一页
+                    </button>
+                    {Array.from({ length: candidatePage.total_pages }, (_, index) => index + 1).map((pageNumber) => (
+                      <button
+                        key={pageNumber}
+                        type="button"
+                        onClick={() => onCandidatePageChange?.(pageNumber)}
+                        style={pageNumber === candidatePage.page ? activePageButtonStyle : pageButtonStyle(false)}
+                      >
+                        {pageNumber}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => onCandidatePageChange?.(Math.min(candidatePage.total_pages, candidatePage.page + 1))}
+                      disabled={candidatePage.page === candidatePage.total_pages}
+                      style={pageButtonStyle(candidatePage.page === candidatePage.total_pages)}
+                    >
+                      下一页
+                    </button>
+                  </div>
                 </div>
               )}
             </>

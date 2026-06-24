@@ -108,24 +108,14 @@ describe("AgentRunControl", () => {
         sources: [],
         candidatePage,
         runsBySourceId: {},
-        agentTimeMode: "relative",
-        agentRelativeRange: "7d",
-        agentStartDate: "",
-        agentEndDate: "",
         onTrigger: () => {},
         onTriggerCandidate: () => {},
-        onAgentTimeModeChange: () => {},
-        onAgentRelativeRangeChange: () => {},
-        onAgentStartDateChange: () => {},
-        onAgentEndDateChange: () => {},
       }),
     );
 
-    expect(html).toContain("Agent 时间范围");
-    expect(html).toContain("7d");
     expect(html).toContain("标准抓取来源");
-    expect(html).toContain("Fedora Updates");
-    expect(html).toContain("一键 Agent 运行");
+    expect(html).not.toContain("Fedora Updates");
+    expect(html).not.toContain("一键 Agent 运行");
     expect(html).not.toContain("当前还没有可用的 Agent Crawl source。");
   });
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, cancelAgentRun, deleteAgentSource, fetchAgentRuns, fetchAgentSourceCandidates, fetchAgentSources, fetchFacets, fetchItems, fetchNewsRunLogs, fetchNewsRunStatus, startNewsRun, stopNewsRun, triggerAgentRun, triggerAgentRunFromCandidate } from "../api/client";
 import { AgentRunControl } from "../components/AgentRunControl";
@@ -79,12 +79,13 @@ export function HomePage() {
     retry: false,
     refetchInterval: () => runIsActive ? 2000 : false,
   });
+  const agentRunActive = agentPollingEnabled || agentWarmupSourceId !== null;
   const newsRunLogsQuery = useQuery({
     queryKey: ["news-run-logs"],
     queryFn: fetchNewsRunLogs,
     retry: false,
     refetchInterval: () => {
-      return runIsActive ? 2000 : false;
+      return runIsActive || agentRunActive ? 2000 : false;
     },
   });
 
@@ -230,11 +231,12 @@ export function HomePage() {
     try {
       const request = buildAgentCrawlRunRequest();
       if (!request) {
-        setAgentTriggerErrors((state) => ({ ...state, [sourceId]: "Agent 时间范围需要同时选择开始和结束日期" }));
+        setAgentTriggerErrors((state) => ({ ...state, [sourceId]: "抓取限制需要有效的时间范围和数量上限" }));
         return;
       }
       await triggerAgentRun(sourceId, request);
       setAgentPollingEnabled(true);
+      setAgentWarmupSourceId(sourceId);
       await queryClient.invalidateQueries({ queryKey: ["agent-runs", sourceId] });
       await queryClient.invalidateQueries({ queryKey: ["agent-sources"] });
     } catch (error) {
@@ -284,7 +286,7 @@ export function HomePage() {
     try {
       const request = buildAgentCrawlRunRequest();
       if (!request) {
-        setCandidateTriggerErrors((state) => ({ ...state, [sourceId]: "Agent 时间范围需要同时选择开始和结束日期" }));
+        setCandidateTriggerErrors((state) => ({ ...state, [sourceId]: "抓取限制需要有效的时间范围和数量上限" }));
         return;
       }
       const response = await triggerAgentRunFromCandidate(sourceId, request);
@@ -316,8 +318,16 @@ export function HomePage() {
     ]);
   }
 
+  const handleRunLimitsChange = useCallback((state: ReturnType<typeof buildNewsRunFormState>) => {
+    setAgentRunFormState(state);
+  }, []);
+
   function buildAgentCrawlRunRequest(): AgentCrawlRunRequest | null {
     if (agentRunFormState.timeMode === "absolute" && (!agentRunFormState.startDate || !agentRunFormState.endDate)) {
+      return null;
+    }
+    const targetCount = Number(agentRunFormState.targetCount);
+    if (!Number.isFinite(targetCount) || targetCount <= 0) {
       return null;
     }
     return {
@@ -325,6 +335,7 @@ export function HomePage() {
       relative_range: agentRunFormState.timeMode === "relative" ? agentRunFormState.relativeRange : null,
       start_at: agentRunFormState.timeMode === "absolute" ? toAbsoluteDateTime(agentRunFormState.startDate, false) : null,
       end_at: agentRunFormState.timeMode === "absolute" ? toAbsoluteDateTime(agentRunFormState.endDate, true) : null,
+      target_count: targetCount,
     };
   }
 
@@ -438,20 +449,11 @@ export function HomePage() {
                 deletePendingSourceId={agentDeletePendingSourceId}
                 candidateTriggerPendingSourceId={candidateTriggerPendingSourceId}
                 candidateTriggerErrors={candidateTriggerErrors}
-                agentTimeMode={agentRunFormState.timeMode}
-                agentRelativeRange={agentRunFormState.relativeRange}
-                agentStartDate={agentRunFormState.startDate}
-                agentEndDate={agentRunFormState.endDate}
-                sourceManagerContent={<SourceManager onSourcesChanged={handleSourcesChanged} />}
                 onTrigger={handleTriggerAgentRun}
                 onCancel={handleCancelAgentRun}
                 onDelete={handleDeleteAgentSource}
                 onTriggerCandidate={handleTriggerAgentRunFromCandidate}
                 onCandidatePageChange={setAgentCandidatePage}
-                onAgentTimeModeChange={(value) => setAgentRunFormState((state) => ({ ...state, timeMode: value }))}
-                onAgentRelativeRangeChange={(value) => setAgentRunFormState((state) => ({ ...state, relativeRange: value }))}
-                onAgentStartDateChange={(value) => setAgentRunFormState((state) => ({ ...state, startDate: value }))}
-                onAgentEndDateChange={(value) => setAgentRunFormState((state) => ({ ...state, endDate: value }))}
               />
             )
           }
@@ -466,6 +468,7 @@ export function HomePage() {
               )
           }
           isSubmitting={runActionPending}
+          onLimitsChange={handleRunLimitsChange}
           onStart={handleStartNewsRun}
           onStop={handleStopNewsRun}
         />

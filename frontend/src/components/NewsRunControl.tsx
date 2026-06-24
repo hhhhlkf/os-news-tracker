@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, Dispatch, ReactElement, ReactNode, SetStateAction } from "react";
+import { isValidElement, cloneElement } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { TimeRangePicker } from "./TimeRangePicker";
 import type {
@@ -26,6 +27,7 @@ interface NewsRunControlProps {
   isLoading: boolean;
   errorMessage?: string | null;
   isSubmitting?: boolean;
+  onLimitsChange?: (state: NewsRunFormState) => void;
   onStart: (request: ManualNewsRunRequest) => Promise<void> | void;
   onStop: () => Promise<void> | void;
 }
@@ -94,12 +96,15 @@ export function NewsRunControl(props: NewsRunControlProps) {
     isLoading,
     errorMessage,
     isSubmitting = false,
+    onLimitsChange,
     onStart,
     onStop,
   } = props;
   const [formState, setFormState] = useState<NewsRunFormState>(() => buildNewsRunFormState(status));
   const [localError, setLocalError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(() => shouldAutoExpandNewsRunControl(status?.state));
+  const [limitsExpanded, setLimitsExpanded] = useState(false);
+  const [collapseSignal, setCollapseSignal] = useState(0);
 
   useEffect(() => {
     if (!status || isNewsRunBusy(status.state)) return;
@@ -123,9 +128,23 @@ export function NewsRunControl(props: NewsRunControlProps) {
     }
   }, [status?.state]);
 
+  useEffect(() => {
+    if (!expanded) {
+      setLimitsExpanded(false);
+      setCollapseSignal((value) => value + 1);
+    }
+  }, [expanded]);
+
+  useEffect(() => {
+    onLimitsChange?.(formState);
+  }, [formState, onLimitsChange]);
+
   const busy = status ? isNewsRunBusy(status.state) : false;
   const disabled = busy || isSubmitting;
   const isAgentMode = mode === "agent";
+  const sourceManagerWithCollapse = isValidElement(sourceManagerContent)
+    ? cloneElement(sourceManagerContent as ReactElement<{ collapseSignal?: number }>, { collapseSignal })
+    : sourceManagerContent;
 
   const progressLabel = useMemo(() => {
     if (!status) return "等待状态";
@@ -227,6 +246,27 @@ export function NewsRunControl(props: NewsRunControlProps) {
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+          {!isAgentMode && (
+            <button
+              type="button"
+              onClick={() => void handlePrimaryAction()}
+              disabled={isSubmitting || status?.state === "stopping"}
+              style={{
+                border: "none",
+                borderRadius: 999,
+                padding: "12px 18px",
+                minWidth: 116,
+                background: status && isNewsRunBusy(status.state) ? "#f04438" : "#175cd3",
+                color: "#ffffff",
+                fontSize: 14,
+                fontWeight: 700,
+                cursor: isSubmitting || status?.state === "stopping" ? "not-allowed" : "pointer",
+                opacity: isSubmitting || status?.state === "stopping" ? 0.7 : 1,
+              }}
+            >
+              {runButtonLabel}
+            </button>
+          )}
           <div
             style={{
               display: "inline-flex",
@@ -278,31 +318,21 @@ export function NewsRunControl(props: NewsRunControlProps) {
           >
             {expanded ? "收起设置" : "展开设置"}
           </button>
-          {!isAgentMode && (
-            <>
-              <button
-                type="button"
-                onClick={() => void handlePrimaryAction()}
-                disabled={isSubmitting || status?.state === "stopping"}
-                style={{
-                  border: "none",
-                  borderRadius: 999,
-                  padding: "12px 18px",
-                  minWidth: 116,
-                  background: status && isNewsRunBusy(status.state) ? "#f04438" : "#175cd3",
-                  color: "#ffffff",
-                  fontSize: 14,
-                  fontWeight: 700,
-                  cursor: isSubmitting || status?.state === "stopping" ? "not-allowed" : "pointer",
-                  opacity: isSubmitting || status?.state === "stopping" ? 0.7 : 1,
-                }}
-              >
-                {runButtonLabel}
-              </button>
-            </>
-          )}
         </div>
       </div>
+
+      {expanded && (
+        <div style={{ display: "grid", gap: 12, marginBottom: 14 }}>
+          <RunLimitPanel
+            formState={formState}
+            disabled={disabled}
+            expanded={limitsExpanded}
+            onToggle={() => setLimitsExpanded((value) => !value)}
+            onChange={setFormState}
+          />
+          {sourceManagerWithCollapse}
+        </div>
+      )}
 
       {isAgentMode ? (
         <div style={{ display: "grid", gap: 12 }}>
@@ -422,9 +452,9 @@ export function NewsRunControl(props: NewsRunControlProps) {
                   (status.state === "completed" || status.state === "failed" || status.state === "stopped") && (
                     <div
                       style={{
-                        border: "1px solid #fecdca",
-                        background: "#fef3f2",
-                        color: "#b42318",
+                        border: "1px solid #fec84b",
+                        background: "#fffaeb",
+                        color: "#b54708",
                         borderRadius: 8,
                         padding: "10px 12px",
                         fontSize: 13,
@@ -434,40 +464,6 @@ export function NewsRunControl(props: NewsRunControlProps) {
                     </div>
                   )}
 
-                <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
-                  <TimeRangePicker
-                    timeMode={formState.timeMode}
-                    relativeRange={formState.relativeRange}
-                    startDate={formState.startDate}
-                    endDate={formState.endDate}
-                    disabled={disabled}
-                    onTimeModeChange={(value) => setFormState((state) => ({ ...state, timeMode: value }))}
-                    onRelativeRangeChange={(value) => setFormState((state) => ({ ...state, relativeRange: value }))}
-                    onStartDateChange={(value) => setFormState((state) => ({ ...state, startDate: value }))}
-                    onEndDateChange={(value) => setFormState((state) => ({ ...state, endDate: value }))}
-                  />
-
-                  <label style={{ display: "grid", gap: 6, minWidth: 140, color: "#475467", fontSize: 13 }}>
-                    <span>目标条目数</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={500}
-                      value={formState.targetCount}
-                      disabled={disabled}
-                      onChange={(event) => setFormState((state) => ({ ...state, targetCount: event.target.value }))}
-                      style={{
-                        border: "1px solid #d0d5dd",
-                        borderRadius: 8,
-                        padding: "10px 12px",
-                        fontSize: 14,
-                        color: "#101828",
-                        background: "#fff",
-                      }}
-                    />
-                  </label>
-                </div>
-                {sourceManagerContent}
               </div>
             )}
           </div>
@@ -491,6 +487,84 @@ export function NewsRunControl(props: NewsRunControlProps) {
     </section>
   );
 }
+
+function RunLimitPanel(props: {
+  formState: NewsRunFormState;
+  disabled: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+  onChange: Dispatch<SetStateAction<NewsRunFormState>>;
+}) {
+  const { formState, disabled, expanded, onToggle, onChange } = props;
+  return (
+    <section
+      style={{
+        border: "1px solid #d0d5dd",
+        borderRadius: 8,
+        background: "linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)",
+        padding: 14,
+        display: "grid",
+        gap: 12,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div style={{ display: "grid", gap: 4 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#101828" }}>抓取限制</div>
+          <div style={{ fontSize: 13, color: "#667085" }}>统一设置时间范围和数量上限，标准抓取与 Agent Crawl 共用。</div>
+        </div>
+        <button type="button" onClick={onToggle} style={sectionToggleStyle}>
+          {expanded ? "收起" : "展开"}
+        </button>
+      </div>
+      {expanded && (
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <TimeRangePicker
+            timeMode={formState.timeMode}
+            relativeRange={formState.relativeRange}
+            startDate={formState.startDate}
+            endDate={formState.endDate}
+            disabled={disabled}
+            onTimeModeChange={(value) => onChange((state) => ({ ...state, timeMode: value }))}
+            onRelativeRangeChange={(value) => onChange((state) => ({ ...state, relativeRange: value }))}
+            onStartDateChange={(value) => onChange((state) => ({ ...state, startDate: value }))}
+            onEndDateChange={(value) => onChange((state) => ({ ...state, endDate: value }))}
+          />
+          <label style={{ display: "grid", gap: 6, minWidth: 140, color: "#475467", fontSize: 13 }}>
+            <span>数量上限</span>
+            <input
+              type="number"
+              min={1}
+              max={500}
+              value={formState.targetCount}
+              disabled={disabled}
+              onChange={(event) => onChange((state) => ({ ...state, targetCount: event.target.value }))}
+              style={{
+                border: "1px solid #d0d5dd",
+                borderRadius: 8,
+                padding: "10px 12px",
+                fontSize: 14,
+                color: "#101828",
+                background: "#fff",
+              }}
+            />
+          </label>
+        </div>
+      )}
+    </section>
+  );
+}
+
+const sectionToggleStyle = {
+  border: "1px solid #d0d5dd",
+  borderRadius: 999,
+  padding: "8px 12px",
+  minWidth: 72,
+  background: "linear-gradient(135deg, #ffffff 0%, #f2f4f7 100%)",
+  color: "#344054",
+  fontSize: 12,
+  fontWeight: 700,
+  cursor: "pointer",
+} satisfies CSSProperties;
 
 function StatusBlock(props: { label: string; value: string }) {
   return (

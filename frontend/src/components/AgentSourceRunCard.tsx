@@ -46,6 +46,10 @@ export function AgentSourceRunCard(props: AgentSourceRunCardProps) {
   const running = isAgentSourceRunning(latestRun);
   const stageLabel = formatAgentStageLabel(latestRun?.current_stage);
   const buttonDisabled = isTriggering || running;
+  const shortfall =
+    latestRun?.status === "completed" &&
+    latestRun.target_count != null &&
+    latestRun.items_created < latestRun.target_count;
 
   return (
     <article
@@ -148,6 +152,21 @@ export function AgentSourceRunCard(props: AgentSourceRunCardProps) {
       <div style={{ fontSize: 13, color: "#475467" }}>
         {latestRun?.stage_message ?? formatAgentRunStats(latestRun)}
       </div>
+
+      {shortfall && latestRun && (
+        <div
+          style={{
+            border: "1px solid #fec84b",
+            background: "#fffaeb",
+            color: "#b54708",
+            borderRadius: 8,
+            padding: "10px 12px",
+            fontSize: 13,
+          }}
+        >
+          数量不达标：本次仅查取 {latestRun.items_created} 条，未达到目标 {latestRun.target_count} 条。可放宽时间范围、降低质量阈值或提高源的规划广度后重试。
+        </div>
+      )}
 
       {(latestRun?.error_message || errorMessage) && (
         <div
