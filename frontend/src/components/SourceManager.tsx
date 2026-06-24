@@ -299,6 +299,50 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
     }
   }
 
+  async function handleXhrCreateFromCandidate() {
+    if (xhrSelectedCandidate === null || !xhrResult) return;
+    const c = xhrResult.candidates[xhrSelectedCandidate];
+    if (!c || !validateUrl()) return;
+    setBusy(true);
+    try {
+      const probe: Record<string, unknown> = {
+        mode: "json_list",
+        method: c.method,
+        url: c.url,
+        items_path: c.inferred_items_path || null,
+        fields: {
+          title: c.inferred_fields.title || null,
+          url: c.inferred_fields.url || null,
+          url_template: null,
+          published_at: c.inferred_fields.published_at || null,
+          content: c.inferred_fields.content || null,
+        },
+      };
+      if (c.query && Object.keys(c.query).length > 0) {
+        probe.query = c.query;
+      }
+      if (c.json_body && Object.keys(c.json_body).length > 0) {
+        probe.json_body = c.json_body;
+      }
+      const request: SourceCreateRequest = {
+        url: c.url,
+        name: name.trim() || null,
+        main_category: mainCategory,
+        type: "api",
+        api_config: { probe },
+      };
+      await api.createSource(request);
+      resetForm();
+      await loadSources();
+      await onSourcesChanged?.();
+      setError(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "创建抓取来源失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleDelete(source: CrawlSource) {
     const confirmed = window.confirm(
       `确认删除「${source.name}」？如果这是 seed 来源，数据库非空时不会自动恢复，需要重新添加或重新初始化。`,
@@ -553,6 +597,11 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
                     {xhrResult && xhrResult.candidates.length > 0 && (
                       <button type="button" onClick={() => void handleXhrSelect()} disabled={busy} style={buttonStyle("#175cd3", "#fff")}>
                         {busy ? "Agent 分析中…" : "Agent 选择最佳 API"}
+                      </button>
+                    )}
+                    {xhrResult && xhrSelectedCandidate !== null && (
+                      <button type="button" onClick={() => void handleXhrCreateFromCandidate()} disabled={busy} style={buttonStyle("#037947", "#fff")}>
+                        {busy ? "创建中" : "用此候选创建"}
                       </button>
                     )}
                   </div>
