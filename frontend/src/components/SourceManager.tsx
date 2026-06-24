@@ -76,8 +76,15 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
 
   // Advanced
   const [advType, setAdvType] = useState<string>("rss");
-  const [advAdapter, setAdvAdapter] = useState("");
-  const [advApiConfig, setAdvApiConfig] = useState("");
+  const [advMethod, setAdvMethod] = useState<string>("GET");
+  const [advItemsPath, setAdvItemsPath] = useState("");
+  const [advFieldTitle, setAdvFieldTitle] = useState("");
+  const [advFieldUrl, setAdvFieldUrl] = useState("");
+  const [advFieldUrlTemplate, setAdvFieldUrlTemplate] = useState("");
+  const [advFieldDate, setAdvFieldDate] = useState("");
+  const [advFieldContent, setAdvFieldContent] = useState("");
+  const [advHeaders, setAdvHeaders] = useState("");
+  const [advJsonBody, setAdvJsonBody] = useState("");
 
   // XHR
   const [xhrResult, setXhrResult] = useState<XhrDetectResponse | null>(null);
@@ -183,21 +190,32 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
     setBusy(true);
     try {
       let apiConfig: Record<string, unknown> | null = null;
-      if (advApiConfig.trim()) {
-        try {
-          apiConfig = JSON.parse(advApiConfig);
-        } catch {
-          setError("API Config JSON 格式错误");
-          setBusy(false);
-          return;
+      if (advType === "api") {
+        const probe: Record<string, unknown> = {
+          mode: "json_list",
+          method: advMethod,
+          items_path: advItemsPath.trim() || null,
+          fields: {
+            title: advFieldTitle.trim() || null,
+            url: advFieldUrl.trim() || null,
+            url_template: advFieldUrlTemplate.trim() || null,
+            published_at: advFieldDate.trim() || null,
+            content: advFieldContent.trim() || null,
+          },
+        };
+        if (advHeaders.trim()) {
+          try { probe.headers = JSON.parse(advHeaders); } catch { /* ignore */ }
         }
+        if (advJsonBody.trim() && advMethod === "POST") {
+          try { probe.json_body = JSON.parse(advJsonBody); } catch { /* ignore */ }
+        }
+        apiConfig = { probe };
       }
       const request: SourceCreateRequest = {
         url: url.trim(),
         name: name.trim() || null,
         main_category: mainCategory,
         type: advType,
-        adapter: advAdapter.trim() || null,
         api_config: apiConfig,
       };
       await api.createSource(request);
@@ -303,8 +321,15 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
     setMainCategory(MAIN_CATEGORIES[0]);
     setDetectResult(null);
     setAdvType("rss");
-    setAdvAdapter("");
-    setAdvApiConfig("");
+    setAdvMethod("GET");
+    setAdvItemsPath("");
+    setAdvFieldTitle("");
+    setAdvFieldUrl("");
+    setAdvFieldUrlTemplate("");
+    setAdvFieldDate("");
+    setAdvFieldContent("");
+    setAdvHeaders("");
+    setAdvJsonBody("");
     setXhrResult(null);
     setXhrSelectResult(null);
     setXhrSelectedCandidate(null);
@@ -416,27 +441,97 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
               {/* Advanced mode */}
               {addMode === "advanced" && (
                 <>
-                  <div style={{ display: "grid", gridTemplateColumns: "minmax(120px, 1fr) minmax(120px, 1fr) minmax(200px, 2fr)", gap: 12 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(120px, 1fr)", gap: 12 }}>
                     <label style={labelStyle}>
                       <span>来源类型</span>
                       <select value={advType} onChange={(e) => setAdvType(e.target.value)} style={inputStyle}>
                         {SOURCE_TYPES.map((t) => <option key={t} value={t}>{typeLabels[t]}</option>)}
                       </select>
                     </label>
-                    <label style={labelStyle}>
-                      <span>适配器 (adapter)</span>
-                      <input value={advAdapter} onChange={(e) => setAdvAdapter(e.target.value)} placeholder="如 generic_json_list" style={inputStyle} />
-                    </label>
-                    <label style={labelStyle}>
-                      <span>API Config (JSON, 可选)</span>
-                      <textarea
-                        value={advApiConfig}
-                        onChange={(e) => setAdvApiConfig(e.target.value)}
-                        placeholder={'{\n  "probe": {\n    "mode": "json_list",\n    "method": "GET",\n    "items_path": "data.records",\n    "fields": {\n      "title": "title",\n      "url": "url",\n      "published_at": "publish_time"\n    }\n  }\n}'}
-                        style={{ ...inputStyle, minHeight: 120, fontFamily: "monospace", fontSize: 12 }}
-                      />
-                    </label>
                   </div>
+
+                  {advType === "api" && (
+                    <div style={{ display: "grid", gap: 10, border: "1px solid #eaecf0", borderRadius: 8, padding: 12, background: "#fff" }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#344054" }}>API 配置</div>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "minmax(100px, 1fr) minmax(200px, 2fr)", gap: 12 }}>
+                        <label style={labelStyle}>
+                          <span>请求方法</span>
+                          <select value={advMethod} onChange={(e) => setAdvMethod(e.target.value)} style={inputStyle}>
+                            <option value="GET">GET</option>
+                            <option value="POST">POST</option>
+                          </select>
+                        </label>
+                        <label style={labelStyle}>
+                          <span>列表路径 (items_path)</span>
+                          <input value={advItemsPath} onChange={(e) => setAdvItemsPath(e.target.value)} placeholder="如 obj.records，根数组留空" style={inputStyle} />
+                        </label>
+                      </div>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "minmax(120px, 1fr) minmax(120px, 1fr)", gap: 12 }}>
+                        <label style={labelStyle}>
+                          <span>标题字段名</span>
+                          <input value={advFieldTitle} onChange={(e) => setAdvFieldTitle(e.target.value)} placeholder="title" style={inputStyle} />
+                        </label>
+                        <label style={labelStyle}>
+                          <span>日期字段名</span>
+                          <input value={advFieldDate} onChange={(e) => setAdvFieldDate(e.target.value)} placeholder="date" style={inputStyle} />
+                        </label>
+                      </div>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "minmax(120px, 1fr) minmax(200px, 2fr)", gap: 12 }}>
+                        <label style={labelStyle}>
+                          <span>链接字段名</span>
+                          <input value={advFieldUrl} onChange={(e) => setAdvFieldUrl(e.target.value)} placeholder="url，无则留空" style={inputStyle} />
+                        </label>
+                        <label style={labelStyle}>
+                          <span>链接模板 (url_template)</span>
+                          <input value={advFieldUrlTemplate} onChange={(e) => setAdvFieldUrlTemplate(e.target.value)} placeholder="https://site.com/{item.path}" style={inputStyle} />
+                        </label>
+                      </div>
+
+                      <label style={labelStyle}>
+                        <span>内容字段名</span>
+                        <input value={advFieldContent} onChange={(e) => setAdvFieldContent(e.target.value)} placeholder="summary 或 summary,content" style={inputStyle} />
+                      </label>
+
+                      {advMethod === "POST" && (
+                        <label style={labelStyle}>
+                          <span>请求体 JSON (可选)</span>
+                          <textarea value={advJsonBody} onChange={(e) => setAdvJsonBody(e.target.value)} placeholder='{"page": 1, "pageSize": 20}' style={{ ...inputStyle, minHeight: 60, fontFamily: "monospace", fontSize: 12 }} />
+                        </label>
+                      )}
+
+                      <details>
+                        <summary style={{ cursor: "pointer", fontSize: 12, color: "#667085" }}>自定义请求头 (可选)</summary>
+                        <textarea value={advHeaders} onChange={(e) => setAdvHeaders(e.target.value)} placeholder='{"Authorization": "Bearer xxx"}' style={{ ...inputStyle, minHeight: 50, fontFamily: "monospace", fontSize: 12, marginTop: 6 }} />
+                      </details>
+
+                      {/* 配置预览 */}
+                      {advFieldTitle.trim() && (
+                        <details>
+                          <summary style={{ cursor: "pointer", fontSize: 12, color: "#667085" }}>生成配置预览</summary>
+                          <pre style={{ whiteSpace: "pre-wrap", margin: "6px 0 0", fontSize: 11, color: "#475467", background: "#f9fafb", padding: 8, borderRadius: 6 }}>
+{JSON.stringify({
+  probe: {
+    mode: "json_list",
+    method: advMethod,
+    items_path: advItemsPath.trim() || null,
+    fields: {
+      title: advFieldTitle.trim() || null,
+      url: advFieldUrl.trim() || null,
+      url_template: advFieldUrlTemplate.trim() || null,
+      published_at: advFieldDate.trim() || null,
+      content: advFieldContent.trim() || null,
+    }
+  }
+}, null, 2)}
+                          </pre>
+                        </details>
+                      )}
+                    </div>
+                  )}
+
                   <div style={{ display: "flex", gap: 10 }}>
                     <button type="button" onClick={() => void handleAdvancedCreate()} disabled={busy} style={buttonStyle("#175cd3", "#fff")}>
                       {busy ? "创建中" : "确认添加"}
