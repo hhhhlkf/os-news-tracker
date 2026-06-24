@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.source_cleanup import delete_source_and_related
+from app.api.source_cleanup import delete_agent_source_keep_items
 from app.api.deps import get_db
 from app.enums import SourceType, Stream
 from app.models import (
@@ -133,13 +133,12 @@ def _candidate_response(source: Source) -> dict:
 
 def _ensure_agent_source_for_candidate(db: Session, candidate: Source) -> tuple[Source, bool]:
     """为标准抓取来源复用或创建对应的 agent source。"""
-    api_config = None
+    api_config: dict = {"candidate_source_id": candidate.id}
     if candidate.type == SourceType.RSS:
-        api_config = {
+        api_config.update({
             "seed_type": "rss",
             "seed_url": candidate.url,
-            "candidate_source_id": candidate.id,
-        }
+        })
 
     existing = db.scalars(
         select(Source)
@@ -177,7 +176,10 @@ def _ensure_agent_source_for_candidate(db: Session, candidate: Source) -> tuple[
 
 def _time_window_payload(body: AgentCrawlRunRequest | None) -> dict:
     request = body or AgentCrawlRunRequest()
-    return request.model_dump(mode="json")
+    payload = request.model_dump(mode="json")
+    if payload.get("target_count") is None:
+        payload.pop("target_count", None)
+    return payload
 
 
 def _trigger_response_for_agent_source(
@@ -368,21 +370,19 @@ def delete_agent_source(
     source_id: int,
     db: Session = Depends(get_db),
 ):
-    """删除 agent_crawl 源及其所有关联数据。
+    """删除 agent_crawl 源（即删除这条抓取流程），但保留它此前抓取入库的新闻。
 
-    多张关联表（items、item_sources、agent_crawl_runs）的 source_id 外键
-    未设 ON DELETE CASCADE，需按依赖顺序手动清理，避免 ForeignKeyViolation。
+    删除按钮的语义是「移除该 Agent 流程」，不应清空已抓取的信息。由于
+    ``Item.source_id`` 是非空外键，存活的条目会被改挂到回退来源（创建时记录的
+    原始候选源 / 同 URL 的标准源）。仅当条目找不到任何可挂靠的存活来源时才会被删除，
+    否则会成为悬空外键。
 
-    清理顺序：
-    1. item_sources（引用 items 和 sources）
-    2. items（引用 sources）
-    3. agent_crawl_runs（引用 sources）
-    4. source 本身（agent_source_configs + agent_site_memory 有 CASCADE，自动清理）
+    agent_source_configs + agent_site_memory 设有 ON DELETE CASCADE，随 source 自动清理。
     """
     source = db.get(Source, source_id)
     if source is None or source.type != "agent_crawl":
         raise HTTPException(status_code=404, detail="Agent source not found")
-    delete_source_and_related(db, source)
+    delete_agent_source_keep_items(db, source)
 
 
 # ── 运行记录 ──────────────────────────────────────────────────────
@@ -410,6 +410,7 @@ def list_runs(
             "fetched_count": r.fetched_count,
             "quality_passed": r.quality_passed,
             "items_created": r.items_created,
+            "target_count": r.target_count,
             "started_at": r.started_at.isoformat() if r.started_at else None,
             "completed_at": r.completed_at.isoformat() if r.completed_at else None,
             "error_message": r.error_message,
