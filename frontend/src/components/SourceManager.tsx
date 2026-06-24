@@ -355,8 +355,8 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {([
                   { key: "auto", label: "自动识别" },
+                  { key: "xhr", label: "智能探测" },
                   { key: "advanced", label: "高级添加" },
-                  { key: "xhr", label: "XHR 探测" },
                 ] as { key: AddMode; label: string }[]).map((m) => (
                   <button
                     key={m.key}
