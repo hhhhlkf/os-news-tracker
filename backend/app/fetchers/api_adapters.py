@@ -33,6 +33,38 @@ def _default_text_requester(url: str) -> str:
         return response.read().decode("utf-8", errors="replace")
 
 
+def _http_request(
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    query: dict[str, str] | None = None,
+    json_body: dict | None = None,
+) -> str:
+    """支持 GET/POST、自定义 headers、query 和 JSON body 的 HTTP 请求。"""
+    final_url = url
+    if query:
+        final_url = _url_with_default_query(url, query)
+
+    req_headers = {"User-Agent": "os-news-tracker/0.1"}
+    if headers:
+        req_headers.update(headers)
+
+    data = None
+    if json_body is not None:
+        data = json.dumps(json_body).encode("utf-8")
+        req_headers["Content-Type"] = "application/json"
+
+    req = urllib.request.Request(
+        final_url,
+        method=method.upper(),
+        headers=req_headers,
+        data=data,
+    )
+    with urllib.request.urlopen(req, timeout=30) as response:
+        return response.read().decode("utf-8", errors="replace")
+
+
 class ApiAdapterFetcher(Fetcher):
     def __init__(
         self,
@@ -68,8 +100,22 @@ class ConfigurableApiProbeAdapter:
     def _fetch_json_list(
         self, source: Source, requester: TextRequester, probe: dict
     ) -> list[RawItem]:
-        url = _probe_url(source, probe)
-        payload = json.loads(requester(url))
+        method = str(probe.get("method") or "GET").upper()
+        probe_headers = probe.get("headers") or {}
+        probe_query = probe.get("query") or {}
+        json_body = probe.get("json_body")
+        if method == "POST" or isinstance(json_body, dict):
+            text = _http_request(
+                str(probe.get("url") or source.url),
+                method=method,
+                headers=probe_headers if isinstance(probe_headers, dict) else None,
+                query=probe_query if isinstance(probe_query, dict) else None,
+                json_body=json_body if isinstance(json_body, dict) else None,
+            )
+        else:
+            url = _probe_url(source, probe)
+            text = requester(url)
+        payload = json.loads(text)
         raw_items = _get_path(payload, probe.get("items_path"))
         if not isinstance(raw_items, list):
             return []
