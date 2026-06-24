@@ -139,12 +139,92 @@ class AgentCrawlFetcher:
         return start_ts <= item_ts <= end_ts
 
     def _build_plan(self, source: Source, config: AgentSourceConfig) -> CrawlPlan:
-        """Build the URL plan for either HTML-homepage or RSS-backed sources."""
+        """Build the URL plan for HTML-homepage, RSS-backed, or API-probe sources."""
         api_config = source.api_config or {}
         seed_url = str(api_config.get("seed_url") or source.url)
-        if api_config.get("seed_type") != "rss" and not _looks_like_feed_url(seed_url):
-            return self._plan_agent.plan(source, config, db=self._db)
 
+        # ── API probe seed: use ApiAdapterFetcher to get item URLs ──
+        probe = api_config.get("probe")
+        if not probe and api_config.get("candidate_source_id"):
+            candidate = self._db.get(Source, api_config["candidate_source_id"])
+            if candidate and candidate.api_config and isinstance(candidate.api_config.get("probe"), dict):
+                probe = candidate.api_config["probe"]
+                # Use candidate's URL if the agent source URL points to the API
+                if not source.url or source.url == candidate.url:
+                    source = Source(
+                        id=source.id, name=source.name, type="api",
+                        url=candidate.url, api_config=candidate.api_config,
+                        stream=source.stream, enabled=True,
+                    )
+        if isinstance(probe, dict) or (source.api_config and isinstance(source.api_config.get("probe"), dict)):
+            return self._build_plan_from_api(source, config)
+
+        # ── RSS seed ──
+        if api_config.get("seed_type") == "rss" or _looks_like_feed_url(seed_url):
+            return self._build_plan_from_rss(source, config, seed_url)
+
+        # ── HTML homepage (default) ──
+        return self._plan_agent.plan(source, config, db=self._db)
+
+    def _build_plan_from_api(self, source: Source, config: AgentSourceConfig) -> CrawlPlan:
+        """Use ApiAdapterFetcher with probe config to discover article URLs."""
+        from app.fetchers.api_adapters import ApiAdapterFetcher
+
+        append_run_log(
+            "plan",
+            "开始规划 URL（API 种子模式）",
+            source=source.name,
+            url=source.url,
+        )
+        try:
+            fetcher = ApiAdapterFetcher()
+            raw_items = fetcher.fetch(source)
+        except Exception as e:
+            logger.warning("agent_crawl: API seed fetch failed for %s: %s", source.url, e)
+            append_run_log(
+                "plan",
+                "API 种子抓取失败",
+                source=source.name,
+                level="error",
+                url=source.url,
+                reason=str(e),
+            )
+            return CrawlPlan(source_id=config.source_id, urls=[])
+
+        filtered_items = [item for item in raw_items if self._matches_time_window(item)]
+        seen: set[str] = set()
+        urls: list[PlanUrl] = []
+        for item in filtered_items:
+            if not item.url or item.url in seen:
+                continue
+            seen.add(item.url)
+            urls.append(PlanUrl(
+                url=item.url,
+                guessed_topic=item.title or (config.topic_groups[0] if config.topic_groups else ""),
+            ))
+            if len(urls) >= config.max_urls_per_run:
+                break
+
+        append_run_log(
+            "plan",
+            "API 种子解析完成",
+            source=source.name,
+            entries=len(raw_items),
+            matched=len(filtered_items),
+            plan_urls=len(urls),
+            window=self._time_window_label(),
+        )
+        logger.info(
+            "agent_crawl: API seed %s produced %d plan URLs from %d entries (%s)",
+            source.url,
+            len(urls),
+            len(raw_items),
+            self._time_window_label(),
+        )
+        return CrawlPlan(source_id=config.source_id, urls=urls)
+
+    def _build_plan_from_rss(self, source: Source, config: AgentSourceConfig, seed_url: str) -> CrawlPlan:
+        """Use RssFetcher to discover article URLs from a feed."""
         seed_source = Source(
             id=source.id,
             name=source.name,
