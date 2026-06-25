@@ -218,6 +218,8 @@ class AgentCrawlFetcher:
             "items_path": result.items_path or "",
             "fields": result.fields,
         }
+        if result.pagination:
+            probe["pagination"] = result.pagination
 
         api_config = source.api_config or {}
         candidate_id = api_config.get("candidate_source_id")

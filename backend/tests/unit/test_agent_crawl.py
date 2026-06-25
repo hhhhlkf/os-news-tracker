@@ -10,6 +10,7 @@ from app.agent.schemas import AgentItem, CrawlPlan, PlanUrl, QualifiedPage, RawP
 from app.fetchers.agent_crawl import AgentCrawlFetcher, _to_raw_item
 from app.models import AgentSourceConfig as AgentSourceConfigModel
 from app.schemas import RawItem
+from app.sources.api_discovery import ApiDiscoveryResult
 
 
 def _make_config_model(**kwargs):
@@ -407,3 +408,117 @@ class TestAgentCrawlFetcherFetch:
             fetcher.fetch(source)
 
         plan_agent.plan.assert_called_once()
+
+
+class TestTryRuntimeDiscoveryPagination:
+    """测试 _try_runtime_discovery 把 pagination 写入缓存 probe。"""
+
+    def _make_source_with_candidate(self, db, *, candidate_api_config):
+        """构造一个 agent source，其 api_config 指向 candidate_source_id=2。"""
+        from app.enums import Stream
+
+        candidate = MagicMock()
+        candidate.id = 2
+        candidate.api_config = candidate_api_config
+        candidate.url = "https://openanolis.cn/blog"
+
+        agent_source = MagicMock()
+        agent_source.id = 1
+        agent_source.name = "OpenAnolis Blog"
+        agent_source.url = "https://openanolis.cn/blog"
+        agent_source.api_config = {"candidate_source_id": 2}
+        agent_source.stream = Stream.NEWS
+
+        def fake_get(model, pk):
+            if model.__name__ == "AgentSourceConfig":
+                return _make_config_model()
+            if pk == 2:
+                return candidate
+            return None
+        db.get.side_effect = fake_get
+        db.commit = MagicMock()
+        return agent_source, candidate
+
+    def test_writes_pagination_into_cached_probe(self):
+        from app.agent.schemas import AgentSourceConfig
+        from unittest.mock import patch
+
+        db = MagicMock()
+        agent_source, candidate = self._make_source_with_candidate(
+            db, candidate_api_config={},
+        )
+        config = AgentSourceConfig(
+            source_id=1, focus_areas=["kernel"], topic_groups=["项目动态"],
+            crawl_depth=1, max_urls_per_run=5, quality_threshold=4,
+            crawl_workers=3, quality_workers=2, summary_workers=2,
+        )
+
+        discovery_result = ApiDiscoveryResult(
+            root_url="https://openanolis.cn/blog",
+            success=True,
+            api_url="https://openanolis.cn/api/blog/blogByCategoryPage.json?categoryNo=",
+            method="GET",
+            items_path="data.items",
+            fields={"title": "title", "url_template": "https://openanolis.cn/blog/{no}"},
+            pagination={
+                "page_param": "page", "size_param": "pageSize", "size": 10,
+                "start_page": 1, "max_pages": 5, "has_more_path": "data.hasMore",
+            },
+            name_suggestion="openanolis.cn",
+        )
+
+        fetcher = AgentCrawlFetcher(
+            db=db,
+            plan_agent=MagicMock(),
+            crawl_dag=MagicMock(),
+            quality_pool=MagicMock(),
+            summary_pool=MagicMock(),
+        )
+        # _build_plan_from_api 会调 ApiAdapterFetcher 真实抓取，桩掉它只断言 probe 写入
+        fetcher._build_plan_from_api = MagicMock(return_value=CrawlPlan(source_id=1, urls=[]))
+
+        with patch("app.sources.api_discovery.discover_api_source", return_value=discovery_result):
+            fetcher._try_runtime_discovery(agent_source, config)
+
+        cached_probe = candidate.api_config["probe"]
+        assert cached_probe["pagination"] == discovery_result.pagination
+        assert cached_probe["url"] == "https://openanolis.cn/api/blog/blogByCategoryPage.json?categoryNo="
+
+    def test_omits_pagination_key_when_result_has_none(self):
+        from app.agent.schemas import AgentSourceConfig
+        from unittest.mock import patch
+
+        db = MagicMock()
+        agent_source, candidate = self._make_source_with_candidate(
+            db, candidate_api_config={},
+        )
+        config = AgentSourceConfig(
+            source_id=1, focus_areas=["kernel"], topic_groups=["项目动态"],
+            crawl_depth=1, max_urls_per_run=5, quality_threshold=4,
+            crawl_workers=3, quality_workers=2, summary_workers=2,
+        )
+
+        discovery_result = ApiDiscoveryResult(
+            root_url="https://example.com/blog",
+            success=True,
+            api_url="https://api.example.com/list",
+            method="GET",
+            items_path="items",
+            fields={"title": "title", "url": "url"},
+            pagination=None,
+        )
+
+        fetcher = AgentCrawlFetcher(
+            db=db,
+            plan_agent=MagicMock(),
+            crawl_dag=MagicMock(),
+            quality_pool=MagicMock(),
+            summary_pool=MagicMock(),
+        )
+        fetcher._build_plan_from_api = MagicMock(return_value=CrawlPlan(source_id=1, urls=[]))
+
+        with patch("app.sources.api_discovery.discover_api_source", return_value=discovery_result):
+            fetcher._try_runtime_discovery(agent_source, config)
+
+        cached_probe = candidate.api_config["probe"]
+        assert "pagination" not in cached_probe
