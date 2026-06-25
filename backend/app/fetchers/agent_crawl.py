@@ -10,6 +10,7 @@ Agent crawl 条目绕过 LLM Enricher，直接以 status=agent_enriched 存入�
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+import urllib.parse
 from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
@@ -39,6 +40,32 @@ def _looks_like_feed_url(url: str) -> bool:
         or "/rss/" in path
         or "/feed/" in path
     )
+
+
+_PAGINATION_QUERY_PARAMS = (
+    "page", "pageNo", "pageNum", "currentPage", "current", "p", "pageIndex",
+    "pageSize", "size", "limit", "per_page", "perPage", "count", "rows",
+)
+
+
+def _is_stale_paginated_probe(probe: object) -> bool:
+    """识别上一轮旧代码产出的「脏 probe」：URL 含分页 query 参数但无 pagination 配置。
+
+    这类 probe 是 _build_probe 还不会生成 pagination 时缓存进 DB 的，会导致
+    运行侧分页引擎不触发、永远只爬第一页。命中即应触发重新探测覆盖。
+    """
+    if not isinstance(probe, dict):
+        return False
+    url = probe.get("url")
+    if not isinstance(url, str) or not url:
+        return False
+    if probe.get("pagination"):
+        return False
+    query = urlparse(url).query
+    if not query:
+        return False
+    present = {key for key, _ in urllib.parse.parse_qsl(query, keep_blank_values=True)}
+    return any(param in present for param in _PAGINATION_QUERY_PARAMS)
 
 
 _RELATIVE_RANGE_TO_DELTA = {

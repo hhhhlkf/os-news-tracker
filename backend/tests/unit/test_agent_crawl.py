@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.agent.schemas import AgentItem, CrawlPlan, PlanUrl, QualifiedPage, RawPage
-from app.fetchers.agent_crawl import AgentCrawlFetcher, _to_raw_item
+from app.fetchers.agent_crawl import AgentCrawlFetcher, _is_stale_paginated_probe, _to_raw_item
 from app.models import AgentSourceConfig as AgentSourceConfigModel
 from app.schemas import RawItem
 from app.sources.api_discovery import ApiDiscoveryResult
@@ -522,3 +522,52 @@ class TestTryRuntimeDiscoveryPagination:
 
         cached_probe = candidate.api_config["probe"]
         assert "pagination" not in cached_probe
+
+
+class TestIsStalePaginatedProbe:
+    """测试 _is_stale_paginated_probe 识别上一轮旧代码产出的脏 probe。"""
+
+    def test_url_with_page_param_and_no_pagination_is_stale(self):
+        probe = {
+            "mode": "json_list",
+            "url": "https://openanolis.cn/api/blog/blogByCategoryPage.json?categoryNo=&page=1&pageSize=10",
+            "items_path": "data.items",
+            "fields": {"title": "title"},
+        }
+        assert _is_stale_paginated_probe(probe) is True
+
+    def test_url_with_page_param_and_pagination_is_not_stale(self):
+        probe = {
+            "mode": "json_list",
+            "url": "https://openanolis.cn/api/blog/blogByCategoryPage.json?categoryNo=&page=1&pageSize=10",
+            "items_path": "data.items",
+            "fields": {"title": "title"},
+            "pagination": {"page_param": "page", "has_more_path": "data.hasMore"},
+        }
+        assert _is_stale_paginated_probe(probe) is False
+
+    def test_url_without_pagination_params_is_not_stale(self):
+        probe = {
+            "mode": "json_list",
+            "url": "https://api.example.com/list?category=all",
+            "items_path": "items",
+            "fields": {"title": "title"},
+        }
+        assert _is_stale_paginated_probe(probe) is False
+
+    def test_camel_case_page_param_detected_as_stale(self):
+        probe = {
+            "mode": "json_list",
+            "url": "https://example.com/api/list?currentPage=1",
+            "items_path": "data.records",
+            "fields": {"title": "title"},
+        }
+        assert _is_stale_paginated_probe(probe) is True
+
+    def test_non_dict_probe_is_not_stale(self):
+        assert _is_stale_paginated_probe(None) is False
+        assert _is_stale_paginated_probe("not a dict") is False
+
+    def test_probe_without_url_is_not_stale(self):
+        probe = {"mode": "json_list", "items_path": "items", "fields": {}}
+        assert _is_stale_paginated_probe(probe) is False
