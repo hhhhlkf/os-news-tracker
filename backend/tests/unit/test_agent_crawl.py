@@ -131,7 +131,9 @@ class TestAgentCrawlFetcherFetch:
         )
         source = MagicMock()
         source.id = 1
-        result = fetcher.fetch(source)
+        source.api_config = None  # no probe/RSS → runtime discovery → LLM fallback
+        with patch("app.sources.api_discovery.discover_api_source", side_effect=RuntimeError("no playwright in test")):
+            result = fetcher.fetch(source)
         assert len(result) == 1
         assert isinstance(result[0], RawItem)
         assert result[0].title == "Linux 6.12 发布"
@@ -313,9 +315,95 @@ class TestAgentCrawlFetcherFetch:
         )
         source = MagicMock()
         source.id = 1
-        result = fetcher.fetch(source)
+        source.api_config = None  # no probe/RSS → runtime discovery → LLM fallback
+        with patch("app.sources.api_discovery.discover_api_source", side_effect=RuntimeError("no playwright in test")):
+            result = fetcher.fetch(source)
         assert result == []
         # 验证 run 被标记为 failed
         calls = db.add.call_args_list
         assert len(calls) >= 1  # 至少创建了 AgentCrawlRun
         assert stage_snapshots[-1] == ("failed", "LLM 不可用", "failed", "LLM 不可用")
+
+    def test_runtime_discovery_writes_back_probe_and_uses_api_plan(self):
+        """When no probe/RSS seed exists, runtime discovery should find an API,
+        write back the probe to source.api_config, and use _build_plan_from_api."""
+        from app.sources.api_discovery import ApiDiscoveryResult
+
+        discovery_result = ApiDiscoveryResult(
+            root_url="https://example.com/blog",
+            success=True,
+            api_url="https://api.example.com/blog/list",
+            method="GET",
+            items_path="data.records",
+            fields={"title": "title", "url": "url", "published_at": "published_at"},
+            name_suggestion="Example Blog",
+            real_content_count=1,
+        )
+
+        raw_item = RawItem(
+            source_id=1,
+            title="Discovered Article",
+            url="https://example.com/blog/1",
+            published_at=datetime(2026, 6, 25, tzinfo=timezone.utc),
+        )
+
+        api_fetcher = MagicMock(fetch=MagicMock(return_value=[raw_item]))
+        db = MagicMock()
+        db.get.return_value = _make_config_model()
+
+        with patch("app.fetchers.api_adapters.ApiAdapterFetcher", return_value=api_fetcher), \
+             patch("app.sources.api_discovery.discover_api_source", return_value=discovery_result):
+            fetcher = AgentCrawlFetcher(
+                db=db,
+                plan_agent=MagicMock(),  # should NOT be called
+                crawl_dag=MagicMock(execute=AsyncMock(return_value=[])),
+                quality_pool=MagicMock(assess_all=AsyncMock(return_value=[])),
+                summary_pool=MagicMock(summarize_all=AsyncMock(return_value=[])),
+                time_window={
+                    "time_mode": "absolute",
+                    "start_at": datetime(2026, 6, 1, tzinfo=timezone.utc),
+                    "end_at": datetime(2026, 6, 30, tzinfo=timezone.utc),
+                },
+            )
+            source = MagicMock()
+            source.id = 1
+            source.url = "https://example.com/blog"
+            source.api_config = {}
+
+            result = fetcher.fetch(source)
+
+        assert result == []
+        fetcher._plan_agent.plan.assert_not_called()
+        api_fetcher.fetch.assert_called_once()
+
+    def test_runtime_discovery_failure_falls_back_to_llm(self):
+        """When runtime discovery finds nothing, fall back to PlanAgent."""
+        from app.sources.api_discovery import ApiDiscoveryResult
+
+        discovery_result = ApiDiscoveryResult(
+            root_url="https://example.com/blog",
+            success=False,
+            notes=["未捕获到任何 JSON XHR/Fetch 响应"],
+        )
+
+        mock_plan = CrawlPlan(source_id=1, urls=[])
+        plan_agent = MagicMock(plan=MagicMock(return_value=mock_plan))
+        db = MagicMock()
+        db.get.return_value = _make_config_model()
+
+        with patch("app.sources.api_discovery.discover_api_source", return_value=discovery_result):
+            fetcher = AgentCrawlFetcher(
+                db=db,
+                plan_agent=plan_agent,
+                crawl_dag=MagicMock(execute=AsyncMock(return_value=[])),
+                quality_pool=MagicMock(assess_all=AsyncMock(return_value=[])),
+                summary_pool=MagicMock(summarize_all=AsyncMock(return_value=[])),
+            )
+            source = MagicMock()
+            source.id = 1
+            source.url = "https://example.com/blog"
+            source.api_config = {}
+
+            fetcher.fetch(source)
+
+        plan_agent.plan.assert_called_once()

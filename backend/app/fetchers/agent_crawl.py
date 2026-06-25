@@ -132,14 +132,24 @@ class AgentCrawlFetcher:
         return start_ts <= item_ts <= end_ts
 
     def _build_plan(self, source: Source, config: AgentSourceConfig) -> CrawlPlan:
-        """Build the URL plan for HTML-homepage, RSS-backed, or API-probe sources."""
+        """Build the URL plan for API-probe, RSS-backed, or HTML-homepage sources.
+
+        Branch order:
+        1. probe (own or borrowed from candidate) → ``_build_plan_from_api``
+        2. RSS seed → ``_build_plan_from_rss``
+        3. Runtime API discovery (Playwright) → writeback probe → ``_build_plan_from_api``
+        4. LLM PlanAgent (fallback, unchanged)
+        """
         api_config = source.api_config or {}
         seed_url = str(api_config.get("seed_url") or source.url)
 
         # ── API probe seed: use ApiAdapterFetcher to get item URLs ──
-        probe = api_config.get("probe")
-        if not probe and api_config.get("candidate_source_id"):
-            candidate = self._db.get(Source, api_config["candidate_source_id"])
+        # Prefer candidate's probe (user-curated, may be updated after re-discovery).
+        # Fall back to agent source's own cached probe (from prior runtime discovery).
+        probe = None
+        candidate_id = api_config.get("candidate_source_id")
+        if isinstance(candidate_id, int):
+            candidate = self._db.get(Source, candidate_id)
             if candidate and candidate.api_config and isinstance(candidate.api_config.get("probe"), dict):
                 probe = candidate.api_config["probe"]
                 # Use candidate's URL if the agent source URL points to the API
@@ -149,6 +159,8 @@ class AgentCrawlFetcher:
                         url=candidate.url, api_config=candidate.api_config,
                         stream=source.stream, enabled=True,
                     )
+        if not probe:
+            probe = api_config.get("probe")
         if isinstance(probe, dict) or (source.api_config and isinstance(source.api_config.get("probe"), dict)):
             return self._build_plan_from_api(source, config)
 
@@ -156,8 +168,86 @@ class AgentCrawlFetcher:
         if api_config.get("seed_type") == "rss" or _looks_like_feed_url(seed_url):
             return self._build_plan_from_rss(source, config, seed_url)
 
-        # ── HTML homepage (default) ──
+        # ── Runtime API discovery (before LLM fallback) ──
+        discovered = self._try_runtime_discovery(source, config)
+        if discovered is not None:
+            return discovered
+
+        # ── LLM PlanAgent (fallback) ──
         return self._plan_agent.plan(source, config, db=self._db)
+
+    def _try_runtime_discovery(self, source: Source, config: AgentSourceConfig) -> CrawlPlan | None:
+        """Attempt runtime API discovery via Playwright.
+
+        On success: writes the probe back to the **candidate source** (if
+        ``candidate_source_id`` is set) so that subsequent runs borrow the cached
+        probe from the candidate instead of re-discovering. If there is no
+        candidate (standalone agent source), writes to ``source.api_config``
+        directly. Then delegates to ``_build_plan_from_api``.
+        On failure: logs and returns ``None`` so the caller falls back to LLM.
+        """
+        from app.sources.api_discovery import discover_api_source
+
+        append_run_log(
+            "plan",
+            "运行时探测 API…",
+            source=source.name,
+            url=source.url,
+        )
+        try:
+            result = discover_api_source(source.url, sample_items=config.max_urls_per_run)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("agent_crawl: runtime discovery failed for %s: %s", source.url, exc)
+            append_run_log(
+                "plan", "运行时探测失败，回退 LLM",
+                source=source.name, level="warning", url=source.url, reason=str(exc),
+            )
+            return None
+
+        if not result.success or not result.api_url:
+            append_run_log(
+                "plan", "运行时探测未发现 API，回退 LLM",
+                source=source.name, level="warning", url=source.url,
+            )
+            return None
+
+        probe = {
+            "mode": "json_list",
+            "method": result.method,
+            "url": result.api_url,
+            "items_path": result.items_path or "",
+            "fields": result.fields,
+        }
+
+        api_config = source.api_config or {}
+        candidate_id = api_config.get("candidate_source_id")
+        if candidate_id:
+            # Write to candidate only — it's the single source of truth.
+            # The agent source will borrow it on next run via _build_plan.
+            candidate = self._db.get(Source, candidate_id)
+            if candidate:
+                cand_config = dict(candidate.api_config or {})
+                cand_config["probe"] = probe
+                candidate.api_config = cand_config
+                self._db.commit()
+                # Also update the in-memory source so _build_plan_from_api sees it
+                source = Source(
+                    id=source.id, name=source.name, type="api",
+                    url=candidate.url, api_config=cand_config,
+                    stream=source.stream, enabled=True,
+                )
+        else:
+            # Standalone agent source (no candidate): cache on itself
+            updated_config = dict(api_config)
+            updated_config["probe"] = probe
+            source.api_config = updated_config
+            self._db.commit()
+
+        append_run_log(
+            "plan", "运行时探测命中，已缓存 probe",
+            source=source.name, api_url=result.api_url,
+        )
+        return self._build_plan_from_api(source, config)
 
     def _build_plan_from_api(self, source: Source, config: AgentSourceConfig) -> CrawlPlan:
         """Use ApiAdapterFetcher with probe config to discover article URLs."""

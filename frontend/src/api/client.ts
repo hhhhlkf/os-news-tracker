@@ -15,9 +15,9 @@ import type {
   NewsRunLogsResponse,
   SourceCreateRequest,
   SourceDetectResponse,
-  XhrCandidate,
-  XhrDetectResponse,
-  XhrSelectResponse,
+  DiscoverRequest,
+  DiscoverResponse,
+  CreateFromProbeRequest,
 } from "../types";
 import { authHeaders } from "../auth";
 
@@ -218,25 +218,22 @@ export async function deleteSource(sourceId: number): Promise<void> {
   throw new ApiError(r.status, message, body);
 }
 
-export async function detectXhrSources(url: string): Promise<XhrDetectResponse> {
-  const r = await fetch(`${BASE}/sources/detect-xhr`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
-  });
-  return expectOk<XhrDetectResponse>(r, "failed to detect XHR sources");
-}
-
-export async function selectXhrCandidate(
-  pageUrl: string,
-  candidates: XhrCandidate[],
-): Promise<XhrSelectResponse> {
-  const r = await fetch(`${BASE}/sources/select-xhr`, {
+export async function discoverSource(req: DiscoverRequest): Promise<DiscoverResponse> {
+  const r = await fetch(`${BASE}/sources/discover`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ page_url: pageUrl, candidates }),
+    body: JSON.stringify(req),
   });
-  return expectOk<XhrSelectResponse>(r, "failed to select XHR candidate");
+  return expectOk<DiscoverResponse>(r, "failed to run smart discovery");
+}
+
+export async function createSourceFromProbe(req: CreateFromProbeRequest): Promise<CrawlSource> {
+  const r = await fetch(`${BASE}/sources/create-from-probe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(req),
+  });
+  return expectOk<CrawlSource>(r, "failed to create source from probe");
 }
 
 export async function fetchAgentSources(): Promise<AgentSource[]> {

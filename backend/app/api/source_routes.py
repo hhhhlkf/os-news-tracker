@@ -54,13 +54,22 @@ class SourceCreateRequest(BaseModel):
     api_config: dict[str, Any] | None = None
 
 
-class XhrDetectRequest(BaseModel):
+class DiscoverRequest(BaseModel):
+    """智能探测请求：探测页面背后的 JSON API 并生成 probe 配置。"""
     url: HttpUrl
+    create_source: bool = False
+    name: str | None = None
+    main_category: str | None = None
 
 
-class XhrSelectRequest(BaseModel):
-    page_url: str
-    candidates: list[dict[str, Any]]
+class CreateFromProbeRequest(BaseModel):
+    """用已探测出的 probe 配置创建标准 API 来源（无需重新探测）。"""
+    api_url: str
+    method: str = "GET"
+    items_path: str | None = None
+    fields: dict[str, Any] = Field(default_factory=dict)
+    name: str | None = None
+    main_category: str
 
 
 def _detect_or_422(url: str):
@@ -144,33 +153,97 @@ def delete_source(source_id: int, db: Session = Depends(get_db)):
     delete_source_and_related(db, source)
 
 
-@router.post("/detect-xhr")
-def detect_xhr_route(body: XhrDetectRequest):
-    """用浏览器引擎加载网页，拦截 XHR/Fetch JSON 响应，返回打分后的候选列表。"""
-    from app.sources.xhr_detector import detect_xhr_apis
+@router.post("/discover")
+def discover_source_route(body: DiscoverRequest, db: Session = Depends(get_db)):
+    """智能探测：用 Playwright 渲染页面，捕获 JSON XHR/Fetch 响应，
+    识别文章列表 API，生成与 ApiAdapterFetcher 兼容的 probe 配置并自检。
+
+    若 ``create_source`` 为真，则把 probe 落地为标准 ``api`` 来源。
+    """
+    from app.sources.api_discovery import discover_api_source
 
     try:
-        candidates = detect_xhr_apis(str(body.url))
-    except Exception as exc:
-        logger.warning("XHR detection failed for %s: %s", body.url, exc)
-        raise HTTPException(
-            status_code=502,
-            detail=f"浏览器引擎加载失败: {exc}",
-        ) from exc
-    return {"page_url": str(body.url), "candidates": candidates, "total": len(candidates)}
+        result = discover_api_source(str(body.url))
+    except Exception as exc:  # noqa: BLE001 - surface discovery failure to caller
+        logger.warning("api discovery failed for %s: %s", body.url, exc)
+        raise HTTPException(status_code=502, detail=f"智能探测失败: {exc}") from exc
+
+    payload = result.to_dict()
+
+    if body.create_source:
+        if not result.success or not result.api_url:
+            raise HTTPException(status_code=422, detail="未能发现可用 API，无法创建来源")
+        main_category = body.main_category or (MAIN_CATEGORIES[0] if MAIN_CATEGORIES else None)
+        if main_category not in MAIN_CATEGORIES:
+            raise HTTPException(status_code=422, detail="未知内容类型")
+        source = _create_api_source_from_probe(
+            db,
+            api_url=result.api_url,
+            method=result.method,
+            items_path=result.items_path or "",
+            fields=result.fields,
+            name=(body.name or result.name_suggestion or "").strip(),
+            main_category=main_category,
+        )
+        payload["created_source"] = {
+            "id": source.id,
+            "name": source.name,
+            "url": source.url,
+            "type": source.type,
+            "main_category": source.main_category,
+        }
+
+    return payload
 
 
-@router.post("/select-xhr")
-def select_xhr_route(body: XhrSelectRequest):
-    """让 Agent 从 XHR 候选列表中选择最适合抓取的 API。"""
-    from app.sources.xhr_agent import select_best_xhr_candidate
+@router.post("/create-from-probe", status_code=201)
+def create_source_from_probe_route(body: CreateFromProbeRequest, db: Session = Depends(get_db)):
+    """用智能探测得到的 probe 配置直接创建标准 API 来源（不重新跑探测）。"""
+    if body.main_category not in MAIN_CATEGORIES:
+        raise HTTPException(status_code=422, detail="未知内容类型")
+    if not body.api_url:
+        raise HTTPException(status_code=422, detail="缺少 api_url")
 
-    try:
-        result = select_best_xhr_candidate(body.page_url, body.candidates)
-    except Exception as exc:
-        logger.warning("XHR agent selection failed: %s", exc)
-        raise HTTPException(
-            status_code=502,
-            detail=f"Agent 选择失败: {exc}",
-        ) from exc
-    return result
+    source = _create_api_source_from_probe(
+        db,
+        api_url=body.api_url,
+        method=body.method,
+        items_path=body.items_path or "",
+        fields=body.fields or {},
+        name=(body.name or "").strip(),
+        main_category=body.main_category,
+    )
+    return _source_response(source)
+
+
+def _create_api_source_from_probe(
+    db: Session,
+    *,
+    api_url: str,
+    method: str,
+    items_path: str,
+    fields: dict,
+    name: str,
+    main_category: str,
+) -> Source:
+    """把 probe 配置落地为标准 ``api`` 来源（type=api + api_config.probe）。"""
+    probe: dict[str, Any] = {
+        "mode": "json_list",
+        "method": method.upper() if method else "GET",
+        "url": api_url,
+        "items_path": items_path,
+        "fields": fields,
+    }
+    source = Source(
+        name=name or api_url,
+        type=SourceType.API.value,
+        url=api_url,
+        api_config={"probe": probe},
+        main_category=main_category,
+        stream=Stream.NEWS,
+        enabled=True,
+    )
+    db.add(source)
+    db.commit()
+    db.refresh(source)
+    return source

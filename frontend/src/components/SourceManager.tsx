@@ -1,23 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties } from "react";
 import {
   ApiError,
   createSource,
+  createSourceFromProbe,
   deleteSource,
   detectSource,
-  detectXhrSources,
+  discoverSource,
   fetchSources,
-  selectXhrCandidate,
 } from "../api/client";
 import type {
   CrawlSource,
-  ProbeConfig,
+  DiscoverResponse,
   SourceCreateRequest,
   SourceDetectResponse,
   SourceShape,
-  XhrCandidate,
-  XhrDetectResponse,
-  XhrSelectResponse,
 } from "../types";
 import { MAIN_CATEGORIES } from "../types";
 
@@ -26,8 +23,8 @@ interface SourceManagerApi {
   detectSource: typeof detectSource;
   createSource: typeof createSource;
   deleteSource: typeof deleteSource;
-  detectXhrSources: typeof detectXhrSources;
-  selectXhrCandidate: typeof selectXhrCandidate;
+  discoverSource: typeof discoverSource;
+  createSourceFromProbe: typeof createSourceFromProbe;
 }
 
 interface SourceManagerProps {
@@ -41,8 +38,8 @@ const defaultApi: SourceManagerApi = {
   detectSource,
   createSource,
   deleteSource,
-  detectXhrSources,
-  selectXhrCandidate,
+  discoverSource,
+  createSourceFromProbe,
 };
 
 const typeLabels: Record<string, string> = {
@@ -56,7 +53,7 @@ const typeLabels: Record<string, string> = {
 const SOURCE_TYPES: SourceShape[] = ["rss", "api", "page_monitor", "search"];
 const SOURCE_PAGE_SIZE = 5;
 
-type AddMode = "auto" | "advanced" | "xhr";
+type AddMode = "auto" | "advanced" | "discover";
 
 export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSignal = 0 }: SourceManagerProps) {
   const [sources, setSources] = useState<CrawlSource[]>([]);
@@ -86,14 +83,14 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
   const [advHeaders, setAdvHeaders] = useState("");
   const [advJsonBody, setAdvJsonBody] = useState("");
 
-  // XHR
-  const [xhrResult, setXhrResult] = useState<XhrDetectResponse | null>(null);
-  const [xhrSelectResult, setXhrSelectResult] = useState<XhrSelectResponse | null>(null);
-  const [xhrSelectedCandidate, setXhrSelectedCandidate] = useState<number | null>(null);
+  // 智能探测（Agent 链接发现）
+  const [discoverResult, setDiscoverResult] = useState<DiscoverResponse | null>(null);
+  const [discoverAutoCreate, setDiscoverAutoCreate] = useState(false);
 
   const [busy, setBusy] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const sortedSources = useMemo(
     () => [...sources].sort((a, b) => a.name.localeCompare(b.name, "zh-Hans-CN")),
@@ -120,16 +117,25 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
     }
   }, [collapseSignal]);
 
-  async function loadSources() {
+  async function loadSources(): Promise<CrawlSource[]> {
     setLoading(true);
     try {
-      setSources(await api.fetchSources());
+      const list = await api.fetchSources();
+      setSources(list);
       setError(null);
+      return list;
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "加载抓取来源失败");
+      return [];
     } finally {
       setLoading(false);
     }
+  }
+
+  function focusSourceInList(list: CrawlSource[], sourceId: number) {
+    const sorted = [...list].sort((a, b) => a.name.localeCompare(b.name, "zh-Hans-CN"));
+    const index = sorted.findIndex((s) => s.id === sourceId);
+    if (index >= 0) setPage(Math.floor(index / SOURCE_PAGE_SIZE) + 1);
   }
 
   function validateUrl(): boolean {
@@ -230,112 +236,61 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
     }
   }
 
-  // ── XHR detect ──
+  // ── 智能探测（API 发现）──
 
-  async function handleXhrDetect() {
+  async function handleDiscover() {
     if (!validateUrl()) return;
     setBusy(true);
-    setXhrResult(null);
-    setXhrSelectResult(null);
-    setXhrSelectedCandidate(null);
+    setNotice(null);
+    setDiscoverResult(null);
     try {
-      const result = await api.detectXhrSources(url.trim());
-      setXhrResult(result);
-      if (result.candidates.length === 0) {
-        setError("未探测到 JSON API 候选");
+      const result = await api.discoverSource({
+        url: url.trim(),
+        create_source: discoverAutoCreate,
+        name: name.trim() || null,
+        main_category: mainCategory,
+      });
+      setDiscoverResult(result);
+      if (result.name_suggestion && !name.trim()) {
+        setName(result.name_suggestion);
+      }
+      if (result.created_source) {
+        const created = result.created_source;
+        const list = await loadSources();
+        focusSourceInList(list, created.id);
+        await onSourcesChanged?.();
+        setError(null);
+        setNotice(`已添加到抓取来源列表：「${created.name}」（API，#${created.id}），到「Agent 运行」点「一键 Agent 运行」即可抓取`);
+      } else if (!result.success) {
+        setError("未发现可用 API，请查看候选请求排查");
       } else {
         setError(null);
       }
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "XHR 探测失败");
+      setError(err instanceof ApiError ? err.message : "智能探测失败");
     } finally {
       setBusy(false);
     }
   }
 
-  async function handleXhrSelect() {
-    if (!xhrResult || xhrResult.candidates.length === 0) return;
-    setBusy(true);
-    setXhrSelectResult(null);
-    try {
-      const result = await api.selectXhrCandidate(xhrResult.page_url, xhrResult.candidates);
-      setXhrSelectResult(result);
-      if (result.selected_index !== null) {
-        setXhrSelectedCandidate(result.selected_index);
-      }
-      if (result.name_suggestion && !name.trim()) {
-        setName(result.name_suggestion);
-      }
-      setError(null);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Agent 选择失败");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleXhrCreate() {
-    if (!xhrSelectResult?.api_config || !validateUrl()) return;
+  async function handleCreateFromProbe() {
+    if (!discoverResult || !discoverResult.api_url) return;
     setBusy(true);
     try {
-      const probe = xhrSelectResult.api_config;
-      const apiConfig = { probe };
-      const request: SourceCreateRequest = {
-        url: (probe as ProbeConfig).url || url.trim(),
-        name: name.trim() || null,
+      const created = await api.createSourceFromProbe({
+        api_url: discoverResult.api_url,
+        method: discoverResult.method,
+        items_path: discoverResult.items_path ?? "",
+        fields: discoverResult.fields,
+        name: name.trim() || discoverResult.name_suggestion || null,
         main_category: mainCategory,
-        type: "api",
-        api_config: apiConfig,
-      };
-      await api.createSource(request);
+      });
       resetForm();
-      await loadSources();
+      const list = await loadSources();
+      focusSourceInList(list, created.id);
       await onSourcesChanged?.();
       setError(null);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "创建抓取来源失败");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleXhrCreateFromCandidate() {
-    if (xhrSelectedCandidate === null || !xhrResult) return;
-    const c = xhrResult.candidates[xhrSelectedCandidate];
-    if (!c || !validateUrl()) return;
-    setBusy(true);
-    try {
-      const probe: Record<string, unknown> = {
-        mode: "json_list",
-        method: c.method,
-        url: c.url,
-        items_path: c.inferred_items_path || null,
-        fields: {
-          title: c.inferred_fields.title || null,
-          url: c.inferred_fields.url || null,
-          url_template: null,
-          published_at: c.inferred_fields.published_at || null,
-          content: c.inferred_fields.content || null,
-        },
-      };
-      if (c.query && Object.keys(c.query).length > 0) {
-        probe.query = c.query;
-      }
-      if (c.json_body && Object.keys(c.json_body).length > 0) {
-        probe.json_body = c.json_body;
-      }
-      const request: SourceCreateRequest = {
-        url: c.url,
-        name: name.trim() || inferSourceName(xhrResult.page_url, c.url),
-        main_category: mainCategory,
-        type: "api",
-        api_config: { probe },
-      };
-      await api.createSource(request);
-      resetForm();
-      await loadSources();
-      await onSourcesChanged?.();
-      setError(null);
+      setNotice(`已添加到抓取来源列表：「${created.name}」（API，#${created.id}），到「Agent 运行」点「一键 Agent 运行」即可抓取`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "创建抓取来源失败");
     } finally {
@@ -377,9 +332,8 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
     setAdvFieldContent("");
     setAdvHeaders("");
     setAdvJsonBody("");
-    setXhrResult(null);
-    setXhrSelectResult(null);
-    setXhrSelectedCandidate(null);
+    setDiscoverResult(null);
+    setDiscoverAutoCreate(false);
     setAddMode("auto");
   }
 
@@ -421,13 +375,20 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
             </div>
           )}
 
+          {notice && (
+            <div style={{ border: "1px solid #a6f4c5", background: "#ecfdf3", color: "#027a48", borderRadius: 8, padding: 10, fontSize: 13, display: "flex", justifyContent: "space-between", gap: 10 }}>
+              <span>{notice}</span>
+              <button type="button" onClick={() => setNotice(null)} style={{ border: "none", background: "transparent", color: "#027a48", cursor: "pointer", fontWeight: 700 }}>×</button>
+            </div>
+          )}
+
           {open && (
             <div style={{ display: "grid", gap: 12, borderTop: "1px solid #eaecf0", paddingTop: 12 }}>
               {/* Mode selector */}
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {([
                   { key: "auto", label: "自动识别" },
-                  { key: "xhr", label: "智能探测" },
+                  { key: "discover", label: "智能探测" },
                   { key: "advanced", label: "高级添加" },
                 ] as { key: AddMode; label: string }[]).map((m) => (
                   <button
@@ -587,102 +548,104 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
                 </>
               )}
 
-              {/* XHR mode */}
-              {addMode === "xhr" && (
+              {/* 智能探测（API 发现）mode */}
+              {addMode === "discover" && (
                 <>
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <button type="button" onClick={() => void handleXhrDetect()} disabled={busy} style={buttonStyle("#fff", "#344054")}>
-                      {busy ? "探测中…" : "探测 XHR/Fetch"}
+                  <div style={{ fontSize: 12, color: "#667085" }}>
+                    Agent 会用浏览器渲染该链接，监听页面发出的 JSON XHR/Fetch 请求，识别文章列表 API，
+                    自动映射 title/url/date 字段并生成 probe 配置，再用 probe 自检确认能取到有效条目。
+                    请填写「网址」为内容列表页（如 https://openanolis.cn/blog）。整个过程可能需要 10–30 秒。
+                  </div>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    <button type="button" onClick={() => void handleDiscover()} disabled={busy} style={buttonStyle("#175cd3", "#fff")}>
+                      {busy ? "探测中…" : "开始智能探测"}
                     </button>
-                    {xhrResult && xhrResult.candidates.length > 0 && (
-                      <button type="button" onClick={() => void handleXhrSelect()} disabled={busy} style={buttonStyle("#175cd3", "#fff")}>
-                        {busy ? "Agent 分析中…" : "Agent 选择最佳 API"}
-                      </button>
-                    )}
-                    {xhrResult && xhrSelectedCandidate !== null && (
-                      <button type="button" onClick={() => void handleXhrCreateFromCandidate()} disabled={busy} style={buttonStyle("#037947", "#fff")}>
-                        {busy ? "创建中" : "用此候选创建"}
-                      </button>
-                    )}
+                    <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, color: "#344054" }}>
+                      <input type="checkbox" checked={discoverAutoCreate} onChange={(e) => setDiscoverAutoCreate(e.target.checked)} />
+                      探测通过后自动创建为标准 API 来源
+                    </label>
                   </div>
 
-                  {/* Candidates list */}
-                  {xhrResult && xhrResult.candidates.length > 0 && (
-                    <div style={{ display: "grid", gap: 8 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: "#344054" }}>探测到 {xhrResult.candidates.length} 个 JSON API 候选：</div>
-                      {xhrResult.candidates.map((c, i) => (
-                        <div
-                          key={i}
-                          style={{
-                            border: xhrSelectedCandidate === i ? "2px solid #175cd3" : "1px solid #eaecf0",
-                            borderRadius: 8,
-                            padding: 10,
-                            background: "#fff",
-                            cursor: "pointer",
-                          }}
-                          onClick={() => setXhrSelectedCandidate(i)}
-                        >
-                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                            <span style={{ ...badgeStyle, background: c.score >= 60 ? "#d1fadf" : c.score >= 30 ? "#fef0c7" : "#f2f4f7", color: c.score >= 60 ? "#037947" : c.score >= 30 ? "#b54708" : "#667085" }}>
-                              评分 {c.score}
-                            </span>
-                            <span style={{ ...badgeStyle, background: "#eff6ff", color: "#175cd3" }}>{c.method}</span>
-                            <span style={{ fontSize: 12, color: "#475467", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 400 }}>
-                              {c.url}
-                            </span>
-                          </div>
-                          <div style={{ fontSize: 12, color: "#667085", marginTop: 6 }}>
-                            items_path: {c.inferred_items_path || "(根)"} | 字段: {[
-                              c.inferred_fields.title && "title",
-                              c.inferred_fields.url && "url",
-                              c.inferred_fields.published_at && "date",
-                              c.inferred_fields.content && "content",
-                            ].filter(Boolean).join(", ") || "未识别"}
-                          </div>
-                          {c.notes.length > 0 && (
-                            <details style={{ marginTop: 4 }}>
-                              <summary style={{ cursor: "pointer", fontSize: 12, color: "#667085" }}>打分详情</summary>
-                              <ul style={{ margin: "4px 0 0 16px", fontSize: 12, color: "#667085" }}>
-                                {c.notes.map((note, ni) => <li key={ni}>{note}</li>)}
-                              </ul>
-                            </details>
-                          )}
+                  {discoverResult && (
+                    <div style={{ display: "grid", gap: 10 }}>
+                      {/* 探测摘要 */}
+                      <div style={infoBoxStyle(
+                        discoverResult.success ? "#d1fadf" : "#fef0c7",
+                        discoverResult.success ? "#f0fdf4" : "#fffcf5",
+                        discoverResult.success ? "#037947" : "#b54708",
+                      )}>
+                        <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                          {discoverResult.success
+                            ? `发现 API 端点（自检通过，有效条目 ${discoverResult.real_content_count} 条）`
+                            : "未发现可用 API"}
                         </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Agent result */}
-                  {xhrSelectResult && (
-                    <div style={infoBoxStyle(
-                      xhrSelectResult.selected_index !== null ? "#d1fadf" : "#fef0c7",
-                      xhrSelectResult.selected_index !== null ? "#f0fdf4" : "#fffcf5",
-                      xhrSelectResult.selected_index !== null ? "#037947" : "#b54708",
-                    )}>
-                      <div style={{ fontWeight: 700, marginBottom: 6 }}>
-                        Agent 推荐结果（置信度：{xhrSelectResult.confidence}）
+                        {discoverResult.success && discoverResult.api_url && (
+                          <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+                            <div>API 端点：<code style={{ overflowWrap: "anywhere" }}>{discoverResult.api_url}</code></div>
+                            <div>请求方法：{discoverResult.method}</div>
+                            <div>列表路径：<code>{discoverResult.items_path || "（根数组）"}</code></div>
+                            <div>字段映射：</div>
+                            <ul style={{ margin: "2px 0 0 16px", padding: 0 }}>
+                              <li>标题：{String(discoverResult.fields.title ?? "—")}</li>
+                              <li>链接：{String(discoverResult.fields.url ?? "—")}{discoverResult.fields.url_template ? `（模板：${String(discoverResult.fields.url_template)}）` : ""}</li>
+                              <li>日期：{String(discoverResult.fields.published_at ?? "—")}</li>
+                              <li>正文：{String(discoverResult.fields.content ?? "—")}</li>
+                            </ul>
+                          </div>
+                        )}
+                        {discoverResult.created_source ? (
+                          <div style={{ marginTop: 8, fontWeight: 700 }}>
+                            已创建标准 API 来源：{discoverResult.created_source.name}（#{discoverResult.created_source.id}）
+                          </div>
+                        ) : (
+                          discoverResult.success && (
+                            <div style={{ marginTop: 10 }}>
+                              <button
+                                type="button"
+                                onClick={() => void handleCreateFromProbe()}
+                                disabled={busy}
+                                style={buttonStyle("#039855", "#fff")}
+                              >
+                                {busy ? "创建中…" : "创建为标准 API 来源"}
+                              </button>
+                            </div>
+                          )
+                        )}
+                        {discoverResult.notes.length > 0 && (
+                          <details style={{ marginTop: 8 }}>
+                            <summary style={{ cursor: "pointer", fontSize: 12 }}>探测备注</summary>
+                            <ul style={{ margin: "4px 0 0 16px", fontSize: 12 }}>
+                              {discoverResult.notes.map((n, i) => <li key={i}>{n}</li>)}
+                            </ul>
+                          </details>
+                        )}
+                        {!discoverResult.success && discoverResult.candidates.length > 0 && (
+                          <details style={{ marginTop: 8 }}>
+                            <summary style={{ cursor: "pointer", fontSize: 12 }}>抓到的候选请求（{discoverResult.candidates.length}）</summary>
+                            <ul style={{ margin: "4px 0 0 16px", fontSize: 12 }}>
+                              {discoverResult.candidates.map((c, i) => (
+                                <li key={i}>
+                                  <code>{c.method}</code> {c.api_url} → {c.items_count} 条（path: {c.items_path || "根"}，score: {c.score}）
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
+                        )}
                       </div>
-                      <div style={{ marginBottom: 8 }}>{xhrSelectResult.reason}</div>
-                      {xhrSelectResult.api_config && (
-                        <>
-                          <div style={{ fontSize: 12, color: "#667085", marginBottom: 4 }}>推荐 API 配置预览：</div>
-                          <pre style={{ whiteSpace: "pre-wrap", margin: "0 0 8px", fontSize: 12, background: "#fff", padding: 8, borderRadius: 6, border: "1px solid #eaecf0" }}>
-                            {JSON.stringify(xhrSelectResult.api_config, null, 2)}
-                          </pre>
-                          <button type="button" onClick={() => void handleXhrCreate()} disabled={busy} style={buttonStyle("#175cd3", "#fff")}>
-                            {busy ? "创建中" : "确认创建来源"}
-                          </button>
-                        </>
-                      )}
-                      {xhrSelectResult.rejected_candidates.length > 0 && (
-                        <details style={{ marginTop: 8 }}>
-                          <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 12 }}>已排除候选 ({xhrSelectResult.rejected_candidates.length})</summary>
-                          <ul style={{ margin: "4px 0 0 16px", fontSize: 12 }}>
-                            {xhrSelectResult.rejected_candidates.map((r, i) => (
-                              <li key={i}>#{r.index}: {r.reason}</li>
-                            ))}
-                          </ul>
-                        </details>
+
+                      {/* 样例条目 */}
+                      {discoverResult.sample_items.length > 0 && (
+                        <div style={{ display: "grid", gap: 8 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: "#344054" }}>样例条目</div>
+                          {discoverResult.sample_items.map((s, i) => (
+                            <div key={i} style={{ border: "1px solid #eaecf0", borderRadius: 8, padding: 10, background: "#fff" }}>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: "#101828" }}>{s.title}</div>
+                              {s.published_at && <div style={{ fontSize: 12, color: "#667085" }}>发布时间：{s.published_at}</div>}
+                              <div style={{ fontSize: 12, color: "#175cd3", marginTop: 4, overflowWrap: "anywhere" }}>{s.url}</div>
+                              {s.content_preview && <div style={{ fontSize: 12, color: "#475467", marginTop: 4 }}>{s.content_preview}…</div>}
+                            </div>
+                          ))}
+                        </div>
                       )}
                     </div>
                   )}
@@ -749,46 +712,6 @@ function infoBoxStyle(border: string, bg: string, color: string): CSSProperties 
   return { border: `1px solid ${border}`, background: bg, color, borderRadius: 8, padding: 12, fontSize: 13 };
 }
 
-const _DOMAIN_OVERRIDES: Record<string, string> = {
-  "openeuler.org": "openEuler",
-  "redhat.com": "Red Hat",
-  "ubuntu.com": "Ubuntu",
-  "fedoraproject.org": "Fedora",
-  "kernel.org": "Linux Kernel",
-  "centos.org": "CentOS",
-  "debian.org": "Debian",
-  "suse.com": "SUSE",
-  "opensuse.org": "openSUSE",
-  "openanolis.cn": "OpenAnolis",
-};
-
-const _PURPOSE_KEYWORDS: { pattern: RegExp; label: string }[] = [
-  { pattern: /blog|blogs|post|article/i, label: "博客" },
-  { pattern: /news|notice|bulletin|announcement/i, label: "新闻" },
-  { pattern: /security|cve|advisory|vuln/i, label: "安全公告" },
-  { pattern: /release|version|changelog|update/i, label: "版本发布" },
-  { pattern: /compat|hardware|ecosystem/i, label: "兼容性" },
-  { pattern: /life\s?cycle|eol|support/i, label: "生命周期" },
-];
-
-function inferSourceName(pageUrl: string, apiUrl: string): string {
-  let domain: string;
-  try {
-    const host = new URL(pageUrl).hostname.replace(/^www\./, "");
-    domain = _DOMAIN_OVERRIDES[host] ?? host.split(".")[0].charAt(0).toUpperCase() + host.split(".")[0].slice(1);
-  } catch {
-    domain = "未知";
-  }
-
-  const combined = `${pageUrl} ${apiUrl}`;
-  for (const { pattern, label } of _PURPOSE_KEYWORDS) {
-    if (pattern.test(combined)) {
-      return `${domain} ${label}`;
-    }
-  }
-  return domain;
-}
-
 const labelStyle = {
   display: "grid",
   gap: 6,
@@ -805,14 +728,6 @@ const inputStyle = {
   background: "#fff",
   minWidth: 0,
 } satisfies CSSProperties;
-
-const badgeStyle: CSSProperties = {
-  padding: "2px 8px",
-  borderRadius: 6,
-  fontSize: 12,
-  fontWeight: 700,
-  whiteSpace: "nowrap",
-};
 
 const tabStyle: CSSProperties = {
   border: "1px solid #d0d5dd",

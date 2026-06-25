@@ -14,6 +14,27 @@ from app.sources.detector import DetectResult, SourceDetectionError
 
 TEST_DB = "sqlite+pysqlite:///:memory:"
 
+_DISCOVERY_RESULT = {
+    "root_url": "https://openanolis.cn/blog",
+    "success": True,
+    "api_url": "https://api.openanolis.cn/blog/list",
+    "method": "GET",
+    "items_path": "data.records",
+    "fields": {"title": "title", "url": "url", "published_at": "published_at"},
+    "name_suggestion": "OpenAnolis 博客",
+    "sample_items": [
+        {
+            "title": "Test Article",
+            "url": "https://openanolis.cn/blog/1",
+            "published_at": "2026-06-20T10:00:00Z",
+            "content_preview": "Lorem ipsum",
+        }
+    ],
+    "real_content_count": 1,
+    "candidates": [],
+    "notes": [],
+}
+
 
 @pytest.fixture
 def client():
@@ -159,3 +180,87 @@ def test_delete_source_missing_returns_404(client):
     response = client.delete("/sources/9999")
 
     assert response.status_code == 404
+
+
+def test_discover_calls_api_discovery_and_returns_payload(client):
+    from app.sources.api_discovery import ApiDiscoveryResult
+
+    result = ApiDiscoveryResult(
+        root_url="https://openanolis.cn/blog",
+        success=True,
+        api_url="https://api.openanolis.cn/blog/list",
+        method="GET",
+        items_path="data.records",
+        fields={"title": "title", "url": "url", "published_at": "published_at"},
+        name_suggestion="OpenAnolis 博客",
+        sample_items=[],
+        real_content_count=1,
+    )
+    with patch("app.sources.api_discovery.discover_api_source", return_value=result):
+        response = client.post(
+            "/sources/discover",
+            json={"url": "https://openanolis.cn/blog"},
+        )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["api_url"] == "https://api.openanolis.cn/blog/list"
+    assert payload["items_path"] == "data.records"
+    assert payload["fields"]["title"] == "title"
+
+
+def test_discover_create_source_persists_api_source(client):
+    from app.sources.api_discovery import ApiDiscoveryResult
+
+    result = ApiDiscoveryResult(
+        root_url="https://openanolis.cn/blog",
+        success=True,
+        api_url="https://api.openanolis.cn/blog/list",
+        method="GET",
+        items_path="data.records",
+        fields={"title": "title", "url": "url", "published_at": "published_at"},
+        name_suggestion="OpenAnolis 博客",
+        real_content_count=1,
+    )
+    with patch("app.sources.api_discovery.discover_api_source", return_value=result):
+        response = client.post(
+            "/sources/discover",
+            json={
+                "url": "https://openanolis.cn/blog",
+                "create_source": True,
+                "name": "OpenAnolis 博客",
+                "main_category": "软件包适配",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["created_source"]["type"] == "api"
+    assert payload["created_source"]["name"] == "OpenAnolis 博客"
+
+    listed = client.get("/sources").json()
+    assert payload["created_source"]["id"] in [s["id"] for s in listed]
+
+
+def test_create_from_probe_persists_api_source_in_list(client):
+    response = client.post(
+        "/sources/create-from-probe",
+        json={
+            "api_url": "https://api.openanolis.cn/blog/list?page=1&pageSize=10",
+            "method": "GET",
+            "items_path": "data.records",
+            "fields": {"title": "title", "url": "url", "published_at": "published_at"},
+            "name": "OpenAnolis 博客",
+            "main_category": "软件包适配",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["type"] == "api"
+    assert payload["name"] == "OpenAnolis 博客"
+
+    listed = client.get("/sources").json()
+    assert payload["id"] in [s["id"] for s in listed]
+    assert "OpenAnolis 博客" in [s["name"] for s in listed]

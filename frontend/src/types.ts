@@ -152,37 +152,58 @@ export interface SourceCreateRequest {
   api_config?: Record<string, unknown> | null;
 }
 
-export interface XhrCandidate {
-  method: string;
+export interface DiscoverSampleItem {
+  title: string;
   url: string;
-  status_code: number;
-  content_type: string;
-  request_headers: Record<string, string>;
-  query: Record<string, string>;
-  json_body: Record<string, unknown> | null;
-  response_sample: unknown;
-  inferred_items_path: string;
-  inferred_fields: Partial<ProbeFieldsConfig>;
+  published_at: string | null;
+  content_preview: string;
+}
+
+export interface DiscoverCandidate {
+  api_url: string;
+  method: string;
+  status: number;
+  items_path: string;
+  items_count: number;
+  fields: Record<string, unknown>;
   score: number;
+}
+
+export interface DiscoverResponse {
+  root_url: string;
+  success: boolean;
+  api_url: string | null;
+  method: string;
+  items_path: string | null;
+  fields: Record<string, unknown>;
+  name_suggestion: string;
+  sample_items: DiscoverSampleItem[];
+  real_content_count: number;
+  candidates: DiscoverCandidate[];
   notes: string[];
+  created_source?: {
+    id: number;
+    name: string;
+    url: string;
+    type: string;
+    main_category: string | null;
+  };
 }
 
-export interface XhrDetectResponse {
-  page_url: string;
-  candidates: XhrCandidate[];
-  total: number;
+export interface DiscoverRequest {
+  url: string;
+  create_source?: boolean;
+  name?: string | null;
+  main_category?: string | null;
 }
 
-export interface XhrSelectResponse {
-  selected_index: number | null;
-  name_suggestion?: string;
-  reason: string;
-  api_config: ProbeConfig | null;
-  field_mapping: Record<string, unknown>;
-  pagination: { type: string; page_param: string | null; next_path: string | null };
-  rejected_candidates: { index: number; reason: string }[];
-  confidence: "high" | "medium" | "low";
-  raw_response?: string;
+export interface CreateFromProbeRequest {
+  api_url: string;
+  method?: string;
+  items_path?: string | null;
+  fields?: Record<string, unknown>;
+  name?: string | null;
+  main_category: string;
 }
 
 export type AgentRunStage =
