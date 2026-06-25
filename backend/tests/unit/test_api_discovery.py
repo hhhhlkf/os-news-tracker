@@ -242,6 +242,20 @@ class TestApiDiscoveryResult:
         assert d["notes"] == ["note"]
         assert d["sample_items"][0]["title"] == "T"
 
+    def test_to_dict_includes_pagination(self):
+        result = ApiDiscoveryResult(
+            root_url="https://example.com/blog",
+            success=True,
+            api_url="https://api.example.com/list",
+            pagination={"page_param": "page", "size_param": "pageSize", "has_more_path": "data.hasMore"},
+        )
+        d = result.to_dict()
+        assert d["pagination"] == {"page_param": "page", "size_param": "pageSize", "has_more_path": "data.hasMore"}
+
+    def test_to_dict_pagination_defaults_to_none(self):
+        result = ApiDiscoveryResult(root_url="https://example.com/blog")
+        assert result.to_dict()["pagination"] is None
+
 
 class TestInferPagination:
     """测试 _infer_pagination 从 api_url + payload 推断分页配置。"""

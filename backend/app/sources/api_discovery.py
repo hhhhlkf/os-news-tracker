@@ -109,6 +109,7 @@ class ApiDiscoveryResult:
     method: str = "GET"
     items_path: str | None = None
     fields: dict = field(default_factory=dict)
+    pagination: dict | None = None
     name_suggestion: str = ""
     sample_items: list[dict] = field(default_factory=list)
     real_content_count: int = 0
@@ -123,6 +124,7 @@ class ApiDiscoveryResult:
             "method": self.method,
             "items_path": self.items_path,
             "fields": self.fields,
+            "pagination": self.pagination,
             "name_suggestion": self.name_suggestion,
             "sample_items": self.sample_items,
             "real_content_count": self.real_content_count,
