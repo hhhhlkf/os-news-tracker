@@ -416,6 +416,21 @@ def _strip_query_param(url: str, param: str) -> str:
     return urlunparse(parsed._replace(query="&".join(f"{k}={v}" for k, v in pairs)))
 
 
+def _strip_pagination_params(url: str, pagination: dict | None) -> str:
+    """从 url 的 query 串中移除分页参数（page_param 和 size_param）。
+
+    用于把探测捕获的「带 page=1&pageSize=10 的原始 URL」清理成
+    「去分页参数后的模板 URL」，让运行侧分页引擎逐页注入 page=N。
+    """
+    if not pagination:
+        return url
+    for key in ("page_param", "size_param"):
+        param = pagination.get(key)
+        if param:
+            url = _strip_query_param(url, param)
+    return url
+
+
 def _infer_pagination(
     candidate: ApiCandidate, notes: list[str],
 ) -> dict[str, Any] | None:

@@ -13,6 +13,7 @@ from app.sources.api_discovery import (
     _infer_pagination,
     _infer_url_template_from_anchors,
     _score,
+    _strip_pagination_params,
 )
 
 
@@ -410,3 +411,32 @@ class TestScorePaginationAwareness:
             page_url="https://example.com/blog",
         )
         assert neutral > penalized
+
+
+class TestStripPaginationParams:
+    """测试 _strip_pagination_params 从 URL 剥离分页参数。"""
+
+    def test_strips_page_and_size_params(self):
+        probe_pagination = {"page_param": "page", "size_param": "pageSize"}
+        url = "https://openanolis.cn/api/blog/blogByCategoryPage.json?categoryNo=&page=1&pageSize=10"
+        result = _strip_pagination_params(url, probe_pagination)
+        assert "page=" not in result
+        assert "pageSize=" not in result
+        assert "categoryNo=" in result
+
+    def test_strips_when_only_page_param(self):
+        probe_pagination = {"page_param": "currentPage"}
+        url = "https://example.com/api/list?currentPage=1&category=all"
+        result = _strip_pagination_params(url, probe_pagination)
+        assert "currentPage=" not in result
+        assert "category=all" in result
+
+    def test_no_pagination_returns_url_unchanged(self):
+        url = "https://example.com/api/list?category=all"
+        assert _strip_pagination_params(url, None) == url
+        assert _strip_pagination_params(url, {}) == url
+
+    def test_url_without_target_params_unchanged(self):
+        probe_pagination = {"page_param": "page"}
+        url = "https://example.com/api/list?category=all"
+        assert _strip_pagination_params(url, probe_pagination) == url
