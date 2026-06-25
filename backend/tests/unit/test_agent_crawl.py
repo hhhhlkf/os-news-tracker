@@ -730,3 +730,109 @@ class TestBuildPlanStaleProbeRediscovers:
         # 无分页参数的 probe 也直接复用，不重探
         assert fetcher._build_plan_from_api.called
         assert not fetcher._try_runtime_discovery.called
+
+
+class TestPaginatedProbeEndToEnd:
+    """端到端：探测带 pagination 的 result → 写入 candidate → 多页抓取超过单页条数。"""
+
+    def test_rediscovery_yields_multi_page_items(self):
+        from unittest.mock import patch
+        from app.fetchers.api_adapters import ApiAdapterFetcher
+        from app.sources.api_discovery import ApiDiscoveryResult
+
+        # 三页响应：page1/2 各 2 条 hasMore=true，page3 1 条 hasMore=false
+        def fake_requester(url):
+            from urllib.parse import parse_qs, urlparse as _urlparse
+            import json as _json
+            page = int(parse_qs(_urlparse(url).query).get("page", ["1"])[0])
+            if page == 1:
+                items = [
+                    {"title": "A", "no": "a", "date": "2026-06-20"},
+                    {"title": "B", "no": "b", "date": "2026-06-20"},
+                ]
+                has_more = True
+            elif page == 2:
+                items = [
+                    {"title": "C", "no": "c", "date": "2026-06-20"},
+                    {"title": "D", "no": "d", "date": "2026-06-20"},
+                ]
+                has_more = True
+            else:
+                items = [{"title": "E", "no": "e", "date": "2026-06-20"}]
+                has_more = False
+            return _json.dumps({"data": {"items": items, "hasMore": has_more}})
+
+        # 用真实的 ApiAdapterFetcher（注入 fake_requester），走 ConfigurableApiProbeAdapter 分页引擎
+        real_fetcher = ApiAdapterFetcher(requester=fake_requester)
+
+        db = MagicMock()
+        candidate = MagicMock()
+        candidate.id = 2
+        candidate.url = "https://openanolis.cn/blog"
+        candidate.api_config = {}  # 探测前无 probe
+        agent_source = MagicMock()
+        agent_source.id = 1
+        agent_source.name = "OpenAnolis Blog"
+        agent_source.url = "https://openanolis.cn/blog"
+        agent_source.api_config = {"candidate_source_id": 2}
+        agent_source.stream = MagicMock()
+
+        def fake_get(model, pk):
+            if model.__name__ == "AgentSourceConfig":
+                return _make_config_model(max_urls_per_run=10)
+            if pk == 2:
+                return candidate
+            return None
+        db.get.side_effect = fake_get
+
+        discovery_result = ApiDiscoveryResult(
+            root_url="https://openanolis.cn/blog",
+            success=True,
+            api_url="https://openanolis.cn/api/blog/blogByCategoryPage.json?categoryNo=",
+            method="GET",
+            items_path="data.items",
+            fields={
+                "title": "title",
+                "url_template": "https://openanolis.cn/blog/{no}",
+                "published_at": "date",
+            },
+            pagination={
+                "page_param": "page", "size_param": "pageSize", "size": 10,
+                "start_page": 1, "max_pages": 5, "has_more_path": "data.hasMore",
+            },
+            name_suggestion="openanolis.cn",
+        )
+
+        fetcher = AgentCrawlFetcher(
+            db=db,
+            plan_agent=MagicMock(),
+            crawl_dag=MagicMock(),
+            quality_pool=MagicMock(),
+            summary_pool=MagicMock(),
+            # 固定绝对时间窗口，避免依赖「现在」的相对窗口；条目日期 2026-06-20 落在窗口内
+            time_window={
+                "time_mode": "absolute",
+                "start_at": datetime(2026, 6, 1, tzinfo=timezone.utc),
+                "end_at": datetime(2026, 6, 30, tzinfo=timezone.utc),
+            },
+        )
+        # _build_plan_from_api 内部局部 `from app.fetchers.api_adapters import ApiAdapterFetcher`，
+        # 每次 call 都重新读取该模块属性，故 patch 模块属性即可让 ApiAdapterFetcher() 返回
+        # 注入了 fake_requester 的 real_fetcher，从而走真实 ConfigurableApiProbeAdapter 分页引擎。
+        with patch("app.fetchers.api_adapters.ApiAdapterFetcher", return_value=real_fetcher), \
+             patch("app.sources.api_discovery.discover_api_source", return_value=discovery_result):
+            from app.agent.schemas import AgentSourceConfig
+            config = AgentSourceConfig(
+                source_id=1, focus_areas=["kernel"], topic_groups=["项目动态"],
+                crawl_depth=1, max_urls_per_run=10, quality_threshold=4,
+                crawl_workers=3, quality_workers=2, summary_workers=2,
+            )
+            plan = fetcher._build_plan(agent_source, config)
+
+        # 三页共 5 条，超过单页实际 2 条 —— 证明分页引擎端到端生效
+        assert len(plan.urls) == 5
+        titles = [pu.guessed_topic for pu in plan.urls]
+        assert "A" in titles and "E" in titles
+        # candidate 的缓存 probe 现在带 pagination（_try_runtime_discovery 写入）
+        cached_probe = candidate.api_config["probe"]
+        assert cached_probe["pagination"]["page_param"] == "page"
