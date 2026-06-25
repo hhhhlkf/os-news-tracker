@@ -647,6 +647,8 @@ class TestBuildPlanStaleProbeRediscovers:
         assert fetcher._try_runtime_discovery.called
         # _build_plan_from_api 没有被直接用脏 probe 调用
         assert not fetcher._build_plan_from_api.called
+        assert "probe" not in candidate.api_config
+        assert db.commit.called
         assert plan is plan_from_api
 
     def test_clean_probe_with_pagination_is_reused_directly(self):

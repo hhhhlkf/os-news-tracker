@@ -90,6 +90,19 @@ def _infer_missing_pagination_for_cached_probe(probe: object) -> dict | None:
     }
 
 
+def _remove_cached_probe(owner: object, db: Session) -> None:
+    """Remove a bad cached probe from the DB-backed source config."""
+    if owner is None:
+        return
+    api_config = getattr(owner, "api_config", None)
+    if not isinstance(api_config, dict) or "probe" not in api_config:
+        return
+    updated_config = dict(api_config)
+    updated_config.pop("probe", None)
+    owner.api_config = updated_config
+    db.commit()
+
+
 _RELATIVE_RANGE_TO_DELTA = {
     "24h": timedelta(hours=24),
     "7d": timedelta(days=7),
@@ -222,6 +235,7 @@ class AgentCrawlFetcher:
                 level="warning",
             )
             # 丢弃脏 probe，落到下文 _try_runtime_discovery 重探
+            _remove_cached_probe(probe_owner, self._db)
             probe = None
         elif isinstance(probe, dict):
             inferred_pagination = _infer_missing_pagination_for_cached_probe(probe)
