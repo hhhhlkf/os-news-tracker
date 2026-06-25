@@ -731,6 +731,61 @@ class TestBuildPlanStaleProbeRediscovers:
         assert fetcher._build_plan_from_api.called
         assert not fetcher._try_runtime_discovery.called
 
+    def test_clean_openanolis_blog_probe_without_pagination_is_repaired(self):
+        db = MagicMock()
+        candidate = MagicMock()
+        candidate.id = 2
+        candidate.url = "https://openanolis.cn/api/blog/blogByCategoryPage.json?categoryNo="
+        candidate.api_config = {
+            "probe": {
+                "mode": "json_list",
+                "method": "GET",
+                "url": "https://openanolis.cn/api/blog/blogByCategoryPage.json?categoryNo=",
+                "items_path": "data.items",
+                "fields": {
+                    "title": "title",
+                    "published_at": "publishTime",
+                    "content": ["summary", "content"],
+                    "url_template": "https://openanolis.cn/blog/detail/{item.no}",
+                },
+            }
+        }
+        agent_source = MagicMock()
+        agent_source.id = 1
+        agent_source.name = "OpenAnolis Blog"
+        agent_source.url = "https://openanolis.cn/api/blog/blogByCategoryPage.json?categoryNo="
+        agent_source.api_config = {"candidate_source_id": 2}
+        agent_source.stream = MagicMock()
+
+        def fake_get(model, pk):
+            if model.__name__ == "AgentSourceConfig":
+                return _make_config_model()
+            if pk == 2:
+                return candidate
+            return None
+        db.get.side_effect = fake_get
+
+        fetcher = self._make_fetcher(db)
+        plan_from_api = CrawlPlan(source_id=1, urls=[PlanUrl(url="https://openanolis.cn/blog/detail/1", guessed_topic="t")])
+        fetcher._build_plan_from_api = MagicMock(return_value=plan_from_api)
+        fetcher._try_runtime_discovery = MagicMock()
+
+        plan = fetcher._build_plan(agent_source, self._config())
+
+        repaired_probe = candidate.api_config["probe"]
+        assert repaired_probe["pagination"] == {
+            "page_param": "page",
+            "size_param": "pageSize",
+            "size": 10,
+            "start_page": 1,
+            "max_pages": 5,
+            "has_more_path": "data.hasMore",
+        }
+        assert fetcher._build_plan_from_api.called
+        assert not fetcher._try_runtime_discovery.called
+        assert db.commit.called
+        assert plan is plan_from_api
+
 
 class TestPaginatedProbeEndToEnd:
     """端到端：探测带 pagination 的 result → 写入 candidate → 多页抓取超过单页条数。"""

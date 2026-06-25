@@ -68,6 +68,28 @@ def _is_stale_paginated_probe(probe: object) -> bool:
     return any(param in present for param in _PAGINATION_QUERY_PARAMS)
 
 
+def _infer_missing_pagination_for_cached_probe(probe: object) -> dict | None:
+    """补旧缓存：OpenAnolis blogByCategoryPage 的干净 URL 仍需要 page/pageSize。"""
+    if not isinstance(probe, dict) or probe.get("pagination"):
+        return None
+    url = probe.get("url")
+    if not isinstance(url, str) or not url:
+        return None
+
+    path = urlparse(url).path.lower()
+    if "blogbycategorypage" not in path:
+        return None
+
+    return {
+        "page_param": "page",
+        "size_param": "pageSize",
+        "size": 10,
+        "start_page": 1,
+        "max_pages": 5,
+        "has_more_path": "data.hasMore",
+    }
+
+
 _RELATIVE_RANGE_TO_DELTA = {
     "24h": timedelta(hours=24),
     "7d": timedelta(days=7),
@@ -174,11 +196,13 @@ class AgentCrawlFetcher:
         # Prefer candidate's probe (user-curated, may be updated after re-discovery).
         # Fall back to agent source's own cached probe (from prior runtime discovery).
         probe = None
+        probe_owner = None
         candidate_id = api_config.get("candidate_source_id")
         if isinstance(candidate_id, int):
             candidate = self._db.get(Source, candidate_id)
             if candidate and candidate.api_config and isinstance(candidate.api_config.get("probe"), dict):
                 probe = candidate.api_config["probe"]
+                probe_owner = candidate
                 # Use candidate's URL if the agent source URL points to the API
                 if not source.url or source.url == candidate.url:
                     source = Source(
@@ -188,6 +212,7 @@ class AgentCrawlFetcher:
                     )
         if not probe:
             probe = api_config.get("probe")
+            probe_owner = source if isinstance(probe, dict) else None
         if isinstance(probe, dict) and _is_stale_paginated_probe(probe):
             append_run_log(
                 "plan",
@@ -198,7 +223,24 @@ class AgentCrawlFetcher:
             )
             # 丢弃脏 probe，落到下文 _try_runtime_discovery 重探
             probe = None
-        elif isinstance(probe, dict) or (
+        elif isinstance(probe, dict):
+            inferred_pagination = _infer_missing_pagination_for_cached_probe(probe)
+            if inferred_pagination:
+                probe = {**probe, "pagination": inferred_pagination}
+                if probe_owner is not None:
+                    owner_config = dict(probe_owner.api_config or {})
+                    owner_config["probe"] = probe
+                    probe_owner.api_config = owner_config
+                    self._db.commit()
+                append_run_log(
+                    "plan",
+                    "检测到旧缓存 probe 缺失 pagination，已自动补齐",
+                    source=source.name,
+                    url=probe.get("url") or source.url,
+                    level="warning",
+                )
+            return self._build_plan_from_api(source, config)
+        elif (
             source.api_config
             and isinstance(source.api_config.get("probe"), dict)
             and not _is_stale_paginated_probe(source.api_config.get("probe"))
