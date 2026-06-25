@@ -571,3 +571,162 @@ class TestIsStalePaginatedProbe:
     def test_probe_without_url_is_not_stale(self):
         probe = {"mode": "json_list", "items_path": "items", "fields": {}}
         assert _is_stale_paginated_probe(probe) is False
+
+
+class TestBuildPlanStaleProbeRediscovers:
+    """测试 _build_plan 对脏 probe 触发重探、对干净 probe 直接复用。"""
+
+    def _make_fetcher(self, db):
+        return AgentCrawlFetcher(
+            db=db,
+            plan_agent=MagicMock(),
+            crawl_dag=MagicMock(),
+            quality_pool=MagicMock(),
+            summary_pool=MagicMock(),
+        )
+
+    def _config(self):
+        from app.agent.schemas import AgentSourceConfig
+        return AgentSourceConfig(
+            source_id=1, focus_areas=["kernel"], topic_groups=["项目动态"],
+            crawl_depth=1, max_urls_per_run=5, quality_threshold=4,
+            crawl_workers=3, quality_workers=2, summary_workers=2,
+        )
+
+    def test_stale_probe_triggers_rediscovery(self):
+        from unittest.mock import patch
+        from app.sources.api_discovery import ApiDiscoveryResult
+
+        db = MagicMock()
+        # candidate 持有脏 probe（URL 有 page=1 但无 pagination）
+        candidate = MagicMock()
+        candidate.id = 2
+        candidate.url = "https://openanolis.cn/blog"
+        candidate.api_config = {
+            "probe": {
+                "mode": "json_list",
+                "method": "GET",
+                "url": "https://openanolis.cn/api/blog/blogByCategoryPage.json?categoryNo=&page=1&pageSize=10",
+                "items_path": "data.items",
+                "fields": {"title": "title", "url_template": "https://openanolis.cn/blog/{no}"},
+            }
+        }
+        agent_source = MagicMock()
+        agent_source.id = 1
+        agent_source.name = "OpenAnolis Blog"
+        agent_source.url = "https://openanolis.cn/blog"
+        agent_source.api_config = {"candidate_source_id": 2}
+        agent_source.stream = MagicMock()
+
+        def fake_get(model, pk):
+            if model.__name__ == "AgentSourceConfig":
+                return _make_config_model()
+            if pk == 2:
+                return candidate
+            return None
+        db.get.side_effect = fake_get
+
+        fetcher = self._make_fetcher(db)
+        plan_from_api = CrawlPlan(source_id=1, urls=[PlanUrl(url="https://openanolis.cn/blog/1", guessed_topic="t")])
+        fetcher._build_plan_from_api = MagicMock(return_value=plan_from_api)
+        fetcher._try_runtime_discovery = MagicMock(return_value=plan_from_api)
+
+        discovery_result = ApiDiscoveryResult(
+            root_url="https://openanolis.cn/blog",
+            success=True,
+            api_url="https://openanolis.cn/api/blog/blogByCategoryPage.json?categoryNo=",
+            items_path="data.items",
+            fields={"title": "title"},
+            pagination={"page_param": "page", "has_more_path": "data.hasMore"},
+        )
+
+        with patch("app.sources.api_discovery.discover_api_source", return_value=discovery_result) as mock_discover:
+            plan = fetcher._build_plan(agent_source, self._config())
+
+        # 脏 probe 触发了重探（_try_runtime_discovery 被调用，内部会调 discover_api_source）
+        assert fetcher._try_runtime_discovery.called
+        # _build_plan_from_api 没有被直接用脏 probe 调用
+        assert not fetcher._build_plan_from_api.called
+        assert plan is plan_from_api
+
+    def test_clean_probe_with_pagination_is_reused_directly(self):
+        db = MagicMock()
+        candidate = MagicMock()
+        candidate.id = 2
+        candidate.url = "https://openanolis.cn/blog"
+        candidate.api_config = {
+            "probe": {
+                "mode": "json_list",
+                "method": "GET",
+                "url": "https://openanolis.cn/api/blog/blogByCategoryPage.json?categoryNo=",
+                "items_path": "data.items",
+                "fields": {"title": "title", "url_template": "https://openanolis.cn/blog/{no}"},
+                "pagination": {"page_param": "page", "has_more_path": "data.hasMore"},
+            }
+        }
+        agent_source = MagicMock()
+        agent_source.id = 1
+        agent_source.name = "OpenAnolis Blog"
+        agent_source.url = "https://openanolis.cn/blog"
+        agent_source.api_config = {"candidate_source_id": 2}
+        agent_source.stream = MagicMock()
+
+        def fake_get(model, pk):
+            if model.__name__ == "AgentSourceConfig":
+                return _make_config_model()
+            if pk == 2:
+                return candidate
+            return None
+        db.get.side_effect = fake_get
+
+        fetcher = self._make_fetcher(db)
+        plan_from_api = CrawlPlan(source_id=1, urls=[PlanUrl(url="https://openanolis.cn/blog/1", guessed_topic="t")])
+        fetcher._build_plan_from_api = MagicMock(return_value=plan_from_api)
+        fetcher._try_runtime_discovery = MagicMock()
+
+        plan = fetcher._build_plan(agent_source, self._config())
+
+        # 干净 probe 直接复用，不重探
+        assert fetcher._build_plan_from_api.called
+        assert not fetcher._try_runtime_discovery.called
+        assert plan is plan_from_api
+
+    def test_non_paginated_probe_is_reused_directly(self):
+        db = MagicMock()
+        candidate = MagicMock()
+        candidate.id = 2
+        candidate.url = "https://api.example.com/list"
+        candidate.api_config = {
+            "probe": {
+                "mode": "json_list",
+                "method": "GET",
+                "url": "https://api.example.com/list?category=all",
+                "items_path": "items",
+                "fields": {"title": "title", "url": "url"},
+            }
+        }
+        agent_source = MagicMock()
+        agent_source.id = 1
+        agent_source.name = "Example API"
+        agent_source.url = "https://api.example.com/list"
+        agent_source.api_config = {"candidate_source_id": 2}
+        agent_source.stream = MagicMock()
+
+        def fake_get(model, pk):
+            if model.__name__ == "AgentSourceConfig":
+                return _make_config_model()
+            if pk == 2:
+                return candidate
+            return None
+        db.get.side_effect = fake_get
+
+        fetcher = self._make_fetcher(db)
+        plan_from_api = CrawlPlan(source_id=1, urls=[PlanUrl(url="https://example.com/a", guessed_topic="t")])
+        fetcher._build_plan_from_api = MagicMock(return_value=plan_from_api)
+        fetcher._try_runtime_discovery = MagicMock()
+
+        plan = fetcher._build_plan(agent_source, self._config())
+
+        # 无分页参数的 probe 也直接复用，不重探
+        assert fetcher._build_plan_from_api.called
+        assert not fetcher._try_runtime_discovery.called

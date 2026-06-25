@@ -188,7 +188,21 @@ class AgentCrawlFetcher:
                     )
         if not probe:
             probe = api_config.get("probe")
-        if isinstance(probe, dict) or (source.api_config and isinstance(source.api_config.get("probe"), dict)):
+        if isinstance(probe, dict) and _is_stale_paginated_probe(probe):
+            append_run_log(
+                "plan",
+                "检测到分页式 probe 缺失 pagination 配置，触发重新探测",
+                source=source.name,
+                url=probe.get("url") or source.url,
+                level="warning",
+            )
+            # 丢弃脏 probe，落到下文 _try_runtime_discovery 重探
+            probe = None
+        elif isinstance(probe, dict) or (
+            source.api_config
+            and isinstance(source.api_config.get("probe"), dict)
+            and not _is_stale_paginated_probe(source.api_config.get("probe"))
+        ):
             return self._build_plan_from_api(source, config)
 
         # ── RSS seed ──
