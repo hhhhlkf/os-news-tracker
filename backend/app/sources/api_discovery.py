@@ -15,7 +15,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse, urlunparse
 
 from app.sources.detector import (
     _CONTENT_KEYS,
@@ -50,6 +50,28 @@ _PUBLISHED_KEYS_EXT = _PUBLISHED_KEYS + (
     "updateTime", "update_time", "timestamp", "time", "createdAt",
 )
 
+# Query 参数名 → 分页「页码」参数的候选（按优先级排序）。
+_PAGE_PARAM_CANDIDATES = (
+    "page", "pageNo", "pageNum", "currentPage", "current", "p", "pageIndex",
+)
+# Query 参数名 → 分页「每页条数」参数的候选。
+_PAGE_SIZE_PARAM_CANDIDATES = (
+    "pageSize", "size", "limit", "per_page", "perPage", "count", "rows",
+)
+# payload 里指示「还有下一页」的布尔字段名候选。
+_HAS_MORE_KEY_CANDIDATES = (
+    "hasMore", "has_more", "hasNext", "has_next", "hasNextPage", "has_next_page",
+    "more", "isMore", "is_more", "hasnext",
+)
+# payload 里指示「总条数」的字段名候选（用于推算是否还有下一页）。
+_TOTAL_KEY_CANDIDATES = (
+    "total", "totalCount", "total_count", "totalElements", "total_elements",
+    "totalRows", "total_rows", "count", "totalNum", "total_num", "totalSize",
+    "total_size", "recordsTotal", "records_total",
+)
+# 默认翻页上限，避免探测/运行时无限制抓取。
+_DEFAULT_DISCOVERY_MAX_PAGES = 5
+
 
 @dataclass
 class ApiCandidate:
@@ -63,6 +85,9 @@ class ApiCandidate:
     items: list[dict]
     fields: dict
     score: float
+    # 完整的 JSON payload，供 _build_probe 推断分页（has_more / total）字段。
+    # items_path 之外的同级元数据（如 data.hasMore）只能从 payload 取到。
+    payload: Any = None
 
     def to_dict(self) -> dict:
         return {
@@ -245,6 +270,7 @@ def _evaluate_candidate(captured: dict, page_url: str) -> list[ApiCandidate]:
                 items=items,
                 fields=fields,
                 score=score,
+                payload=payload,
             )
         )
     return candidates
@@ -269,11 +295,26 @@ def _score(*, items: list[dict], fields: dict, api_url: str, page_url: str) -> f
     api_path = urlparse(api_url).path.lower()
     if any(kw in api_path for kw in ("blog", "news", "article", "post", "list", "content")):
         score += 3
-    # Penalize metadata-like APIs (categories, tags, menus)
-    if any(kw in api_path for kw in ("category", "categorie", "tag", "menu", "nav", "config")):
+    # 「按分类/标签分页的文章列表」是真正想要的 API（如 blogByCategoryPage、
+    # articleByTag），不应与「分类/标签元数据」API（如 getBlogCategory、
+    # categories.json）混淆。后者只列举分类本身，前者在分类下分页返回文章。
+    has_article_signal = any(
+        kw in api_path for kw in ("blog", "news", "article", "post", "content")
+    )
+    has_pagination_signal = any(
+        kw in api_path for kw in ("page", "list", "search", "feed", "paging")
+    )
+    looks_like_metadata_only = any(
+        kw in api_path for kw in ("getcategory", "categorylist", "categories", "taglist", "tags", "menu", "nav", "config")
+    )
+    if has_article_signal and has_pagination_signal:
+        # 分类/标签下的分页文章列表：额外奖励，抵消下方对「category/tag」的误扣。
+        score += 3
+    # 仅当不像分页文章列表、且名字像纯元数据时才扣分，避免误伤 blogByCategoryPage。
+    if looks_like_metadata_only and not (has_article_signal and has_pagination_signal):
         score -= 5
     # Reward paginated article-list patterns
-    if any(kw in api_path for kw in ("page", "search", "feed")):
+    if has_pagination_signal:
         score += 2
     if _same_registrable_domain(api_url, page_url):
         score += 2
@@ -336,6 +377,105 @@ def _guess_url_template(items: list[dict], page_url: str) -> str | None:
 
 
 # ──────────────────────────────────────────────────────────────────
+# 分页推断（让 probe 不再被「page=1&pageSize=10」锁死在第一页）
+# ──────────────────────────────────────────────────────────────────
+def _find_key_path(obj: Any, candidates: tuple[str, ...], *, max_depth: int = 4) -> str | None:
+    """在 ``obj`` 中递归查找候选键，返回首个命中的点号路径（如 ``data.hasMore``）。
+
+    只在 dict 节点下搜索，跳过 list，避免把列表元素里的同名字段误判为分页元数据。
+    """
+    return _find_key_path_recursive(obj, candidates, "", depth=0, max_depth=max_depth)
+
+
+def _find_key_path_recursive(
+    obj: Any, candidates: tuple[str, ...], path: str, *, depth: int, max_depth: int,
+) -> str | None:
+    if depth > max_depth or not isinstance(obj, dict):
+        return None
+    for key in candidates:
+        if key in obj and obj[key] not in (None, ""):
+            return f"{path}.{key}" if path else key
+    for key, value in obj.items():
+        if not isinstance(value, dict):
+            continue
+        child_path = f"{path}.{key}" if path else key
+        found = _find_key_path_recursive(
+            value, candidates, child_path, depth=depth + 1, max_depth=max_depth,
+        )
+        if found:
+            return found
+    return None
+
+
+def _strip_query_param(url: str, param: str) -> str:
+    """从 url 的 query 串中移除指定参数，返回重构后的 url。"""
+    parsed = urlparse(url)
+    pairs = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k != param]
+    return urlunparse(parsed._replace(query="&".join(f"{k}={v}" for k, v in pairs)))
+
+
+def _infer_pagination(
+    candidate: ApiCandidate, notes: list[str],
+) -> dict[str, Any] | None:
+    """从 api_url 的 query 参数 + JSON payload 推断分页配置。
+
+    识别 ``page`` / ``pageNo`` / ``currentPage`` 等页码参数，以及
+    ``pageSize`` / ``size`` / ``limit`` 等每页条数参数；再从 payload 中
+    找 ``hasMore`` / ``hasNext`` 或 ``total`` 字段，生成与
+    ``ConfigurableApiProbeAdapter`` 分页引擎兼容的配置。
+
+    Returns:
+        pagination dict（含 page_param / size_param / start_page /
+        max_pages 及 has_more_path 或 total_path），无法识别分页时返回 None。
+    """
+    parsed = urlparse(candidate.api_url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+
+    page_param = next((p for p in _PAGE_PARAM_CANDIDATES if p in query), None)
+    size_param = next((p for p in _PAGE_SIZE_PARAM_CANDIDATES if p in query), None)
+    if page_param is None:
+        return None
+
+    try:
+        start_page = int(query[page_param])
+    except (TypeError, ValueError):
+        start_page = 1
+
+    pagination: dict[str, Any] = {
+        "page_param": page_param,
+        "start_page": start_page,
+        "max_pages": _DEFAULT_DISCOVERY_MAX_PAGES,
+    }
+    if size_param:
+        pagination["size_param"] = size_param
+        try:
+            pagination["size"] = int(query[size_param])
+        except (TypeError, ValueError):
+            pass
+
+    payload = candidate.payload
+    has_more_path = _find_key_path(payload, _HAS_MORE_KEY_CANDIDATES)
+    if has_more_path:
+        pagination["has_more_path"] = has_more_path
+    else:
+        total_path = _find_key_path(payload, _TOTAL_KEY_CANDIDATES)
+        if total_path:
+            pagination["total_path"] = total_path
+            # 给 size 一个默认值，便于运行侧按 total/size 推算是否还有下一页。
+            if "size" not in pagination and size_param is None:
+                pagination["size"] = len(candidate.items) or 10
+
+    notes.append(
+        f"识别到分页参数 page_param={page_param}"
+        + (f"、size_param={size_param}" if size_param else "")
+        + (f"、has_more_path={has_more_path}" if has_more_path else "")
+        + (f"、total_path={total_path}" if not has_more_path and total_path else "")
+        + f"，将自动翻页（最多 {_DEFAULT_DISCOVERY_MAX_PAGES} 页）"
+    )
+    return pagination
+
+
+# ──────────────────────────────────────────────────────────────────
 # Probe 构建 + 自检
 # ──────────────────────────────────────────────────────────────────
 def _build_probe(
@@ -358,13 +498,24 @@ def _build_probe(
             else:
                 notes.append("条目缺少 url 字段且无法推断 url_template")
 
+    # 推断分页：把固定的 page/pageSize query 参数从 url 中剥离，交给分页引擎控制，
+    # 避免 probe 被「page=1&pageSize=10」锁死在第一页。
+    pagination = _infer_pagination(candidate, notes)
+    probe_url = candidate.api_url
+    if pagination:
+        for param in (pagination["page_param"], pagination.get("size_param")):
+            if param:
+                probe_url = _strip_query_param(probe_url, param)
+
     probe: dict[str, Any] = {
         "mode": "json_list",
         "method": candidate.method,
-        "url": candidate.api_url,
+        "url": probe_url,
         "items_path": candidate.items_path or "",
         "fields": fields,
     }
+    if pagination:
+        probe["pagination"] = pagination
     if candidate.method == "POST" and candidate.post_data:
         try:
             probe["json_body"] = json.loads(candidate.post_data)

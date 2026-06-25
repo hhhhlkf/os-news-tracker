@@ -5,13 +5,14 @@ import json
 import pytest
 
 from app.sources.api_discovery import (
+    ApiCandidate,
     ApiDiscoveryResult,
     _build_probe,
     _find_list_arrays,
     _guess_url_template,
+    _infer_pagination,
     _infer_url_template_from_anchors,
     _score,
-    ApiCandidate,
 )
 
 
@@ -240,3 +241,158 @@ class TestApiDiscoveryResult:
         assert d["real_content_count"] == 1
         assert d["notes"] == ["note"]
         assert d["sample_items"][0]["title"] == "T"
+
+
+class TestInferPagination:
+    """测试 _infer_pagination 从 api_url + payload 推断分页配置。"""
+
+    def _candidate(
+        self,
+        api_url: str,
+        *,
+        items_path: str = "data.items",
+        payload: object | None = None,
+    ) -> ApiCandidate:
+        return ApiCandidate(
+            api_url=api_url,
+            method="GET",
+            post_data=None,
+            status=200,
+            items_path=items_path,
+            items=[{"title": "a"}, {"title": "b"}],
+            fields={"title": "title"},
+            score=10,
+            payload=payload,
+        )
+
+    def test_infers_page_and_size_params_with_has_more(self):
+        candidate = self._candidate(
+            "https://openanolis.cn/api/blog/blogByCategoryPage.json?categoryNo=&page=1&pageSize=10",
+            payload={"data": {"items": [], "hasMore": True, "total": 42}},
+        )
+        notes: list[str] = []
+        pagination = _infer_pagination(candidate, notes)
+
+        assert pagination is not None
+        assert pagination["page_param"] == "page"
+        assert pagination["size_param"] == "pageSize"
+        assert pagination["size"] == 10
+        assert pagination["start_page"] == 1
+        assert pagination["has_more_path"] == "data.hasMore"
+        assert pagination["max_pages"] >= 1
+        assert notes  # 推断说明被写入 notes
+
+    def test_infers_total_path_when_no_has_more(self):
+        candidate = self._candidate(
+            "https://example.com/api/articles?page=1&size=5",
+            payload={"data": {"records": [], "total": 23}},
+        )
+        notes: list[str] = []
+        pagination = _infer_pagination(candidate, notes)
+
+        assert pagination is not None
+        assert pagination["page_param"] == "page"
+        assert pagination["size_param"] == "size"
+        assert "has_more_path" not in pagination
+        assert pagination["total_path"] == "data.total"
+
+    def test_returns_none_without_page_param(self):
+        candidate = self._candidate(
+            "https://example.com/api/articles?category=all",
+            payload={"data": {"items": []}},
+        )
+        notes: list[str] = []
+        assert _infer_pagination(candidate, notes) is None
+
+    def test_recognizes_camel_case_page_param(self):
+        candidate = self._candidate(
+            "https://example.com/api/list?currentPage=1&pageSize=20",
+            payload={"data": {"items": [], "hasNext": False}},
+        )
+        notes: list[str] = []
+        pagination = _infer_pagination(candidate, notes)
+
+        assert pagination is not None
+        assert pagination["page_param"] == "currentPage"
+        assert pagination["size_param"] == "pageSize"
+        assert pagination["has_more_path"] == "data.hasNext"
+
+
+class TestBuildProbePagination:
+    """测试 _build_probe 把分页参数从 url 剥离并写入 pagination。"""
+
+    def test_probe_strips_page_params_and_adds_pagination(self):
+        candidate = ApiCandidate(
+            api_url="https://openanolis.cn/api/blog/blogByCategoryPage.json?categoryNo=&page=1&pageSize=10",
+            method="GET",
+            post_data=None,
+            status=200,
+            items_path="data.items",
+            items=[{"title": "a", "no": "1"}, {"title": "b", "no": "2"}],
+            fields={"title": "title"},
+            score=10,
+            payload={"data": {"items": [], "hasMore": True}},
+        )
+        notes: list[str] = []
+        probe = _build_probe(candidate, [], "https://openanolis.cn/blog", notes)
+
+        # page/pageSize 已从 url 剥离，交给分页引擎控制
+        assert "page=" not in probe["url"]
+        assert "pageSize=" not in probe["url"]
+        assert "categoryNo=" in probe["url"]  # 非分页参数保留
+        assert probe["pagination"]["page_param"] == "page"
+        assert probe["pagination"]["size_param"] == "pageSize"
+        assert probe["pagination"]["has_more_path"] == "data.hasMore"
+
+    def test_probe_without_page_params_has_no_pagination(self):
+        candidate = ApiCandidate(
+            api_url="https://api.example.com/list",
+            method="GET",
+            post_data=None,
+            status=200,
+            items_path="data.records",
+            items=[{"title": "a", "url": "u1"}, {"title": "b", "url": "u2"}],
+            fields={"title": "title", "url": "url"},
+            score=10,
+            payload={"data": {"records": []}},
+        )
+        notes: list[str] = []
+        probe = _build_probe(candidate, [], "https://example.com/blog", notes)
+
+        assert "pagination" not in probe
+        assert probe["url"] == "https://api.example.com/list"
+
+
+class TestScorePaginationAwareness:
+    """测试 _score 不再把 blogByCategoryPage 这类分页文章列表误判为元数据。"""
+
+    def test_paginated_article_list_outscore_pure_category_metadata(self):
+        article = _score(
+            items=[{"title": "post", "summary": "s", "no": "1"}] * 10,
+            fields={"title": "title", "published_at": "publishTime", "content": ["summary"]},
+            api_url="https://example.com/api/blog/blogByCategoryPage.json?categoryNo=&page=1",
+            page_url="https://example.com/blog",
+        )
+        metadata = _score(
+            items=[{"name": "cat1", "no": "1"}] * 20,
+            fields={"title": "name", "published_at": "gmtCreate"},
+            api_url="https://example.com/api/blog/getBlogCategory.json",
+            page_url="https://example.com/blog",
+        )
+        assert article > metadata
+
+    def test_pure_category_endpoint_is_penalized(self):
+        """纯分类元数据 API（无 page/list 文章信号）应被扣分。"""
+        penalized = _score(
+            items=[{"name": "cat"}] * 5,
+            fields={"title": "name"},
+            api_url="https://example.com/api/blog/categories.json",
+            page_url="https://example.com/blog",
+        )
+        neutral = _score(
+            items=[{"title": "post"}] * 5,
+            fields={"title": "title"},
+            api_url="https://example.com/api/blog/list",
+            page_url="https://example.com/blog",
+        )
+        assert neutral > penalized

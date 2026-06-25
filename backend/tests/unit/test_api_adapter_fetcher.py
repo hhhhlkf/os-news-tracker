@@ -318,3 +318,223 @@ def test_configurable_html_table_probe_maps_new_source_without_python_adapter() 
     assert items[0].title == "Example ExampleOS 2"
     assert items[0].url == "https://example.com/index/example-os-2/"
     assert items[0].raw_content == "kind=release; modified=2026-06-17 10:30"
+
+
+# ── 分页 probe：模拟 openanolis blogByCategoryPage 这类「page=1&pageSize=10」
+#    被探测固化后，运行侧应能翻页抓取多页内容。 ──────────────────────────
+class _PageResponseRequester:
+    """按 URL 的 page query 参数返回不同页面的 requester。
+
+    每页返回 2 条文章，第 1、2 页 hasMore=true，第 3 页 hasMore=false。
+    记录所有被请求的 URL，供断言翻页行为。
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def __call__(self, url: str) -> str:
+        from urllib.parse import parse_qs, urlparse
+
+        self.calls.append(url)
+        page = int(parse_qs(urlparse(url).query).get("page", ["1"])[0])
+        if page == 1:
+            items = [
+                {"title": "Post A", "no": "a", "summary": "body a"},
+                {"title": "Post B", "no": "b", "summary": "body b"},
+            ]
+            has_more = True
+        elif page == 2:
+            items = [
+                {"title": "Post C", "no": "c", "summary": "body c"},
+                {"title": "Post D", "no": "d", "summary": "body d"},
+            ]
+            has_more = True
+        else:
+            items = [{"title": "Post E", "no": "e", "summary": "body e"}]
+            has_more = False
+        import json
+
+        return json.dumps({"data": {"items": items, "hasMore": has_more}})
+
+
+def test_configurable_json_probe_paginates_across_pages_via_has_more() -> None:
+    """probe 带 pagination.has_more_path 时应循环翻页直到 hasMore=false。"""
+    requester = _PageResponseRequester()
+    source = Source(
+        id=20,
+        name="OpenAnolis Blog",
+        type="api",
+        url="https://openanolis.cn/api/blog/blogByCategoryPage.json",
+        api_config={
+            "probe": {
+                "mode": "json_list",
+                "method": "GET",
+                "url": "https://openanolis.cn/api/blog/blogByCategoryPage.json?categoryNo=",
+                "items_path": "data.items",
+                "fields": {
+                    "title": "title",
+                    "url_template": "https://openanolis.cn/blog/{no}",
+                    "content": "summary",
+                },
+                "pagination": {
+                    "page_param": "page",
+                    "size_param": "pageSize",
+                    "size": 10,
+                    "start_page": 1,
+                    "max_pages": 5,
+                    "has_more_path": "data.hasMore",
+                },
+            }
+        },
+    )
+
+    items = ApiAdapterFetcher(requester=requester).fetch(source)
+
+    # 3 页（2+2+1）= 5 条
+    assert len(items) == 5
+    assert [i.title for i in items] == ["Post A", "Post B", "Post C", "Post D", "Post E"]
+    # 应当在 hasMore=false 的第 3 页后停止，而不是抓满 max_pages=5
+    assert len(requester.calls) == 3
+    # 每一页都注入了 page 和 pageSize 参数
+    assert "page=1" in requester.calls[0] and "pageSize=10" in requester.calls[0]
+    assert "page=2" in requester.calls[1] and "pageSize=10" in requester.calls[1]
+    assert "page=3" in requester.calls[2] and "pageSize=10" in requester.calls[2]
+
+
+class _TotalResponseRequester:
+    """按 page 参数返回页面；用 data.total 控制终止（total=7, size=2 → 4 页）。"""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def __call__(self, url: str) -> str:
+        from urllib.parse import parse_qs, urlparse
+        import json
+
+        self.calls.append(url)
+        page = int(parse_qs(urlparse(url).query).get("page", ["1"])[0])
+        # 第 4 页只有 1 条（7 = 2+2+2+1）
+        if page <= 3:
+            items = [
+                {"title": f"Post {page}-1", "id": f"{page}-1"},
+                {"title": f"Post {page}-2", "id": f"{page}-2"},
+            ]
+        else:
+            items = [{"title": f"Post {page}-1", "id": f"{page}-1"}]
+        return json.dumps({"data": {"records": items, "total": 7}})
+
+
+def test_configurable_json_probe_paginates_via_total_path() -> None:
+    """没有 has_more_path、只有 total_path + size 时，应按 total/size 推算终止。"""
+    requester = _TotalResponseRequester()
+    source = Source(
+        id=21,
+        name="Paged via total",
+        type="api",
+        url="https://example.com/api/articles",
+        api_config={
+            "probe": {
+                "mode": "json_list",
+                "method": "GET",
+                "url": "https://example.com/api/articles",
+                "items_path": "data.records",
+                "fields": {
+                    "title": "title",
+                    "url_template": "https://example.com/a/{id}",
+                },
+                "pagination": {
+                    "page_param": "page",
+                    "size_param": "size",
+                    "size": 2,
+                    "start_page": 1,
+                    "max_pages": 10,
+                    "total_path": "data.total",
+                },
+            }
+        },
+    )
+
+    items = ApiAdapterFetcher(requester=requester).fetch(source)
+
+    # total=7, size=2 → 第 4 页后 (4*2=8 >= 7) 停止，共 7 条
+    assert len(items) == 7
+    assert len(requester.calls) == 4
+    assert "size=2" in requester.calls[0]
+
+
+def test_configurable_json_probe_pagination_respects_max_pages() -> None:
+    """max_pages 应作为硬上限，即使 hasMore 一直为 true 也要停下。"""
+
+    class _AlwaysMoreRequester:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def __call__(self, url: str) -> str:
+            from urllib.parse import parse_qs, urlparse
+            import json
+
+            self.calls.append(url)
+            page = int(parse_qs(urlparse(url).query).get("page", ["1"])[0])
+            return json.dumps(
+                {"data": {"items": [{"title": f"P{page}", "no": str(page)}], "hasMore": True}}
+            )
+
+    requester = _AlwaysMoreRequester()
+    source = Source(
+        id=22,
+        name="Always more",
+        type="api",
+        url="https://example.com/api/inf",
+        api_config={
+            "probe": {
+                "mode": "json_list",
+                "method": "GET",
+                "url": "https://example.com/api/inf",
+                "items_path": "data.items",
+                "fields": {
+                    "title": "title",
+                    "url_template": "https://example.com/inf/{no}",
+                },
+                "pagination": {
+                    "page_param": "page",
+                    "start_page": 1,
+                    "max_pages": 3,
+                    "has_more_path": "data.hasMore",
+                },
+            }
+        },
+    )
+
+    items = ApiAdapterFetcher(requester=requester).fetch(source)
+
+    assert len(items) == 3
+    assert len(requester.calls) == 3
+
+
+def test_configurable_json_probe_without_pagination_stays_single_request() -> None:
+    """无 pagination 字段时保持原有单请求行为，不引入翻页。"""
+    requester = FakeTextRequester(
+        {
+            "https://example.com/one.json": """
+            { "items": [ { "title": "Only", "url": "https://example.com/only" } ] }
+            """
+        }
+    )
+    source = Source(
+        id=23,
+        name="No pagination",
+        type="api",
+        url="https://example.com/one.json",
+        api_config={
+            "probe": {
+                "mode": "json_list",
+                "items_path": "items",
+                "fields": {"title": "title", "url": "url"},
+            }
+        },
+    )
+
+    items = ApiAdapterFetcher(requester=requester).fetch(source)
+
+    assert len(items) == 1
+    assert requester.calls == ["https://example.com/one.json"]

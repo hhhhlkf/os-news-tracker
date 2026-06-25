@@ -115,6 +115,13 @@ class ConfigurableApiProbeAdapter:
         probe_headers = probe.get("headers") or {}
         probe_query = probe.get("query") or {}
         json_body = probe.get("json_body")
+        pagination = probe.get("pagination") if isinstance(probe.get("pagination"), dict) else None
+
+        if pagination and pagination.get("page_param"):
+            return self._fetch_json_list_paginated(
+                source, requester, probe, pagination,
+            )
+
         if method == "POST" or isinstance(json_body, dict):
             text = _http_request(
                 str(probe.get("url") or source.url),
@@ -130,35 +137,146 @@ class ConfigurableApiProbeAdapter:
         raw_items = _get_path(payload, probe.get("items_path"))
         if not isinstance(raw_items, list):
             return []
+        return self._items_from_raw_list(source, raw_items, probe.get("fields") or {})
+
+    def _fetch_json_list_paginated(
+        self,
+        source: Source,
+        requester: TextRequester,
+        probe: dict,
+        pagination: dict,
+    ) -> list[RawItem]:
+        """Loop over pages until ``max_pages`` or no more items / has_more=false.
+
+        Supports two ``next page`` signals:
+        - ``has_more_path``: a boolean field in the payload (e.g. ``data.hasMore``).
+        - ``total_path`` + ``size``: stop once ``page * size >= total``.
+
+        Page/size params are injected into the query string (GET) or the JSON
+        body (POST) on each iteration.
+        """
+        method = str(probe.get("method") or "GET").upper()
+        base_url = str(probe.get("url") or source.url)
+        probe_headers = probe.get("headers") or {}
+        probe_query = dict(probe.get("query") or {})
+        json_body_template = probe.get("json_body")
+        is_post = method == "POST" or isinstance(json_body_template, dict)
+
+        page_param = str(pagination.get("page_param"))
+        size_param = pagination.get("size_param")
+        size_value = pagination.get("size")
+        try:
+            page = int(pagination.get("start_page", 1))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            max_pages = int(pagination.get("max_pages", 1))
+        except (TypeError, ValueError):
+            max_pages = 1
+        items_path = probe.get("items_path")
         fields = probe.get("fields") or {}
+        has_more_path = pagination.get("has_more_path")
+        total_path = pagination.get("total_path")
+
+        collected: list[RawItem] = []
+        seen_urls: set[str] = set()
+        empty_streak = 0
+        for _ in range(max_pages):
+            page_query = dict(probe_query)
+            page_query[page_param] = str(page)
+            if size_param and size_value is not None:
+                page_query[size_param] = str(size_value)
+
+            if is_post:
+                body = dict(json_body_template) if isinstance(json_body_template, dict) else {}
+                body[page_param] = page
+                if size_param and size_value is not None:
+                    body[size_param] = size_value
+                text = _http_request(
+                    base_url,
+                    method=method,
+                    headers=probe_headers if isinstance(probe_headers, dict) else None,
+                    query=page_query or None,
+                    json_body=body,
+                )
+            else:
+                url = _url_with_default_query(base_url, page_query)
+                text = requester(url)
+
+            payload = _parse_json_lenient(text)
+            raw_items = _get_path(payload, items_path)
+            if not isinstance(raw_items, list):
+                break
+
+            page_items: list[RawItem] = []
+            for raw_item in raw_items:
+                if not isinstance(raw_item, dict):
+                    continue
+                item = self._build_raw_item(source, raw_item, fields)
+                if item is None or item.url in seen_urls:
+                    continue
+                seen_urls.add(item.url)
+                page_items.append(item)
+            collected.extend(page_items)
+
+            # 终止判定：has_more / total / 连续空页
+            if has_more_path:
+                if not bool(_get_path(payload, has_more_path)):
+                    break
+            elif total_path and size_value:
+                total = _get_path(payload, total_path)
+                try:
+                    if int(total) <= page * int(size_value):
+                        break
+                except (TypeError, ValueError):
+                    pass
+
+            if not page_items:
+                empty_streak += 1
+                if empty_streak >= 2:
+                    break
+            else:
+                empty_streak = 0
+            page += 1
+
+        return collected
+
+    @staticmethod
+    def _build_raw_item(source: Source, raw_item: dict, fields: dict) -> RawItem | None:
+        """Convert one raw JSON record into a RawItem, or None if missing title/url."""
+        ctx = {**raw_item, "item": _DictWrapper(raw_item)}
+        title = _render_config_template(fields.get("title_template"), ctx)
+        if not title:
+            title = _field_value(raw_item, fields.get("title"))
+        url_value = _json_item_url(raw_item, fields)
+        if not title or not url_value:
+            return None
+        content = _join_content(
+            *[
+                _field_value(raw_item, field)
+                for field in _field_list(fields.get("content"))
+            ]
+        )
+        return RawItem(
+            source_id=source.id,
+            title=str(title),
+            url=str(url_value),
+            raw_content=content,
+            published_at=_parse_datetime(
+                _field_value(raw_item, fields.get("published_at"))
+            ),
+        )
+
+    def _items_from_raw_list(
+        self, source: Source, raw_items: list, fields: dict
+    ) -> list[RawItem]:
         items: list[RawItem] = []
         for raw_item in raw_items:
             if not isinstance(raw_item, dict):
                 continue
-            ctx = {**raw_item, "item": _DictWrapper(raw_item)}
-            title = _render_config_template(fields.get("title_template"), ctx)
-            if not title:
-                title = _field_value(raw_item, fields.get("title"))
-            url_value = _json_item_url(raw_item, fields)
-            content = _join_content(
-                *[
-                    _field_value(raw_item, field)
-                    for field in _field_list(fields.get("content"))
-                ]
-            )
-            if not title or not url_value:
-                continue
-            items.append(
-                RawItem(
-                    source_id=source.id,
-                    title=str(title),
-                    url=str(url_value),
-                    raw_content=content,
-                    published_at=_parse_datetime(
-                        _field_value(raw_item, fields.get("published_at"))
-                    ),
-                )
-            )
+            item = self._build_raw_item(source, raw_item, fields)
+            if item is not None:
+                items.append(item)
         return items
 
     def _fetch_html_table(
