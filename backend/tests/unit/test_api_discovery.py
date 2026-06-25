@@ -14,6 +14,7 @@ from app.sources.api_discovery import (
     _infer_url_template_from_anchors,
     _score,
     _strip_pagination_params,
+    discover_api_source,
 )
 
 
@@ -440,3 +441,62 @@ class TestStripPaginationParams:
         probe_pagination = {"page_param": "page"}
         url = "https://example.com/api/list?category=all"
         assert _strip_pagination_params(url, probe_pagination) == url
+
+
+class TestDiscoverApiSourcePagination:
+    """测试 discover_api_source 成功路径回填 pagination 并用干净 URL。"""
+
+    def _setup_success(self, monkeypatch, *, api_url, payload):
+        """把 _capture_and_render 和 _self_check_probe 桩成返回成功候选。"""
+        captured = [{
+            "api_url": api_url,
+            "method": "GET",
+            "post_data": None,
+            "status": 200,
+            "payload": payload,
+        }]
+        monkeypatch.setattr(
+            "app.sources.api_discovery._capture_and_render",
+            lambda url, **kw: (captured, []),
+        )
+
+        from app.schemas import RawItem
+
+        def fake_self_check(probe):
+            # 自检只需返回一个带 title+url 的条目即可让候选通过
+            return [RawItem(source_id=0, title="t", url="https://example.com/a/1", raw_content="", published_at=None)]
+
+        monkeypatch.setattr(
+            "app.sources.api_discovery._self_check_probe",
+            fake_self_check,
+        )
+
+    def test_success_fills_pagination_and_clean_url(self, monkeypatch):
+        api_url = "https://openanolis.cn/api/blog/blogByCategoryPage.json?categoryNo=&page=1&pageSize=10"
+        payload = {"data": {"items": [{"title": "a", "no": "1"}, {"title": "b", "no": "2"}], "hasMore": True}}
+        self._setup_success(monkeypatch, api_url=api_url, payload=payload)
+
+        result = discover_api_source("https://openanolis.cn/blog")
+
+        assert result.success is True
+        # pagination 被回填
+        assert result.pagination is not None
+        assert result.pagination["page_param"] == "page"
+        assert result.pagination["size_param"] == "pageSize"
+        assert result.pagination["has_more_path"] == "data.hasMore"
+        # api_url 是剥离分页参数后的干净 URL
+        assert "page=" not in result.api_url
+        assert "pageSize=" not in result.api_url
+        assert "categoryNo=" in result.api_url
+
+    def test_non_paginated_api_has_none_pagination(self, monkeypatch):
+        api_url = "https://api.example.com/list?category=all"
+        payload = {"items": [{"title": "a", "url": "https://example.com/a"}, {"title": "b", "url": "https://example.com/b"}]}
+        self._setup_success(monkeypatch, api_url=api_url, payload=payload)
+
+        result = discover_api_source("https://example.com/blog")
+
+        assert result.success is True
+        assert result.pagination is None
+        # 非分页 API，URL 原样保留
+        assert result.api_url == "https://api.example.com/list?category=all"

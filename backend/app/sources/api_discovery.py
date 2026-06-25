@@ -638,10 +638,11 @@ def discover_api_source(
 
         # Success — use this candidate
         result.success = True
-        result.api_url = best.api_url
+        result.api_url = _strip_pagination_params(best.api_url, probe.get("pagination"))
         result.method = best.method
         result.items_path = best.items_path or ""
         result.fields = probe["fields"]
+        result.pagination = probe.get("pagination")
         result.name_suggestion = _domain_name(root_url)
         result.real_content_count = len(valid)
         result.sample_items = [
