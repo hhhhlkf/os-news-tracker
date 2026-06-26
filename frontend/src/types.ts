@@ -150,6 +150,9 @@ export interface SourceCreateRequest {
   type?: string | null;
   adapter?: string | null;
   api_config?: Record<string, unknown> | null;
+  link_selector?: string | null;
+  title_selector?: string | null;
+  date_selector?: string | null;
 }
 
 export interface DiscoverSampleItem {

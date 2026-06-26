@@ -13,6 +13,7 @@ from app.api.source_cleanup import delete_source_and_related
 from app.enums import MAIN_CATEGORIES, SourceType, Stream
 from app.models import Source
 from app.sources.detector import SourceDetectionError, detect_source
+from app.sources.html_list_discovery import discover_html_list_source
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,9 @@ class SourceCreateRequest(BaseModel):
     type: str | None = None
     adapter: str | None = None
     api_config: dict[str, Any] | None = None
+    link_selector: str | None = None
+    title_selector: str | None = None
+    date_selector: str | None = None
 
 
 class DiscoverRequest(BaseModel):
@@ -119,6 +123,20 @@ def create_source(
         api_config = result.api_config
         name = (body.name or result.name_suggestion).strip()
 
+    link_selector = body.link_selector
+    title_selector = body.title_selector
+    date_selector = body.date_selector
+    if source_type == SourceType.PAGE_MONITOR.value and not link_selector:
+        discovery = discover_html_list_source(str(body.url))
+        if not discovery.success or not discovery.link_selector:
+            raise HTTPException(
+                status_code=422,
+                detail="未能自动识别新闻列表结构，请改用 RSS/API 或智能探测",
+            )
+        link_selector = discovery.link_selector
+        title_selector = discovery.title_selector
+        date_selector = discovery.date_selector
+
     source = Source(
         name=name,
         type=source_type,
@@ -126,6 +144,9 @@ def create_source(
         api_config=api_config,
         adapter=body.adapter,
         main_category=body.main_category,
+        link_selector=link_selector,
+        title_selector=title_selector,
+        date_selector=date_selector,
         stream=Stream.NEWS,
         enabled=True,
     )

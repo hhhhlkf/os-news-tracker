@@ -41,7 +41,7 @@ const defaultApi: SourceManagerApi = {
 const typeLabels: Record<string, string> = {
   rss: "RSS",
   api: "API",
-  page_monitor: "网页",
+  page_monitor: "新闻列表页",
   search: "搜索",
   agent_crawl: "Agent",
 };
@@ -304,7 +304,7 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 700, color: "#101828" }}>抓取来源</div>
-          <div style={{ fontSize: 12, color: "#667085", marginTop: 4 }}>管理 RSS、API 和网页监控来源，Agent 候选会自动同步。</div>
+          <div style={{ fontSize: 12, color: "#667085", marginTop: 4 }}>管理 RSS、API 和新闻列表页来源，Agent 候选会自动同步。</div>
         </div>
         <button type="button" onClick={() => setExpanded((value) => !value)} style={sectionToggleStyle}>
           {expanded ? "收起" : "展开"}
@@ -463,6 +463,12 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
                           </pre>
                         </details>
                       )}
+                    </div>
+                  )}
+
+                  {advType === "page_monitor" && (
+                    <div style={{ border: "1px solid #d1e9ff", background: "#f0f9ff", color: "#175cd3", borderRadius: 8, padding: 10, fontSize: 13 }}>
+                      系统会自动识别文章链接、标题和发布日期；适合新闻/博客列表页。若规则识别不完整，后端会调用 LLM 兜底判断。
                     </div>
                   )}
 

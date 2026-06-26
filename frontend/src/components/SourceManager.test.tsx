@@ -105,6 +105,44 @@ describe("SourceManager", () => {
     expect(container.textContent).toContain("高级添加");
   });
 
+  it("creates a news list page source without asking users for selectors", async () => {
+    const api = makeApi();
+    await act(async () => {
+      root.render(<SourceManager api={api} />);
+    });
+    await flush();
+
+    click(container.querySelector("button")!);
+    await flush();
+    click(findButton("添加来源")!);
+    await flush();
+    click(findButton("高级添加")!);
+    await flush();
+
+    input(container.querySelector("input[placeholder='https://example.com/feed.xml']")!, "https://rockylinux.org/news");
+    const typeSelect = container.querySelectorAll("select")[1] as HTMLSelectElement;
+    act(() => {
+      typeSelect.value = "page_monitor";
+      typeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+
+    expect(container.textContent).toContain("新闻列表页");
+    expect(container.textContent).toContain("系统会自动识别文章链接、标题和发布日期");
+    expect(container.textContent).not.toContain("link_selector");
+    expect(container.textContent).not.toContain("date_selector");
+
+    click(findButton("确认添加")!);
+    await flush();
+
+    expect(api.createSource).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://rockylinux.org/news",
+        type: "page_monitor",
+      }),
+    );
+  });
+
   it("deletes a source after confirmation", async () => {
     const api = makeApi({
       fetchSources: vi.fn().mockResolvedValue([

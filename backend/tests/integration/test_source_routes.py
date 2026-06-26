@@ -108,6 +108,44 @@ def test_create_source_redetects_and_persists_news_source(client):
     assert source.api_config == detect_result.api_config
 
 
+def test_create_page_monitor_auto_discovers_html_list_selectors(client):
+    from app.sources.html_list_discovery import HtmlListDiscoveryResult, HtmlListSampleItem
+
+    discovery = HtmlListDiscoveryResult(
+        success=True,
+        link_selector='a[href^="/news/"]',
+        title_selector="h3",
+        date_selector="p.text-sm.text-muted-foreground",
+        sample_items=[
+            HtmlListSampleItem(
+                title="Rocky Linux 10.2 Available Now",
+                url="https://rockylinux.org/news/rocky-linux-10-2-ga-release",
+                date_text="May 28, 2026",
+            )
+        ],
+    )
+
+    with patch("app.api.source_routes.discover_html_list_source", return_value=discovery) as discover:
+        response = client.post(
+            "/sources",
+            json={
+                "url": "https://rockylinux.org/news",
+                "name": "Rocky News",
+                "main_category": "友商产品信息",
+                "type": "page_monitor",
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    session = client.app.dependency_overrides[get_db]()
+    source = session.get(Source, payload["id"])
+    assert source.link_selector == 'a[href^="/news/"]'
+    assert source.title_selector == "h3"
+    assert source.date_selector == "p.text-sm.text-muted-foreground"
+    discover.assert_called_once_with("https://rockylinux.org/news")
+
+
 def test_create_source_rejects_invalid_category(client):
     response = client.post(
         "/sources",
