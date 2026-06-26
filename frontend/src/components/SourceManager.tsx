@@ -5,7 +5,6 @@ import {
   createSource,
   createSourceFromProbe,
   deleteSource,
-  detectSource,
   discoverSource,
   fetchSources,
 } from "../api/client";
@@ -13,14 +12,12 @@ import type {
   CrawlSource,
   DiscoverResponse,
   SourceCreateRequest,
-  SourceDetectResponse,
   SourceShape,
 } from "../types";
 import { MAIN_CATEGORIES } from "../types";
 
 interface SourceManagerApi {
   fetchSources: typeof fetchSources;
-  detectSource: typeof detectSource;
   createSource: typeof createSource;
   deleteSource: typeof deleteSource;
   discoverSource: typeof discoverSource;
@@ -35,7 +32,6 @@ interface SourceManagerProps {
 
 const defaultApi: SourceManagerApi = {
   fetchSources,
-  detectSource,
   createSource,
   deleteSource,
   discoverSource,
@@ -53,7 +49,7 @@ const typeLabels: Record<string, string> = {
 const SOURCE_TYPES: SourceShape[] = ["rss", "api", "page_monitor", "search"];
 const SOURCE_PAGE_SIZE = 5;
 
-type AddMode = "auto" | "advanced" | "discover";
+type AddMode = "advanced" | "discover";
 
 export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSignal = 0 }: SourceManagerProps) {
   const [sources, setSources] = useState<CrawlSource[]>([]);
@@ -61,15 +57,12 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
   const [expanded, setExpanded] = useState(false);
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState(1);
-  const [addMode, setAddMode] = useState<AddMode>("auto");
+  const [addMode, setAddMode] = useState<AddMode>("discover");
 
   // Shared fields
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
   const [mainCategory, setMainCategory] = useState<string>(MAIN_CATEGORIES[0]);
-
-  // Auto-detect
-  const [detectResult, setDetectResult] = useState<SourceDetectResponse | null>(null);
 
   // Advanced
   const [advType, setAdvType] = useState<string>("rss");
@@ -144,45 +137,6 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
       return false;
     }
     return true;
-  }
-
-  // ── Auto detect ──
-
-  async function handleDetect() {
-    if (!validateUrl()) return;
-    setBusy(true);
-    try {
-      const result = await api.detectSource(url.trim());
-      setDetectResult(result);
-      if (!name.trim()) setName(result.name_suggestion);
-      setError(null);
-    } catch (err) {
-      setDetectResult(null);
-      setError(err instanceof ApiError ? err.message : "无法识别链接形态");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleAutoCreate() {
-    if (!validateUrl()) return;
-    setBusy(true);
-    try {
-      const request: SourceCreateRequest = {
-        url: url.trim(),
-        name: name.trim() || null,
-        main_category: mainCategory,
-      };
-      await api.createSource(request);
-      resetForm();
-      await loadSources();
-      await onSourcesChanged?.();
-      setError(null);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "创建抓取来源失败");
-    } finally {
-      setBusy(false);
-    }
   }
 
   // ── Advanced create ──
@@ -321,7 +275,6 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
     setUrl("");
     setName("");
     setMainCategory(MAIN_CATEGORIES[0]);
-    setDetectResult(null);
     setAdvType("rss");
     setAdvMethod("GET");
     setAdvItemsPath("");
@@ -334,7 +287,7 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
     setAdvJsonBody("");
     setDiscoverResult(null);
     setDiscoverAutoCreate(false);
-    setAddMode("auto");
+    setAddMode("discover");
   }
 
   return (
@@ -387,7 +340,6 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
               {/* Mode selector */}
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {([
-                  { key: "auto", label: "自动识别" },
                   { key: "discover", label: "智能探测" },
                   { key: "advanced", label: "高级添加" },
                 ] as { key: AddMode; label: string }[]).map((m) => (
@@ -419,32 +371,6 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
                   </select>
                 </label>
               </div>
-
-              {/* Auto mode */}
-              {addMode === "auto" && (
-                <>
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <button type="button" onClick={() => void handleDetect()} disabled={busy} style={buttonStyle("#fff", "#344054")}>
-                      {busy ? "识别中" : "识别链接形态"}
-                    </button>
-                    <button type="button" onClick={() => void handleAutoCreate()} disabled={busy || !detectResult} style={buttonStyle("#175cd3", "#fff")}>
-                      确认添加
-                    </button>
-                  </div>
-                  {detectResult && (
-                    <div style={infoBoxStyle("#bfd7ff", "#eff6ff", "#175cd3")}>
-                      <div style={{ fontWeight: 700, marginBottom: 6 }}>识别结果：{typeLabels[detectResult.detected_type] ?? detectResult.detected_type}</div>
-                      {detectResult.notes.map((note) => <div key={note}>{note}</div>)}
-                      {detectResult.api_config && (
-                        <details style={{ marginTop: 8 }}>
-                          <summary style={{ cursor: "pointer", fontWeight: 700 }}>API 配置预览</summary>
-                          <pre style={{ whiteSpace: "pre-wrap", margin: "8px 0 0", fontSize: 12 }}>{JSON.stringify(detectResult.api_config, null, 2)}</pre>
-                        </details>
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
 
               {/* Advanced mode */}
               {addMode === "advanced" && (

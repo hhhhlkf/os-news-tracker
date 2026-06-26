@@ -5,19 +5,13 @@ import type { ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SourceManager } from "./SourceManager";
-import type { CrawlSource, SourceDetectResponse } from "../types";
+import type { CrawlSource } from "../types";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 function makeApi(overrides: Partial<ComponentProps<typeof SourceManager>["api"]> = {}) {
   return {
     fetchSources: vi.fn<() => Promise<CrawlSource[]>>().mockResolvedValue([]),
-    detectSource: vi.fn<(url: string) => Promise<SourceDetectResponse>>().mockResolvedValue({
-      detected_type: "rss",
-      name_suggestion: "Detected Feed",
-      api_config: null,
-      notes: ["识别为 RSS/Atom 订阅源。"],
-    }),
     createSource: vi.fn().mockResolvedValue({
       id: 2,
       name: "Detected Feed",
@@ -92,7 +86,7 @@ describe("SourceManager", () => {
     vi.restoreAllMocks();
   });
 
-  it("validates url before detection", async () => {
+  it("does not expose automatic source detection", async () => {
     const api = makeApi();
     await act(async () => {
       root.render(<SourceManager api={api} />);
@@ -104,47 +98,11 @@ describe("SourceManager", () => {
     await flush();
     click(findButton("添加来源")!);
     await flush();
-    click(findButton("识别链接形态")!);
 
-    expect(container.textContent).toContain("请先填写网址");
-    expect(api.detectSource).not.toHaveBeenCalled();
-  });
-
-  it("shows detect result and creates a source", async () => {
-    const api = makeApi({
-      detectSource: vi.fn().mockResolvedValue({
-        detected_type: "api",
-        name_suggestion: "API News",
-        api_config: { probe: { mode: "json_list" } },
-        notes: ["识别为 JSON API。"],
-      }),
-    });
-    const onSourcesChanged = vi.fn();
-    await act(async () => {
-      root.render(<SourceManager api={api} onSourcesChanged={onSourcesChanged} />);
-    });
-    await flush();
-
-    click(container.querySelector("button")!);
-    await flush();
-    click(findButton("添加来源")!);
-    await flush();
-    input(container.querySelector("input[placeholder='https://example.com/feed.xml']")!, "https://api.example.com/news");
-    click(findButton("识别链接形态")!);
-    await flush();
-
-    expect(container.textContent).toContain("识别结果：API");
-    expect(container.textContent).toContain("识别为 JSON API。");
-
-    click(findButton("确认添加")!);
-    await flush();
-
-    expect(api.createSource).toHaveBeenCalledWith({
-      url: "https://api.example.com/news",
-      name: "API News",
-      main_category: "OS跟踪来源",
-    });
-    expect(onSourcesChanged).toHaveBeenCalledOnce();
+    expect(container.textContent).not.toContain("自动识别");
+    expect(container.textContent).not.toContain("识别链接形态");
+    expect(container.textContent).toContain("智能探测");
+    expect(container.textContent).toContain("高级添加");
   });
 
   it("deletes a source after confirmation", async () => {
