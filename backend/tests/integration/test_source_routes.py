@@ -324,3 +324,110 @@ def test_create_from_probe_persists_api_source_in_list(client):
     listed = client.get("/sources").json()
     assert payload["id"] in [s["id"] for s in listed]
     assert "OpenAnolis 博客" in [s["name"] for s in listed]
+
+
+def test_create_from_probe_overwrites_existing_source_for_same_url(client):
+    """同 URL 的已存在 api 来源应被覆盖更新，而非新建一条。"""
+    first = client.post(
+        "/sources/create-from-probe",
+        json={
+            "api_url": "https://api.openanolis.cn/blog/list",
+            "method": "GET",
+            "items_path": "data.records",
+            "fields": {"title": "title", "url": "url"},
+            "name": "旧名",
+            "main_category": "软件包适配",
+        },
+    )
+    assert first.status_code == 201
+    first_id = first.json()["id"]
+
+    second = client.post(
+        "/sources/create-from-probe",
+        json={
+            "api_url": "https://api.openanolis.cn/blog/list",
+            "method": "POST",
+            "items_path": "obj.records",
+            "fields": {"title": "title", "url_template": "https://x/{item.path}"},
+            "pagination": {"page_param": "page", "size_param": "pageSize", "size": 12, "total_path": "obj.count"},
+            "json_body": {"category": "blog", "lang": "zh"},
+            "name": "新名",
+            "main_category": "友商产品信息",
+        },
+    )
+    assert second.status_code == 201
+    second_id = second.json()["id"]
+
+    # 同 URL → 复用同一条 source，不新建
+    assert second_id == first_id
+    assert second.json()["name"] == "新名"
+    assert second.json()["main_category"] == "友商产品信息"
+
+    # DB 里的 probe 被新配置覆盖（含 pagination + json_body）
+    session = client.app.dependency_overrides[get_db]()
+    source = session.get(Source, second_id)
+    probe = source.api_config["probe"]
+    assert probe["method"] == "POST"
+    assert probe["items_path"] == "obj.records"
+    assert probe["fields"]["url_template"] == "https://x/{item.path}"
+    assert probe["pagination"]["total_path"] == "obj.count"
+    assert probe["json_body"] == {"category": "blog", "lang": "zh"}
+
+    # 只有一条 source，不是两条
+    listed = client.get("/sources").json()
+    assert sum(1 for s in listed if s["url"] == "https://api.openanolis.cn/blog/list") == 1
+
+
+def test_discover_create_overwrites_existing_source_probe(client):
+    """探测 + 自动创建时，同 URL 的旧 api 来源 probe 被覆盖（含 pagination/json_body）。"""
+    from app.sources.api_discovery import ApiDiscoveryResult
+
+    # 先建一条旧 probe（无分页、无 json_body），模拟过期缓存
+    session = client.app.dependency_overrides[get_db]()
+    stale = Source(
+        name="旧 openeuler",
+        type="api",
+        url="https://www.openeuler.org/api-search/search/sort/blog",
+        api_config={"probe": {"mode": "json_list", "method": "POST", "url": "https://www.openeuler.org/api-search/search/sort/blog", "items_path": "obj.records", "fields": {"title": "title"}}},
+        main_category="OS跟踪来源",
+        stream="news",
+        enabled=True,
+    )
+    session.add(stale)
+    session.commit()
+    stale_id = stale.id
+
+    result = ApiDiscoveryResult(
+        root_url="https://www.openeuler.org/zh/interaction/blog-list/",
+        success=True,
+        api_url="https://www.openeuler.org/api-search/search/sort/blog",
+        method="POST",
+        items_path="obj.records",
+        fields={"title": "title", "published_at": "date", "url_template": "https://www.openeuler.org/{item.path}.html"},
+        pagination={"page_param": "page", "size_param": "pageSize", "size": 12, "total_path": "obj.count"},
+        json_body={"category": "blog", "lang": "zh"},
+        name_suggestion="openeuler.org",
+        real_content_count=12,
+    )
+    with patch("app.sources.api_discovery.discover_api_source", return_value=result):
+        response = client.post(
+            "/sources/discover",
+            json={
+                "url": "https://www.openeuler.org/zh/interaction/blog-list/",
+                "create_source": True,
+                "main_category": "OS跟踪来源",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    created_id = response.json()["created_source"]["id"]
+    # 复用旧 source，不新建
+    assert created_id == stale_id
+
+    session.expire_all()
+    source = session.get(Source, stale_id)
+    probe = source.api_config["probe"]
+    # 旧 probe 被覆盖：含 url_template、pagination、json_body
+    assert probe["fields"]["url_template"] == "https://www.openeuler.org/{item.path}.html"
+    assert probe["pagination"]["total_path"] == "obj.count"
+    assert probe["json_body"] == {"category": "blog", "lang": "zh"}

@@ -72,6 +72,8 @@ class CreateFromProbeRequest(BaseModel):
     method: str = "GET"
     items_path: str | None = None
     fields: dict[str, Any] = Field(default_factory=dict)
+    pagination: dict[str, Any] | None = None
+    json_body: dict[str, Any] | None = None
     name: str | None = None
     main_category: str
 
@@ -171,7 +173,8 @@ def discover_source_route(body: DiscoverRequest, db: Session = Depends(get_db)):
     """智能探测：用 Playwright 渲染页面，捕获 JSON XHR/Fetch 响应，
     识别文章列表 API，生成与 ApiAdapterFetcher 兼容的 probe 配置并自检。
 
-    若 ``create_source`` 为真，则把 probe 落地为标准 ``api`` 来源。
+    若 ``create_source`` 为真，则把 probe 落地为标准 ``api`` 来源
+    （同 URL 的已存在 api 来源会被覆盖更新，而非新建）。
     """
     from app.sources.api_discovery import discover_api_source
 
@@ -189,12 +192,14 @@ def discover_source_route(body: DiscoverRequest, db: Session = Depends(get_db)):
         main_category = body.main_category or (MAIN_CATEGORIES[0] if MAIN_CATEGORIES else None)
         if main_category not in MAIN_CATEGORIES:
             raise HTTPException(status_code=422, detail="未知内容类型")
-        source = _create_api_source_from_probe(
+        source = _upsert_api_source_from_probe(
             db,
             api_url=result.api_url,
             method=result.method,
             items_path=result.items_path or "",
             fields=result.fields,
+            pagination=result.pagination,
+            json_body=result.json_body,
             name=(body.name or result.name_suggestion or "").strip(),
             main_category=main_category,
         )
@@ -211,35 +216,47 @@ def discover_source_route(body: DiscoverRequest, db: Session = Depends(get_db)):
 
 @router.post("/create-from-probe", status_code=201)
 def create_source_from_probe_route(body: CreateFromProbeRequest, db: Session = Depends(get_db)):
-    """用智能探测得到的 probe 配置直接创建标准 API 来源（不重新跑探测）。"""
+    """用智能探测得到的 probe 配置创建/更新标准 API 来源（不重新跑探测）。
+
+    同 URL 的已存在 api 来源会被覆盖更新，而非新建。
+    """
     if body.main_category not in MAIN_CATEGORIES:
         raise HTTPException(status_code=422, detail="未知内容类型")
     if not body.api_url:
         raise HTTPException(status_code=422, detail="缺少 api_url")
 
-    source = _create_api_source_from_probe(
+    source = _upsert_api_source_from_probe(
         db,
         api_url=body.api_url,
         method=body.method,
         items_path=body.items_path or "",
         fields=body.fields or {},
+        pagination=body.pagination,
+        json_body=body.json_body,
         name=(body.name or "").strip(),
         main_category=body.main_category,
     )
     return _source_response(source)
 
 
-def _create_api_source_from_probe(
+def _upsert_api_source_from_probe(
     db: Session,
     *,
     api_url: str,
     method: str,
     items_path: str,
     fields: dict,
+    pagination: dict | None,
+    json_body: dict | None,
     name: str,
     main_category: str,
 ) -> Source:
-    """把 probe 配置落地为标准 ``api`` 来源（type=api + api_config.probe）。"""
+    """把 probe 配置落地为标准 ``api`` 来源（type=api + api_config.probe）。
+
+    同 ``api_url`` 的已存在 api 来源会被覆盖更新其 probe（包括 pagination 与
+    json_body），而非新建一条。这样重新探测同链接时，新的分页/模板配置会直接
+    覆盖旧的残缺 probe，避免一键抓取读到过期配置。
+    """
     probe: dict[str, Any] = {
         "mode": "json_list",
         "method": method.upper() if method else "GET",
@@ -247,6 +264,25 @@ def _create_api_source_from_probe(
         "items_path": items_path,
         "fields": fields,
     }
+    if pagination:
+        probe["pagination"] = pagination
+    if json_body:
+        probe["json_body"] = json_body
+
+    existing = db.scalar(
+        select(Source)
+        .where(Source.type == SourceType.API.value, Source.url == api_url)
+    )
+    if existing is not None:
+        existing.api_config = {"probe": probe}
+        if name:
+            existing.name = name
+        existing.main_category = main_category
+        existing.enabled = True
+        db.commit()
+        db.refresh(existing)
+        return existing
+
     source = Source(
         name=name or api_url,
         type=SourceType.API.value,

@@ -110,6 +110,7 @@ class ApiDiscoveryResult:
     items_path: str | None = None
     fields: dict = field(default_factory=dict)
     pagination: dict | None = None
+    json_body: dict | None = None
     name_suggestion: str = ""
     sample_items: list[dict] = field(default_factory=list)
     real_content_count: int = 0
@@ -125,6 +126,7 @@ class ApiDiscoveryResult:
             "items_path": self.items_path,
             "fields": self.fields,
             "pagination": self.pagination,
+            "json_body": self.json_body,
             "name_suggestion": self.name_suggestion,
             "sample_items": self.sample_items,
             "real_content_count": self.real_content_count,
@@ -705,6 +707,7 @@ def discover_api_source(
         result.items_path = best.items_path or ""
         result.fields = probe["fields"]
         result.pagination = probe.get("pagination")
+        result.json_body = probe.get("json_body")
         result.name_suggestion = _domain_name(root_url)
         result.real_content_count = len(valid)
         result.sample_items = [
