@@ -240,9 +240,11 @@ export function HomePage() {
         setAgentTriggerErrors((state) => ({ ...state, [sourceId]: "抓取限制需要有效的时间范围和数量上限" }));
         return;
       }
-      await triggerAgentRun(sourceId, request);
+      // 立即显示 warmup 占位 + 开轮询，避免点击后到后端建好 run 记录之间的
+      // “尚未运行”空白窗口（这段 await 可能要 1-2 秒），让用户误以为没在抓。
       setAgentPollingEnabled(true);
       setAgentWarmupSourceId(sourceId);
+      await triggerAgentRun(sourceId, request);
       await queryClient.invalidateQueries({ queryKey: ["agent-runs", sourceId] });
       await queryClient.invalidateQueries({ queryKey: ["agent-sources"] });
     } catch (error) {
@@ -250,6 +252,7 @@ export function HomePage() {
         ...state,
         [sourceId]: error instanceof ApiError ? error.message : "触发 Agent Crawl 失败",
       }));
+      setAgentWarmupSourceId(null);
     } finally {
       setAgentTriggerPendingSourceId(null);
     }
@@ -313,6 +316,7 @@ export function HomePage() {
         ...state,
         [sourceId]: error instanceof ApiError ? error.message : "一键 Agent 运行失败",
       }));
+      setAgentWarmupSourceId(null);
     } finally {
       setCandidateTriggerPendingSourceId(null);
     }
