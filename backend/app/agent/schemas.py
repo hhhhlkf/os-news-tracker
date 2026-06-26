@@ -34,6 +34,7 @@ class RawPage:
     guessed_topic: str
     title: str
     content: str   # cleaned text
+    published_at: datetime | None = None   # 文章发布时间，由 extractor 提取
 
 
 @dataclass
@@ -61,6 +62,7 @@ class AgentItem:
     content_type: str       # article | release_note | benchmark | discussion | changelog
     importance: str         # 高 | 中 | 低
     body: str
+    published_at: datetime | None = None   # 从抓取阶段透传，非 LLM 产出
     key_facts: list[str] = field(default_factory=list)
     sub_tags: list[str] = field(default_factory=list)
     merge_suggestions: list[dict[str, Any]] = field(default_factory=list)

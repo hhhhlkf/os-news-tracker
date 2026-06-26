@@ -25,6 +25,37 @@ async def _fake_fetch(url):
 
 
 @pytest.mark.asyncio
+async def test_execute_preserves_published_at_from_fetch():
+    """fetch_fn 返回 published_at 时，应透传到 RawPage。"""
+    from datetime import datetime, timezone
+
+    async def fetch_with_date(url):
+        return {
+            "title": "T",
+            "content": "C",
+            "published_at": datetime(2024, 11, 19, tzinfo=timezone.utc),
+        }
+
+    plan = CrawlPlan(source_id=1, urls=[PlanUrl(url="https://a.com/1", guessed_topic="kernel")])
+    dag = CrawlDAG(fetch_fn=fetch_with_date)
+    pages = await dag.execute(plan, _config())
+
+    assert len(pages) == 1
+    assert pages[0].published_at == datetime(2024, 11, 19, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_execute_published_at_defaults_none_when_fetch_omits_it():
+    """fetch_fn 不返回 published_at 时，RawPage.published_at 为 None（向后兼容）。"""
+    plan = CrawlPlan(source_id=1, urls=[PlanUrl(url="https://a.com/1", guessed_topic="kernel")])
+    dag = CrawlDAG(fetch_fn=_fake_fetch)
+    pages = await dag.execute(plan, _config())
+
+    assert len(pages) == 1
+    assert pages[0].published_at is None
+
+
+@pytest.mark.asyncio
 async def test_execute_returns_raw_pages():
     """正常抓取：所有 URL 都应返回对应的 RawPage。"""
     plan = CrawlPlan(source_id=1, urls=[

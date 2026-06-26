@@ -128,7 +128,7 @@ def _to_raw_item(item: AgentItem, default_main_category: str | None = None) -> R
         url=item.url,
         title=item.title,
         raw_content=item.body,
-        published_at=None,
+        published_at=item.published_at,
         extra={
             "agent_item": True,
             "main_category": item.topic_group or default_main_category or "OS跟踪来源",

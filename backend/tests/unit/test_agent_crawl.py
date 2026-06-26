@@ -49,6 +49,13 @@ class TestToRawItem:
         assert raw.raw_content == "内核 6.12 引入 sched_ext。"
         assert raw.published_at is None
 
+    def test_published_at_passes_through(self):
+        """AgentItem 携带 published_at 时，应透传到 RawItem（不再硬编码 None）。"""
+        when = datetime(2024, 11, 19, tzinfo=timezone.utc)
+        item = _make_agent_item(published_at=when)
+        raw = _to_raw_item(item)
+        assert raw.published_at == when
+
     def test_extra_contains_agent_metadata(self):
         """extra 字段应包含 agent 元数据和编码后的 key_points。"""
         item = _make_agent_item(sub_tags=["Linux Kernel", "调度器"])

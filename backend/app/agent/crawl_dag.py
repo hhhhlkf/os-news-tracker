@@ -26,7 +26,11 @@ async def _default_fetch(url: str) -> dict:
 
     extractor = ScraplingExtractor()
     doc = await asyncio.to_thread(extractor.extract, url)
-    return {"title": doc.title or "", "content": doc.clean_content or ""}
+    return {
+        "title": doc.title or "",
+        "content": doc.clean_content or "",
+        "published_at": doc.published_at,
+    }
 
 
 class CrawlDAG:
@@ -90,6 +94,7 @@ class CrawlDAG:
                         guessed_topic=pu.guessed_topic,
                         title=result.get("title", ""),
                         content=result.get("content", ""),
+                        published_at=result.get("published_at"),
                     )
                     append_run_log(
                         "fetch",

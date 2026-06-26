@@ -62,6 +62,31 @@ async def test_summarize_returns_agent_item():
 
 
 @pytest.mark.asyncio
+async def test_summarize_fills_published_at_from_qualified_page():
+    """QualifiedPage 携带的 published_at 应透传到 AgentItem（不靠 LLM 产日期）。"""
+    from datetime import datetime, timezone
+
+    page = RawPage(
+        url="https://a.com/1", guessed_topic="kernel",
+        title="Linux 6.12 Released", content="...",
+        published_at=datetime(2024, 11, 19, tzinfo=timezone.utc),
+    )
+    qp = QualifiedPage(page=page, verdict="keep", score=8)
+    pool = SummaryWorkerPool(llm=_make_llm())
+    items = await pool.summarize_all([qp], _config())
+
+    assert items[0].published_at == datetime(2024, 11, 19, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_summarize_published_at_none_when_page_has_none():
+    """页面没有 published_at 时，AgentItem.published_at 保持 None。"""
+    pool = SummaryWorkerPool(llm=_make_llm())
+    items = await pool.summarize_all([_qpage()], _config())
+    assert items[0].published_at is None
+
+
+@pytest.mark.asyncio
 async def test_topic_group_assigned_when_provided():
     """配置了 topic_groups 时，LLM 可从列表中选择最匹配的分组。"""
     llm = MagicMock()

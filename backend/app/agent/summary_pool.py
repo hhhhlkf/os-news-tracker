@@ -243,6 +243,11 @@ class SummaryWorkerPool:
                     item = _parse_summary(
                         raw, source_url=qp.page.url, source_id=config.source_id,
                     )
+                    # 发布时间不靠 LLM 猜：直接用抓取阶段 extractor 提取的准确值。
+                    # 之前 _to_raw_item 硬编码 published_at=None，导致 agent 条目
+                    # 全部无发布时间、被前端时间窗过滤全部排除。
+                    if item.published_at is None:
+                        item.published_at = qp.page.published_at
                     append_run_log(
                         "summary",
                         "摘要生成成功",
