@@ -237,8 +237,24 @@ class QualityWorkerPool:
                     title=page.title,
                     content_preview=page.content[:1500],
                 )
-                raw = await asyncio.to_thread(self._llm.complete, prompt)
-                result = _parse_quality(raw, config.quality_threshold)
+                try:
+                    raw = await asyncio.to_thread(self._llm.complete, prompt)
+                    result = _parse_quality(raw, config.quality_threshold)
+                except Exception as e:
+                    # LLM 偶发空响应/非 JSON/超时等：跳过该页，不当做 keep，
+                    # 也不让单个页面的失败拖垮整条 run（与 summary_pool 一致）。
+                    append_run_log(
+                        "quality",
+                        "评估失败（跳过）",
+                        source=source_name,
+                        url=page.url,
+                        level="error",
+                        reason=str(e)[:200],
+                    )
+                    logger.warning(
+                        "quality_pool: 评估失败 %s: %s", page.url, e,
+                    )
+                    return None
 
                 # ── 3. 写入 SiteMemory（仅限值得记住的结果）──
                 if result.should_remember or result.verdict == "discard":

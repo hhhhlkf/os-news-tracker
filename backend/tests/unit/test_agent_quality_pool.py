@@ -72,6 +72,27 @@ async def test_low_score_below_threshold_discarded():
 
 
 @pytest.mark.asyncio
+async def test_empty_llm_response_skips_page_not_abort_run():
+    """单个页面 LLM 返回空/非 JSON 时，该页被跳过，不拖垮整条评估。
+
+    复现 run 失败：LLM 偶发返回空字符串，_parse_quality 抛 ValueError，
+    assess_one 没有 try/except，异常传到 asyncio.gather 导致整条 run failed。
+    """
+    llm = MagicMock()
+    # 第一个页面返回空（触发 ValueError），第二个返回正常 JSON
+    llm.complete.side_effect = ["", _make_llm(score=7).complete.return_value]
+    pool = QualityWorkerPool(llm=llm)
+    db = _make_db()
+    results = await pool.assess_all(
+        [_page("https://a.com/bad"), _page("https://a.com/good")],
+        _config(), db=db,
+    )
+    # 坏页面被跳过，好页面保留，assess_all 没抛异常
+    assert len(results) == 1
+    assert results[0].page.url == "https://a.com/good"
+
+
+@pytest.mark.asyncio
 async def test_site_memory_hit_skips_llm():
     """SiteMemory 命中时不应调用 LLM，直接使用缓存结果。"""
     from app.models import AgentSiteMemory
