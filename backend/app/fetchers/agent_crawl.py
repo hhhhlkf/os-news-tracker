@@ -568,6 +568,8 @@ class AgentCrawlFetcher:
 
             # ⑤ QualityWorkerPool: 质量评估
             run.current_stage = "quality"
+            run.stage_message = f"正在质量评估 {run.fetched_count} 页"
+            self._db.commit()
             qualified = await self._quality_pool.assess_all(
                 pages, config, db=self._db, source_name=source_name,
             )

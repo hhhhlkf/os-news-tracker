@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentCandidateRunRefreshKeys, buildDemoFacets, filterDemoItems, isAgentSourceRunning, isManualNewsRunActive, resolveHomeDataMode } from "./homeData";
+import { agentCandidateRunRefreshKeys, buildAgentWarmupRun, buildDemoFacets, filterDemoItems, isAgentSourceRunning, isAgentWarmupResolved, isManualNewsRunActive, resolveHomeDataMode } from "./homeData";
 import { demoItems } from "../demoData";
 
 describe("resolveHomeDataMode", () => {
@@ -86,6 +86,19 @@ describe("isAgentSourceRunning", () => {
       error_message: "boom",
     })).toBe(false);
     expect(isAgentSourceRunning(null)).toBe(false);
+  });
+});
+
+describe("agent warmup run", () => {
+  it("keeps warmup active until a real run record replaces the placeholder", () => {
+    const placeholder = buildAgentWarmupRun();
+
+    expect(placeholder.id).toBe(0);
+    expect(placeholder.current_stage).toBe("planning");
+    expect(placeholder.stage_message).toBe("正在创建运行记录");
+    expect(isAgentSourceRunning(placeholder)).toBe(true);
+    expect(isAgentWarmupResolved(placeholder)).toBe(false);
+    expect(isAgentWarmupResolved({ ...placeholder, id: 9 })).toBe(true);
   });
 });
 

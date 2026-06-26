@@ -141,6 +141,7 @@ class TestAgentCrawlFetcherFetch:
         assert stage_snapshots == [
             ("planning", "已规划 1 个 URL", 1, 0, 0, 0, "running"),
             ("crawling", "并行抓取 1 个 URL", 1, 1, 0, 0, "running"),
+            ("quality", "正在质量评估 1 页", 1, 1, 0, 0, "running"),
             ("quality", "质量通过 1 / 1", 1, 1, 1, 0, "running"),
             ("summarizing", "正在生成 1 条摘要", 1, 1, 1, 0, "running"),
             ("completed", "已生成 1 条候选", 1, 1, 1, 1, "completed"),

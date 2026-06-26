@@ -287,6 +287,13 @@ class PlanAgent:
             max_urls=config.max_urls_per_run,
         )
 
+        append_run_log(
+            "plan",
+            "开始 LLM 规划 URL",
+            source=source_name,
+            candidates=len(candidate_links),
+            max_urls=config.max_urls_per_run,
+        )
         raw = self._llm.complete(prompt)
 
         # ── 4. 解析 LLM 响应 ──

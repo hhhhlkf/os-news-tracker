@@ -113,6 +113,21 @@ def test_plan_checks_site_memory_with_url_from_link_objects():
     assert all(isinstance(url, str) for url in seen_urls)
 
 
+def test_plan_logs_before_waiting_for_llm():
+    """链接提取后、LLM 调用前应写日志，避免长耗时规划看起来卡死。"""
+    llm = _make_llm(["https://blog.example.com/post/1"])
+    agent = PlanAgent(llm=llm)
+    db = MagicMock()
+
+    with patch.object(agent, "_fetch_links", return_value=["https://blog.example.com/post/1"]), \
+         patch("app.agent.plan_agent.append_run_log") as log:
+        agent.plan(_make_source(), _config(), db=db)
+
+    messages = [call.args[1] for call in log.call_args_list]
+    assert "开始 LLM 规划 URL" in messages
+    assert messages.index("首页链接提取完成") < messages.index("开始 LLM 规划 URL")
+
+
 def test_plan_returns_empty_when_no_links():
     """当页面没有可提取的链接时，应返回空计划。"""
     agent = PlanAgent(llm=MagicMock())

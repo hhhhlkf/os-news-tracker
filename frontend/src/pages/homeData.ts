@@ -20,6 +20,27 @@ export function isAgentSourceRunning(run: AgentRunRecord | null | undefined): bo
   return run.status === "running" || activeAgentStages.includes(run.current_stage);
 }
 
+export function buildAgentWarmupRun(): AgentRunRecord {
+  return {
+    id: 0,
+    status: "running",
+    current_stage: "planning",
+    stage_message: "正在创建运行记录",
+    plan_urls_count: 0,
+    fetched_count: 0,
+    quality_passed: 0,
+    items_created: 0,
+    target_count: null,
+    started_at: null,
+    completed_at: null,
+    error_message: null,
+  };
+}
+
+export function isAgentWarmupResolved(run: AgentRunRecord | null | undefined): boolean {
+  return !!run && run.id > 0;
+}
+
 export function agentCandidateRunRefreshKeys(agentSourceId: number): (string | number)[][] {
   return [
     ["agent-sources"],

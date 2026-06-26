@@ -9,7 +9,7 @@ import { buildNewsRunFormState, NewsRunControl, toAbsoluteDateTime } from "../co
 import { NewsRunLogPanel } from "../components/NewsRunLogPanel";
 import { SourceManager } from "../components/SourceManager";
 import { demoItems } from "../demoData";
-import { agentCandidateRunRefreshKeys, buildDemoFacets, filterDemoItems, isAgentSourceRunning, isManualNewsRunActive, makeListResponse, resolveHomeDataMode } from "./homeData";
+import { agentCandidateRunRefreshKeys, buildAgentWarmupRun, buildDemoFacets, filterDemoItems, isAgentSourceRunning, isAgentWarmupResolved, isManualNewsRunActive, makeListResponse, resolveHomeDataMode } from "./homeData";
 import type { AgentCrawlRunRequest, ManualNewsRunRequest, ManualNewsRunState } from "../types";
 
 const PAGE_SIZE = 10;
@@ -136,9 +136,15 @@ export function HomePage() {
   const agentRunsBySourceId = useMemo(
     () =>
       Object.fromEntries(
-        (agentSourcesQuery.data ?? []).map((source, index) => [source.id, agentRunsQueries[index]?.data]),
+        (agentSourcesQuery.data ?? []).map((source, index) => {
+          const runs = agentRunsQueries[index]?.data;
+          if ((!runs || runs.length === 0) && source.id === agentWarmupSourceId) {
+            return [source.id, [buildAgentWarmupRun()]];
+          }
+          return [source.id, runs];
+        }),
       ) as Record<number, typeof agentRunsQueries[number]["data"]>,
-    [agentRunsQueries, agentSourcesQuery.data],
+    [agentRunsQueries, agentSourcesQuery.data, agentWarmupSourceId],
   );
   const activeAgentSourceIds = useMemo(
     () =>
@@ -183,7 +189,7 @@ export function HomePage() {
 
   useEffect(() => {
     if (agentWarmupSourceId == null) return;
-    if (agentRunsBySourceId[agentWarmupSourceId]?.[0]) {
+    if (isAgentWarmupResolved(agentRunsBySourceId[agentWarmupSourceId]?.[0])) {
       setAgentWarmupSourceId(null);
     }
   }, [agentRunsBySourceId, agentWarmupSourceId]);
@@ -298,7 +304,10 @@ export function HomePage() {
       for (const queryKey of agentCandidateRunRefreshKeys(response.agent_source_id)) {
         await queryClient.invalidateQueries({ queryKey });
       }
-      await queryClient.refetchQueries({ queryKey: ["agent-runs", response.agent_source_id] });
+      await queryClient.fetchQuery({
+        queryKey: ["agent-runs", response.agent_source_id],
+        queryFn: () => fetchAgentRuns(response.agent_source_id),
+      });
     } catch (error) {
       setCandidateTriggerErrors((state) => ({
         ...state,

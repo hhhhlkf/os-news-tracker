@@ -72,7 +72,7 @@ export function AgentSourceRunCard(props: AgentSourceRunCardProps) {
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
           {/* 取消：仅运行时显示 */}
-          {running && onCancel && latestRun?.id != null && (
+          {running && onCancel && latestRun?.id != null && latestRun.id > 0 && (
             <button
               type="button"
               disabled={isCancelling}
