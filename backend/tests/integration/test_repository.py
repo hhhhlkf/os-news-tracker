@@ -157,3 +157,32 @@ def test_save_agent_enriched_falls_back_to_key_point_prefixes(session):
     )
 
     assert {tag.name for tag in item.tags} == {"Linux Kernel", "OS性能发展"}
+
+
+def test_save_agent_enriched_skips_merge_suggestion_with_null_child_tag_id(session):
+    """LLM 偶尔产出 child_tag_id=None 的 merge_suggestion；这种无效建议不应让整条 item 入库失败。"""
+    repo = Repository(session)
+    item = repo.save_agent_enriched(
+        RawItem(
+            source_id=1,
+            title="Agent item null merge",
+            url="https://x/agent-null-merge",
+            raw_content="summary",
+            extra={
+                "agent_item": True,
+                "main_category": "OS性能发展",
+                "importance": "中",
+                "info_type": "更新",
+                "key_points": ["__type:article"],
+                "sub_tags": ["Linux Kernel"],
+                "merge_suggestions": [
+                    {"child_tag_id": None, "parent_tag_name": "内核", "reason": "bad"},
+                    {"child_tag_id": "not-an-int", "parent_tag_name": "内核", "reason": "bad2"},
+                ],
+            },
+        )
+    )
+
+    # item 仍成功入库（没被坏 suggestion 打爆）
+    assert item.title == "Agent item null merge"
+    assert {tag.name for tag in item.tags} == {"Linux Kernel", "OS性能发展"}

@@ -22,7 +22,7 @@ class ExtractedDoc(BaseModel):
 
 
 class TagMergeSuggestion(BaseModel):
-    child_tag_id: int
+    child_tag_id: int | None = None
     parent_tag_id: int | None = None
     parent_tag_name: str
     reason: str | None = None

@@ -230,6 +230,14 @@ class Repository:
         self._s.flush()
         merge_suggestions = extra.get("merge_suggestions", [])
         if isinstance(merge_suggestions, list):
+            # 丢弃 child_tag_id 非整数的无效建议：LLM 偶尔产出 null/字符串，
+            # 而 TagAlias.child_tag_id 是外键不能为空，这类建议既存不进也会
+            # 让 EnrichedFields 校验失败、连累整条 item 入库失败。
+            clean_suggestions = [
+                s for s in merge_suggestions
+                if isinstance(s, dict)
+                and isinstance(s.get("child_tag_id"), int)
+            ]
             fields = EnrichedFields(
                 title_zh=item.title,
                 summary=item.raw_content or "",
@@ -238,7 +246,7 @@ class Repository:
                 importance=extra.get("importance", "低"),
                 main_category=extra.get("main_category", "agent_crawl"),
                 sub_tags=sub_tags,
-                merge_suggestions=merge_suggestions,
+                merge_suggestions=clean_suggestions,
                 confidence=0.0,
             )
             self._record_tag_alias_suggestions(fields)
