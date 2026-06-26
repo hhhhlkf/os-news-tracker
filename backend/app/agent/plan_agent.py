@@ -135,6 +135,30 @@ def _extract_json(text: str) -> dict:
     raise ValueError(f"No JSON found in plan response: {text[:200]}")
 
 
+def _normalize_link_records(links: list[dict] | list[str]) -> list[dict[str, str]]:
+    """Normalize legacy string links and rich link records to {url, text}."""
+    normalized: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for link in links:
+        if isinstance(link, str):
+            url = link
+            text = ""
+        elif isinstance(link, dict):
+            raw_url = link.get("url", "")
+            if not isinstance(raw_url, str):
+                continue
+            url = raw_url
+            raw_text = link.get("text", "")
+            text = raw_text if isinstance(raw_text, str) else ""
+        else:
+            continue
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        normalized.append({"url": url, "text": text})
+    return normalized
+
+
 class PlanAgent:
     """LLM 驱动的 URL 发现与规划器。
 
@@ -222,7 +246,7 @@ class PlanAgent:
         append_run_log("plan", "开始规划 URL", source=source_name, url=root_url)
 
         # ── 1. 提取链接 ──
-        links = self._fetch_links(root_url)
+        links = _normalize_link_records(self._fetch_links(root_url))
         if not links:
             append_run_log(
                 "plan",
@@ -238,10 +262,12 @@ class PlanAgent:
 
         # ── 2. 过滤已知 discard（按 URL 检查）──
         skip_urls = {
-            link for link in links
-            if self._memory.should_skip(db=db, source_id=config.source_id, url=link)
+            link["url"] for link in links
+            if self._memory.should_skip(
+                db=db, source_id=config.source_id, url=link["url"],
+            )
         }
-        candidate_links = [l for l in links if l not in skip_urls]
+        candidate_links = [l for l in links if l["url"] not in skip_urls]
         append_run_log(
             "plan",
             "首页链接提取完成",
