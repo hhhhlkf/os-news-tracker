@@ -78,6 +78,28 @@ def test_detect_source_unable_returns_422(client):
     assert response.json()["detail"] == "无法识别链接形态，请改用 RSS/API/网页首页链接"
 
 
+def test_discover_source_route_is_not_captured_by_source_id_route(client):
+    class StubDiscovery:
+        success = True
+        api_url = "https://api.example.com/news"
+        method = "GET"
+        items_path = "items"
+        fields = {"title": "title", "url": "url"}
+        name_suggestion = "Example API"
+
+        def to_dict(self):
+            return _DISCOVERY_RESULT
+
+    with patch("app.sources.api_discovery.discover_api_source", return_value=StubDiscovery()):
+        response = client.post(
+            "/sources/discover",
+            json={"url": "https://example.com/news", "create_source": False},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["api_url"] == "https://api.openanolis.cn/blog/list"
+
+
 def test_create_source_redetects_and_persists_news_source(client):
     detect_result = DetectResult(
         detected_type="api",

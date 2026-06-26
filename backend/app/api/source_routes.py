@@ -166,14 +166,6 @@ def list_sources(db: Session = Depends(get_db)):
     return [_source_response(source) for source in sources]
 
 
-@router.delete("/{source_id}", status_code=204)
-def delete_source(source_id: int, db: Session = Depends(get_db)):
-    source = db.get(Source, source_id)
-    if source is None:
-        raise HTTPException(status_code=404, detail="Source not found")
-    delete_source_and_related(db, source)
-
-
 @router.post("/discover")
 def discover_source_route(body: DiscoverRequest, db: Session = Depends(get_db)):
     """智能探测：用 Playwright 渲染页面，捕获 JSON XHR/Fetch 响应，
@@ -268,3 +260,11 @@ def _create_api_source_from_probe(
     db.commit()
     db.refresh(source)
     return source
+
+
+@router.delete("/{source_id}", status_code=204)
+def delete_source(source_id: int, db: Session = Depends(get_db)):
+    source = db.get(Source, source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    delete_source_and_related(db, source)
