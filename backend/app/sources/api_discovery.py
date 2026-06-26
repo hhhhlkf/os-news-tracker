@@ -464,12 +464,16 @@ def _strip_pagination_params(url: str, pagination: dict | None) -> str:
 def _infer_pagination(
     candidate: ApiCandidate, notes: list[str],
 ) -> dict[str, Any] | None:
-    """从 api_url 的 query 参数 + JSON payload 推断分页配置。
+    """从 api_url 的 query 参数 / POST JSON body + payload 推断分页配置。
 
     识别 ``page`` / ``pageNo`` / ``currentPage`` 等页码参数，以及
     ``pageSize`` / ``size`` / ``limit`` 等每页条数参数；再从 payload 中
-    找 ``hasMore`` / ``hasNext`` 或 ``total`` 字段，生成与
+    找 ``hasMore`` / ``hasNext`` 或 ``total`` / ``count`` 字段，生成与
     ``ConfigurableApiProbeAdapter`` 分页引擎兼容的配置。
+
+    分页参数可能出现在两处：GET 的 URL query string，或 POST 的 JSON body。
+    两者都会被检查，POST body 里的 ``page``/``pageSize`` 同样能被识别（如
+    openEuler 的 ``/api-search/search/sort/blog``）。
 
     Returns:
         pagination dict（含 page_param / size_param / start_page /
@@ -478,13 +482,33 @@ def _infer_pagination(
     parsed = urlparse(candidate.api_url)
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
 
+    # POST 的分页参数可能在 JSON body 里，而非 URL query。
+    body: dict | None = None
+    if candidate.method == "POST" and candidate.post_data:
+        try:
+            parsed_body = json.loads(candidate.post_data)
+            if isinstance(parsed_body, dict):
+                body = parsed_body
+        except (json.JSONDecodeError, ValueError):
+            body = None
+
+    # 合并查找源：URL query 优先，POST body 兜底。
     page_param = next((p for p in _PAGE_PARAM_CANDIDATES if p in query), None)
-    size_param = next((p for p in _PAGE_SIZE_PARAM_CANDIDATES if p in query), None)
+    page_value_source: dict = query
+    if page_param is None and body is not None:
+        page_param = next((p for p in _PAGE_PARAM_CANDIDATES if p in body), None)
+        page_value_source = body
     if page_param is None:
         return None
 
+    size_param = next((p for p in _PAGE_SIZE_PARAM_CANDIDATES if p in query), None)
+    size_value_source: dict = query
+    if size_param is None and body is not None:
+        size_param = next((p for p in _PAGE_SIZE_PARAM_CANDIDATES if p in body), None)
+        size_value_source = body
+
     try:
-        start_page = int(query[page_param])
+        start_page = int(page_value_source[page_param])
     except (TypeError, ValueError):
         start_page = 1
 
@@ -496,7 +520,7 @@ def _infer_pagination(
     if size_param:
         pagination["size_param"] = size_param
         try:
-            pagination["size"] = int(query[size_param])
+            pagination["size"] = int(size_value_source[size_param])
         except (TypeError, ValueError):
             pass
 
@@ -545,14 +569,25 @@ def _build_probe(
             else:
                 notes.append("条目缺少 url 字段且无法推断 url_template")
 
-    # 推断分页：把固定的 page/pageSize query 参数从 url 中剥离，交给分页引擎控制，
-    # 避免 probe 被「page=1&pageSize=10」锁死在第一页。
+    # 推断分页：把固定的 page/pageSize 参数从 url query 和 POST json_body 中
+    # 剥离，交给分页引擎逐页注入，避免 probe 被「page=1&pageSize=10」锁死在第一页。
     pagination = _infer_pagination(candidate, notes)
     probe_url = candidate.api_url
+    probe_json_body: dict | None = None
+    if candidate.method == "POST" and candidate.post_data:
+        try:
+            probe_json_body = json.loads(candidate.post_data)
+            if not isinstance(probe_json_body, dict):
+                probe_json_body = None
+        except (json.JSONDecodeError, ValueError):
+            probe_json_body = None
     if pagination:
         for param in (pagination["page_param"], pagination.get("size_param")):
-            if param:
-                probe_url = _strip_query_param(probe_url, param)
+            if not param:
+                continue
+            probe_url = _strip_query_param(probe_url, param)
+            if probe_json_body is not None:
+                probe_json_body.pop(param, None)
 
     probe: dict[str, Any] = {
         "mode": "json_list",
@@ -563,11 +598,8 @@ def _build_probe(
     }
     if pagination:
         probe["pagination"] = pagination
-    if candidate.method == "POST" and candidate.post_data:
-        try:
-            probe["json_body"] = json.loads(candidate.post_data)
-        except (json.JSONDecodeError, ValueError):
-            pass
+    if probe_json_body is not None:
+        probe["json_body"] = probe_json_body
     return probe
 
 

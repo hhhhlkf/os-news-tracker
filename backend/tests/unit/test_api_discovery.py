@@ -237,7 +237,11 @@ class TestBuildProbe:
         probe = _build_probe(candidate, [], "https://example.com/blog", notes)
 
         assert probe["method"] == "POST"
-        assert probe["json_body"] == {"page": 1, "size": 10}
+        # page/size 在 POST body 里被识别为分页参数并剥离，交给分页引擎逐页注入；
+        # json_body 保留其余非分页字段（此处为空 dict）。
+        assert probe["json_body"] == {}
+        assert probe["pagination"]["page_param"] == "page"
+        assert probe["pagination"]["size_param"] == "size"
 
 
 class TestApiDiscoveryResult:
@@ -289,11 +293,13 @@ class TestInferPagination:
         *,
         items_path: str = "data.items",
         payload: object | None = None,
+        method: str = "GET",
+        post_data: str | None = None,
     ) -> ApiCandidate:
         return ApiCandidate(
             api_url=api_url,
-            method="GET",
-            post_data=None,
+            method=method,
+            post_data=post_data,
             status=200,
             items_path=items_path,
             items=[{"title": "a"}, {"title": "b"}],
@@ -332,6 +338,31 @@ class TestInferPagination:
         assert pagination["size_param"] == "size"
         assert "has_more_path" not in pagination
         assert pagination["total_path"] == "data.total"
+
+    def test_infers_pagination_from_post_json_body(self):
+        """分页参数在 POST JSON body 里（而非 URL query）时也应识别。
+
+        复现 openEuler: ``POST /api-search/search/sort/blog``，body 是
+        ``{"category":"blog","lang":"zh","page":1,"pageSize":12}``，URL 上
+        没有任何 query 参数；payload 用 ``obj.count`` 给出总条数。
+        """
+        candidate = self._candidate(
+            "https://www.openeuler.org/api-search/search/sort/blog",
+            method="POST",
+            post_data='{"category":"blog","lang":"zh","page":1,"pageSize":12}',
+            items_path="obj.records",
+            payload={"status": 0, "obj": {"records": [], "count": 358, "pageSize": 12, "page": 1}},
+        )
+        notes: list[str] = []
+        pagination = _infer_pagination(candidate, notes)
+
+        assert pagination is not None
+        assert pagination["page_param"] == "page"
+        assert pagination["size_param"] == "pageSize"
+        assert pagination["size"] == 12
+        assert pagination["start_page"] == 1
+        assert "has_more_path" not in pagination
+        assert pagination["total_path"] == "obj.count"
 
     def test_returns_none_without_page_param(self):
         candidate = self._candidate(
