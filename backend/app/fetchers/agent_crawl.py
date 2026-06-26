@@ -179,7 +179,7 @@ class AgentCrawlFetcher:
         end = self._time_window.end_at.date().isoformat() if self._time_window.end_at else "--"
         return f"{start} 至 {end}"
 
-    def _matches_time_window(self, item: RawItem, *, now: datetime | None = None) -> bool:
+    def _matches_time_window(self, item: RawItem | AgentItem, *, now: datetime | None = None) -> bool:
         if item.published_at is None:
             return False
 
@@ -630,7 +630,25 @@ class AgentCrawlFetcher:
             (topic for topic in config.topic_groups if topic),
             source.main_category,
         )
-        raw_items = [_to_raw_item(item, default_main_category) for item in agent_items]
+        # 按时间窗过滤：LLM 规划路径（HTML 首页）在规划阶段无法按日期筛 URL
+        # （首页链接不带日期），所以在这里——摘要提取出 published_at 之后、
+        # 入库之前——按时间窗丢弃窗口外的旧文章。否则设"最近30天"仍会混入
+        # 2024/2025 的旧文章。published_at 为空的条目也按窗口外处理（丢弃）。
+        before_filter = len(agent_items)
+        kept_items = [item for item in agent_items if self._matches_time_window(item)]
+        filtered_out = before_filter - len(kept_items)
+        if filtered_out > 0:
+            append_run_log(
+                "run",
+                "按时间窗过滤",
+                source=source.name,
+                source_id=source.id,
+                window=self._time_window_label(),
+                before=before_filter,
+                kept=len(kept_items),
+                filtered_out=filtered_out,
+            )
+        raw_items = [_to_raw_item(item, default_main_category) for item in kept_items]
         run.items_created = len(raw_items)
         run.status = "completed"
         run.current_stage = "completed"

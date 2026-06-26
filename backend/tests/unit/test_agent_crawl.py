@@ -84,6 +84,55 @@ class TestToRawItem:
         assert raw.extra["key_points"][1] == "[性能] SPEC CPU 2017 提升 5%"
 
 
+class TestMatchesTimeWindowForAgentItem:
+    """LLM 规划路径在入库前按时间窗过滤 agent_items（AgentItem 带 published_at）。"""
+
+    def _fetcher(self, time_window: dict) -> AgentCrawlFetcher:
+        return AgentCrawlFetcher(db=MagicMock(), time_window=time_window)
+
+    def test_relative_window_keeps_recent_drops_old(self):
+        """relative 30d：最近 30 天的保留，2024/2025 的旧文章丢弃。"""
+        from datetime import timedelta
+
+        fetcher = self._fetcher({"time_mode": "relative", "relative_range": "30d"})
+        now = datetime.now(timezone.utc)
+        recent = _make_agent_item(
+            url="https://x/recent",
+            published_at=now - timedelta(days=5),
+        )
+        old = _make_agent_item(
+            url="https://x/old",
+            published_at=datetime(2024, 7, 1, tzinfo=timezone.utc),
+        )
+        assert fetcher._matches_time_window(recent, now=now) is True
+        assert fetcher._matches_time_window(old, now=now) is False
+
+    def test_null_published_at_dropped(self):
+        """published_at 为空的 AgentItem 被时间窗丢弃。"""
+        fetcher = self._fetcher({"time_mode": "relative", "relative_range": "30d"})
+        no_date = _make_agent_item(url="https://x/nodate", published_at=None)
+        assert fetcher._matches_time_window(no_date) is False
+
+    def test_absolute_window_respects_bounds(self):
+        """absolute 模式：窗口内的保留，窗口外的丢弃。"""
+        fetcher = self._fetcher({
+            "time_mode": "absolute",
+            "start_at": "2026-01-01T00:00:00Z",
+            "end_at": "2026-06-26T00:00:00Z",
+            "relative_range": None,
+        })
+        inside = _make_agent_item(
+            url="https://x/in",
+            published_at=datetime(2026, 5, 12, tzinfo=timezone.utc),
+        )
+        outside = _make_agent_item(
+            url="https://x/out",
+            published_at=datetime(2024, 7, 1, tzinfo=timezone.utc),
+        )
+        assert fetcher._matches_time_window(inside) is True
+        assert fetcher._matches_time_window(outside) is False
+
+
 class TestAgentCrawlFetcherFetch:
     """测试 AgentCrawlFetcher.fetch() 编排逻辑。"""
 
@@ -128,7 +177,10 @@ class TestAgentCrawlFetcherFetch:
             title="Linux 6.12", content="内核内容...",
         )
         mock_qualified = QualifiedPage(page=mock_page, verdict="keep", score=8)
-        mock_agent_item = _make_agent_item()
+        # 带 recent published_at，避免被时间窗过滤（默认 relative 7d）
+        mock_agent_item = _make_agent_item(
+            published_at=datetime.now(timezone.utc),
+        )
 
         fetcher = AgentCrawlFetcher(
             db=db,
