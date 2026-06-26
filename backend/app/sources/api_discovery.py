@@ -341,26 +341,56 @@ def _same_registrable_domain(url_a: str, url_b: str) -> bool:
 def _infer_url_template_from_anchors(
     items: list[dict], anchor_links: list[str]
 ) -> str | None:
-    """Try to find a detail URL pattern by matching item ids/slugs against page anchors.
+    """Try to find a detail URL pattern by matching item values against page anchors.
 
     Handles both path-based (``/blog/detail/123``) and hash-based (``/blog#123``)
     SPA routes by checking the full URL, not just the path.
+
+    Item fields are not required to be named like ``id``/``slug`` — any string
+    field whose value is *discriminating* across items (different items carry
+    different values) and that appears inside an anchor href can yield a
+    template. This lets ``path='zh/blog/xxx/xxx'`` match an anchor
+    ``.../xxx.html`` even though ``path`` is not in ``_ID_LIKE_KEYS``.
     """
-    if not items:
+    if not items or not anchor_links:
         return None
+
+    # Pre-compute, per field, the set of distinct values across items.
+    # A field is "discriminating" when at least 2 items carry different values,
+    # which filters out shared constants like ``lang='zh'`` on every item.
+    # Values may be ints (id=42) or other scalars; we stringify for comparison.
+    distinct_values: dict[str, set[str]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for key, value in item.items():
+            if value is None or isinstance(value, (dict, list)):
+                continue
+            distinct_values.setdefault(key, set()).add(str(value))
+
+    # Order fields so well-known id-like names are tried first (preserves the
+    # prior behavior for id/slug/no style items), then any other discriminating
+    # string field (e.g. ``path``).
+    discriminating = [
+        key for key, values in distinct_values.items() if len(values) >= 2
+    ]
+    ordered_fields = [k for k in _ID_LIKE_KEYS if k in discriminating]
+    ordered_fields += [k for k in discriminating if k not in ordered_fields]
+
     sample = items[0]
-    for key in _ID_LIKE_KEYS:
+    for key in ordered_fields:
         value = sample.get(key)
-        if value is None:
+        if value is None or isinstance(value, (dict, list)):
             continue
         value_str = str(value)
         for link in anchor_links:
-            if value_str in link:
-                template = link.replace(value_str, "{item." + key + "}")
-                # Accept if the placeholder landed in path OR fragment
-                parsed = urlparse(template)
-                if "{" in parsed.path or "{" in parsed.fragment:
-                    return template
+            if value_str not in link:
+                continue
+            template = link.replace(value_str, "{item." + key + "}")
+            # Accept if the placeholder landed in path OR fragment
+            parsed = urlparse(template)
+            if "{" in parsed.path or "{" in parsed.fragment:
+                return template
     return None
 
 

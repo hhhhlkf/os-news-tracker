@@ -121,6 +121,27 @@ class TestUrlTemplate:
         assert template is not None
         assert "{item.id}" in template
 
+    def test_infer_from_anchors_matches_path_field(self):
+        """item 没有 id 字段、但有 path 字段（相对路径）时，应能从锚点反推模板。
+
+        复现 openEuler: API item 只有 ``path='zh/blog/xxx/xxx'``，锚点里
+        存在 ``.../xxx.html``，需推出 ``{item.path}`` 模板，而不是要求字段名
+        必须在预置的 _ID_LIKE_KEYS 候选里。
+        """
+        items = [
+            {"path": "zh/blog/post-a/post-a", "title": "A", "lang": "zh"},
+            {"path": "zh/blog/post-b/post-b", "title": "B", "lang": "zh"},
+        ]
+        anchors = [
+            "https://www.openeuler.org/zh/blog/post-a/post-a.html",
+            "https://www.openeuler.org/zh/blog/post-b/post-b.html",
+        ]
+        template = _infer_url_template_from_anchors(items, anchors)
+        assert template is not None
+        assert "{item.path}" in template
+        # 通用字段 lang（所有 item 值相同）不应被误选为模板占位符
+        assert "{item.lang}" not in template
+
     def test_infer_returns_none_when_no_match(self):
         items = [{"id": 42, "title": "Post A"}]
         anchors = ["https://example.com/about"]
