@@ -53,3 +53,41 @@ def test_extract_content_candidate_array():
     ])
     out = DslInterpreter(fetch_fn=fake_fetch).run(recipe)
     assert out["items"][0]["content"] == "body"
+
+
+def test_loop_pagination_until_count():
+    page_data = {
+        1: [{"no": "1"}, {"no": "2"}],
+        2: [{"no": "3"}, {"no": "4"}, {"no": "5"}],
+    }
+    def fake_fetch(action, ctx):
+        p = ctx["vars"].get("page", 1)
+        ctx["last_fetch"] = {"obj": {"records": page_data.get(p, []), "hasMore": p < 2}}
+    recipe = DslRecipe(entry_url="https://x.com", actions=[
+        {"op": "set", "var": "page", "value": 1},
+        {"op": "loop",
+         "until": {"count_of": "items", "op": ">=", "value": 5},
+         "max_iters": 5,
+         "body": [
+             {"op": "fetch", "mode": "json", "url": "https://x.com/api?p={{page}}"},
+             {"op": "extract", "from": "obj.records", "fields": {"title": "no", "url": "template:https://x.com/{item.no}"}, "merge": True},
+         ],
+         "on_each": [{"op": "set", "var": "page", "expr": "{{page}} + 1"}]},
+    ])
+    out = DslInterpreter(fetch_fn=fake_fetch).run(recipe)
+    assert len(out["items"]) == 5
+
+
+def test_loop_max_iters_hard_stop():
+    def fake_fetch(action, ctx):
+        ctx["last_fetch"] = {"obj": {"records": [{"no": "1"}], "hasMore": True}}
+    recipe = DslRecipe(entry_url="https://x.com", actions=[
+        {"op": "set", "var": "page", "value": 1},
+        {"op": "loop", "until": {"count_of": "items", "op": ">=", "value": 100},
+         "max_iters": 3,
+         "body": [{"op": "fetch", "mode": "json", "url": "https://x.com/api"},
+                  {"op": "extract", "from": "obj.records", "fields": {"title": "no", "url": "template:https://x.com/{item.no}"}, "merge": True}],
+         "on_each": [{"op": "set", "var": "page", "expr": "{{page}} + 1"}]},
+    ])
+    out = DslInterpreter(fetch_fn=fake_fetch).run(recipe)
+    assert len(out["items"]) == 3  # max_iters=3 截断

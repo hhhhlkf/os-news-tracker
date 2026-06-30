@@ -15,6 +15,7 @@ from app.discovery.dsl import (
     DslRecipe,
     ExtractAction,
     FetchAction,
+    LoopAction,
     SetAction,
     render_vars,
 )
@@ -55,7 +56,9 @@ class DslInterpreter:
             self._set(action, ctx)
         elif isinstance(action, DedupByAction):
             self._dedup(action, ctx)
-        # loop/goto/wait_for/click 在 Task 5/6
+        elif isinstance(action, LoopAction):
+            self._loop(action, ctx)
+        # goto/wait_for/click 在 Task 6
 
     def _fetch(self, action: FetchAction, ctx: dict[str, Any]) -> None:
         """HTTP 获取，按 mode 解析后存入 ctx[last_fetch]。"""
@@ -158,3 +161,14 @@ class DslInterpreter:
             seen.add(k)
             out.append(it)
         ctx["items"] = out
+
+    def _loop(self, action: LoopAction, ctx: dict[str, Any]) -> None:
+        """循环：until 条件为真或 max_iters 用尽则停（先到先停，防死循环）。"""
+        from app.discovery.dsl import eval_condition
+        for _ in range(action.max_iters):
+            if eval_condition(action.until.model_dump(), ctx):
+                break  # 终止条件满足，退出循环
+            for sub in action.body:  # 执行循环体
+                self._exec(sub, ctx)
+            for sub in action.on_each:  # 每轮后置动作（如 page+1）
+                self._exec(sub, ctx)
