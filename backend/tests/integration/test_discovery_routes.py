@@ -156,3 +156,40 @@ def test_delete_method_cascades_domain(client, session):
     assert r.status_code == 204
     assert session.get(CrawlMethod, mid) is None
     assert session.query(CrawlMethodDomain).filter_by(method_id=mid).count() == 0
+
+
+def test_discovery_fetch_ingests_to_items(client, session, monkeypatch):
+    """运行命 /fetch 把 DSL 产出经 pipeline（agent 旁路 enricher）入 items 表。"""
+    from app.enums import SourceType, Stream
+    from app.models import CrawlMethod, Item, Source
+    src = Source(name="x.com", type=SourceType.DISCOVERY.value, url="https://x.com",
+                 main_category="OS跟踪来源", stream=Stream.NEWS, enabled=True)
+    session.add(src); session.flush()
+    m = CrawlMethod(domain="x.com", entry_url="https://x.com", source_id=src.id,
+                    dsl_recipe={
+                        "recipe_type": "dsl", "entry_url": "https://x.com",
+                        "actions": [
+                            {"op": "fetch", "mode": "json", "url": "https://x.com/api"},
+                            {"op": "extract", "from": "obj.records",
+                             "fields": {"title": "title", "url": "template:https://x.com/{item.no}"}},
+                        ],
+                    }, signature="a")
+    session.add(m); session.commit()
+    # mock DslInterpreter 的 fetch：注入固定 JSON 产出（不真发 HTTP）
+    def fake_fetch(action, ctx):
+        ctx["last_fetch"] = {"obj": {"records": [{"no": "1", "title": "A"}]}}
+
+    monkeypatch.setattr(
+        "app.discovery.interpreter.DslInterpreter.__init__",
+        lambda self, **kw: setattr(self, "_fetch_fn", fake_fetch)
+                          or setattr(self, "_browser_fn", None)
+                          or setattr(self, "_page", None),
+    )
+
+    r = client.post(f"/discovery/methods/{m.id}/fetch")
+    assert r.status_code == 200
+    # 验证入库 items（source_id 指向 discovery source 记录）
+    items = session.query(Item).filter_by(source_id=src.id).all()
+    assert len(items) >= 1
+    assert items[0].url == "https://x.com/1"
+    assert items[0].title == "A"
