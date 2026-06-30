@@ -6,6 +6,7 @@ Recipe = actions 顺序数组，由 DslInterpreter 解释执行。
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
@@ -112,6 +113,83 @@ class DslRecipe(BaseModel):
     recipe_type: Literal["dsl"] = "dsl"
     entry_url: str
     actions: list[Action]
+
+
+# 变量替换正则：匹配 {{var}} 或 {{obj.field}}
+_VAR_RE = re.compile(r"\{\{(\w+(?:\.\w+)?)\}\}")
+
+
+def render_vars(text: str, ctx: dict) -> str:
+    """把 {{var}} / {{last_fetch.field}} 替换为 context 中的实际值。
+
+    支持一层点号取字段。变量未定义时替换为空串。
+    """
+
+    def repl(m: "re.Match") -> str:
+        path = m.group(1).split(".")
+        val = ctx.get("vars", {})
+        for p in path:
+            val = val.get(p) if isinstance(val, dict) else getattr(val, p, None)
+        return "" if val is None else str(val)
+
+    return _VAR_RE.sub(repl, text)
+
+
+def eval_condition(cond: dict, ctx: dict) -> bool:
+    """求值 loop 的 until 终止条件。
+
+    五种取值：count_of（数 list 长度）/var（取变量）/path（取 last_fetch 字段）
+    /exists/not_exists（页面 selector，需 Playwright，此处占 False）。
+    """
+    c = Condition(**cond)
+    if c.count_of:
+        actual = len(ctx.get(c.count_of, []))
+    elif c.var:
+        actual = ctx.get("vars", {}).get(c.var)
+    elif c.path:
+        actual = ctx.get("last_fetch", {})
+        for p in c.path.split("."):
+            actual = actual.get(p) if isinstance(actual, dict) else None
+    elif c.exists is not None or c.not_exists is not None:
+        return False  # selector 类条件在解释器里求值（需 Playwright），此处占 False
+    else:
+        return False
+    expected = c.value
+    return {"!=": actual != expected, "==": actual == expected,
+            ">=": actual >= expected, ">": actual > expected,
+            "<=": actual <= expected, "<": actual < expected}.get(c.op, False)
+
+
+def validate_semantics(recipe: DslRecipe) -> list[str]:
+    """语义校验：跨 action 的约束，结构校验（Pydantic）管不了的部分。
+
+    规则：from 与最近 fetch.mode 匹配；extract.fields 须能产 url；
+    goto/click/wait_for 须在 goto 打开浏览器之后。
+    """
+    errors: list[str] = []
+    last_mode: str | None = None
+    has_browser = False
+    for i, a in enumerate(recipe.actions):
+        if isinstance(a, FetchAction):
+            last_mode = a.mode
+        if isinstance(a, GotoAction):
+            has_browser = True
+        if isinstance(a, ExtractAction):
+            # 规则 2：from 与 mode 匹配
+            if last_mode == "json" and a.from_.startswith("selector:"):
+                errors.append(f"action {i}: extract.from selector: 与 fetch.mode=json 不匹配")
+            if last_mode in ("html",) and not a.from_.startswith("selector:") and not a.from_.startswith("feed"):
+                errors.append(f"action {i}: extract.from 须为 selector: 前缀（mode=html）")
+            # 规则 3：至少有一个能产 url（裸 url 字段 或 template:{item.}）
+            has_url = any(
+                k == "url" or (isinstance(v, str) and v.startswith("template:") and "{item." in v)
+                for k, v in a.fields.items()
+            )
+            if not has_url:
+                errors.append(f"action {i}: extract.fields 须含 url 字段或 template:{{item.}}")
+        if isinstance(a, (GotoAction, ClickAction, WaitForAction)) and not has_browser:
+            errors.append(f"action {i}: {a.op} 须在 goto 之后")
+    return errors
 
 
 # 解析 LoopAction.body / on_each 里的 Action 前向引用

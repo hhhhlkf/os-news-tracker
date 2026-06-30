@@ -47,3 +47,54 @@ def test_loop_action_valid():
     assert a.max_iters == 5
     assert len(a.body) == 1
     assert isinstance(a.body[0], FetchAction)
+
+
+from app.discovery.dsl import validate_semantics, render_vars, eval_condition
+
+
+def test_validate_extract_needs_url_field():
+    r = DslRecipe(entry_url="https://x.com", actions=[
+        {"op": "fetch", "mode": "json", "url": "https://x.com/api"},
+        {"op": "extract", "from": "obj.records", "fields": {"title": "title"}},
+    ])
+    errors = validate_semantics(r)
+    assert any("url" in e for e in errors)
+
+
+def test_validate_from_matches_mode():
+    r = DslRecipe(entry_url="https://x.com", actions=[
+        {"op": "fetch", "mode": "json", "url": "https://x.com/api"},
+        {"op": "extract", "from": "selector:div", "fields": {"url": "template:https://x/{item.id}"}},
+    ])
+    errors = validate_semantics(r)
+    assert any("from" in e for e in errors)
+
+
+def test_validate_passes_when_url_field_present():
+    r = DslRecipe(entry_url="https://x.com", actions=[
+        {"op": "fetch", "mode": "json", "url": "https://x.com/api"},
+        {"op": "extract", "from": "obj.records", "fields": {"title": "title", "url": "template:https://x/{item.no}"}},
+    ])
+    assert validate_semantics(r) == []
+
+
+def test_render_vars():
+    ctx = {"vars": {"entry_url": "https://x.com", "page": 2}}
+    assert render_vars("{{entry_url}}/p/{{page}}", ctx) == "https://x.com/p/2"
+
+
+def test_render_vars_missing_var_to_empty():
+    ctx = {"vars": {"entry_url": "https://x.com"}}
+    assert render_vars("{{entry_url}}/{{missing}}", ctx) == "https://x.com/"
+
+
+def test_eval_condition_count_of():
+    ctx = {"items": [1, 2, 3]}
+    assert eval_condition({"count_of": "items", "op": ">=", "value": 3}, ctx) is True
+    assert eval_condition({"count_of": "items", "op": ">=", "value": 5}, ctx) is False
+
+
+def test_eval_condition_var():
+    ctx = {"vars": {"page": 3}}
+    assert eval_condition({"var": "page", "op": ">", "value": 2}, ctx) is True
+    assert eval_condition({"var": "page", "op": ">", "value": 5}, ctx) is False
