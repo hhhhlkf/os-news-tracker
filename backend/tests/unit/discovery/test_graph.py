@@ -181,3 +181,44 @@ def test_validator_probes_when_llm_gives_no_template(monkeypatch):
     out = validator(state, llm=_mock_chat({"template": None, "id_field": "no", "sample_items": [{"no": "1"}]}))
     assert out["url_rule"]["evidence"] == "probed"
     assert out["url_rule"]["template"] == "https://x.com/p/{id}"
+
+
+# --- Task 12: graph assembly + save_method ---
+
+def test_build_graph_uses_postgres_saver():
+    """build_graph(checkpointer=None) 用 MemorySaver 编译，含 supervisor/explorer/save_method 节点。"""
+    from app.discovery.graph import build_graph
+    g = build_graph(checkpointer=None)  # None → MemorySaver（测试用）
+    assert "supervisor" in g.nodes
+    assert "explorer" in g.nodes
+    assert "save_method" in g.nodes
+
+
+def test_save_method_writes_crawl_method():
+    """save_method 写 crawl_methods + crawl_method_domains + sources(type=discovery)，返回 verdict=dsl。"""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.models import Base, CrawlMethod, CrawlMethodDomain
+    from app.discovery.graph import save_method
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, expire_on_commit=False)
+    s = Session()
+    state = {
+        "site_url": "https://x.com",
+        "dsl_recipe": {"entry_url": "https://x.com", "actions": []},
+        "verdict": None,
+    }
+    try:
+        out = save_method(state, db=s)
+        m = s.query(CrawlMethod).filter_by(domain="x.com").first()
+        assert m is not None
+        assert m.entry_url == "https://x.com"
+        assert m.status == "active"
+        assert out["verdict"] == "dsl"
+        assert out["method_id"] == m.id
+        # 去重映射也写入
+        assert s.query(CrawlMethodDomain).filter_by(domain="x.com").first() is not None
+    finally:
+        s.close()
+        engine.dispose()

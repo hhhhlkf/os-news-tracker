@@ -10,6 +10,7 @@ from typing import TypedDict
 from urllib.parse import urljoin
 
 from pydantic import BaseModel, Field
+from langgraph.graph import StateGraph, END
 
 from app.config import get_settings
 
@@ -72,9 +73,52 @@ def capture_network(state: DiscoveryState) -> DiscoveryState:
     return {"network_captures": caps}
 
 
-def save_method(state: DiscoveryState) -> DiscoveryState:
-    """确定性节点占位：实装在 Task 12（含 DB 写入）。"""
-    return {"verdict": "dsl"}
+def save_method(state: DiscoveryState, db=None) -> DiscoveryState:
+    """确定性节点：去重签名 + 存 crawl_methods + crawl_method_domains + 建 sources 记录。
+
+    force=true 且同 domain 已有 → 覆盖更新（保留 method_id/source_id，历史连续）；
+    否则新建 crawl_method + 对应 sources(type=discovery) 记录。
+    db=None 时自建 SessionLocal（图运行命用）；传入 db 时复用（测试用，不负责关闭）。
+    """
+    own_session = db is None
+    if own_session:
+        from app.db import SessionLocal
+        db = SessionLocal()
+    try:
+        from datetime import datetime, timezone
+        from urllib.parse import urlparse
+        from app.enums import SourceType, Stream
+        from app.models import CrawlMethod, CrawlMethodDomain, Source
+        from app.discovery.dsl import DslRecipe
+        from app.discovery.signature import compute_signature
+        recipe = DslRecipe(**state["dsl_recipe"])
+        sig = compute_signature(recipe)
+        domain = urlparse(state["site_url"]).netloc
+        existing = db.query(CrawlMethodDomain).filter_by(domain=domain).first()
+        if existing is not None and state.get("force"):
+            # 覆盖：更新现有 method，保留 method_id/source_id，审计历史连续
+            m = db.get(CrawlMethod, existing.method_id)
+            m.dsl_recipe = recipe.model_dump()
+            m.signature = sig
+            m.status = "active"
+            m.updated_at = datetime.now(timezone.utc)
+        elif existing is not None:
+            # 同 domain 已有且未 force：保留旧（兜底，正常流程前置检查已拦截）
+            m = db.get(CrawlMethod, existing.method_id)
+        else:
+            # 新建：先建 sources(type=discovery) 记录，再建 crawl_method 关联它
+            src = Source(name=domain, type=SourceType.DISCOVERY.value, url=state["site_url"],
+                         main_category="OS跟踪来源", stream=Stream.NEWS.value, enabled=True)
+            db.add(src); db.flush()
+            m = CrawlMethod(domain=domain, entry_url=state["site_url"], source_id=src.id,
+                            dsl_recipe=recipe.model_dump(), signature=sig)
+            db.add(m); db.flush()
+            db.add(CrawlMethodDomain(domain=domain, method_id=m.id))  # 去重映射
+        db.commit()
+        return {"verdict": "dsl", "method_id": m.id}
+    finally:
+        if own_session:
+            db.close()
 
 
 def _make_llm():
@@ -203,3 +247,80 @@ def auditor(state: DiscoveryState, llm=None, test_fn=None) -> DiscoveryState:
         },
         "attempt": state.get("attempt", 0) + (0 if passed else 1),  # 不通过则 attempt+1
     }
+
+
+# --- Task 12: graph assembly + run entrypoint ---
+
+def supervisor_node(state: DiscoveryState) -> DiscoveryState:
+    """纯路由节点：不改状态，仅触发 supervisor_route 条件边。"""
+    return state
+
+
+def build_graph(checkpointer=None):
+    """组装 StateGraph：确定性节点 + supervisor + 4 worker + 条件路由。
+
+    checkpointer=None 时用 MemorySaver（测试用）；生产传 PostgresSaver 跨进程续跑。
+    """
+    from langgraph.checkpoint.memory import MemorySaver
+    g = StateGraph(DiscoveryState)
+    g.add_node("fetch_homepage", fetch_homepage)
+    g.add_node("capture_network", capture_network)
+    g.add_node("supervisor", supervisor_node)
+    g.add_node("explorer", explorer)
+    g.add_node("validator", validator)
+    g.add_node("dsl_writer", dsl_writer)
+    g.add_node("auditor", auditor)
+    g.add_node("save_method", save_method)
+    g.set_entry_point("fetch_homepage")
+    g.add_edge("fetch_homepage", "capture_network")
+    g.add_edge("capture_network", "supervisor")
+    g.add_conditional_edges("supervisor", supervisor_route)  # 按 supervisor_route 路由
+    for w in ["explorer", "validator", "dsl_writer", "auditor"]:
+        g.add_edge(w, "supervisor")  # worker 执行完回 supervisor 决定下一步
+    g.add_edge("save_method", END)
+    return g.compile(checkpointer=checkpointer or MemorySaver())
+
+
+def _to_psycopg_conn_string(database_url: str) -> str:
+    """SQLAlchemy DATABASE_URL → psycopg conn info string（剥 +psycopg/+psycopg2 驱动后缀）。"""
+    from sqlalchemy.engine import make_url
+    url = make_url(database_url)
+    if not url.drivername.startswith("postgresql"):
+        raise ValueError(f"run_discovery 需 Postgres，当前 DATABASE_URL 驱动为 {url.drivername}")
+    # hide_password=False：保留真实密码供 psycopg 连接（默认会掩成 ***）
+    return url.set(drivername="postgresql").render_as_string(hide_password=False)
+
+
+def run_discovery(site_url: str, force: bool = False) -> dict:
+    """生成命入口：建图（PostgresSaver 跨进程续跑）+ 跑 + 落审计 site_discovery_runs。
+
+    force 透传到初始 state，save_method 据此决定覆盖/新建。
+    """
+    from datetime import datetime, timezone
+    from langgraph.checkpoint.postgres import PostgresSaver
+    from app.db import SessionLocal
+    from app.models import SiteDiscoveryRun
+    s = get_settings()
+    with PostgresSaver.from_conn_string(_to_psycopg_conn_string(s.database_url)) as checkpointer:
+        checkpointer.setup()  # 自动建 checkpoint 表
+        g = build_graph(checkpointer=checkpointer)
+        db_sess = SessionLocal()
+        try:
+            run = SiteDiscoveryRun(site_url=site_url, status="running")
+            db_sess.add(run); db_sess.commit()
+            # thread_id 关联 run，崩了重启可从 checkpoint 续跑
+            final = g.invoke(
+                {"site_url": site_url, "attempt": 0, "token_used": 0, "force": force},
+                config={"configurable": {"thread_id": f"discovery-{run.id}"}},
+            )
+            run.status = "completed" if final.get("verdict") == "dsl" else "failed"
+            run.resulting_method_id = final.get("method_id")
+            run.llm_token_usage = final.get("token_used", 0)
+            run.node_trace = [{"verdict": final.get("verdict")}]
+            run.ended_at = datetime.now(timezone.utc)
+            if final.get("error"):
+                run.error_message = final["error"]
+            db_sess.commit()
+            return final
+        finally:
+            db_sess.close()
