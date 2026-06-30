@@ -11,12 +11,15 @@ from typing import Any, Callable
 
 from app.discovery.dsl import (
     Action,
+    ClickAction,
     DedupByAction,
     DslRecipe,
     ExtractAction,
     FetchAction,
+    GotoAction,
     LoopAction,
     SetAction,
+    WaitForAction,
     render_vars,
 )
 
@@ -34,6 +37,7 @@ class DslInterpreter:
     ) -> None:
         self._fetch_fn = fetch_fn
         self._browser_fn = browser_fn
+        self._page = None  # Playwright 页面句柄（Task 6 用，懒加载）
 
     def run(self, recipe: DslRecipe) -> dict[str, Any]:
         """执行整份 Recipe，返回约定 JSON 产出。"""
@@ -44,6 +48,7 @@ class DslInterpreter:
         }
         for action in recipe.actions:
             self._exec(action, ctx)
+        self._cleanup()
         return {"items": ctx["items"], "stats": {"discovered_count": len(ctx["items"])}}
 
     def _exec(self, action: Action, ctx: dict[str, Any]) -> None:
@@ -58,7 +63,30 @@ class DslInterpreter:
             self._dedup(action, ctx)
         elif isinstance(action, LoopAction):
             self._loop(action, ctx)
-        # goto/wait_for/click 在 Task 6
+        elif isinstance(action, (GotoAction, WaitForAction, ClickAction)):
+            self._browser_action(action, ctx)
+
+    def _browser_action(
+        self, action: GotoAction | WaitForAction | ClickAction, ctx: dict[str, Any]
+    ) -> None:
+        """Playwright 浏览器动作（goto/wait_for/click），懒加载浏览器。"""
+        if self._browser_fn:
+            self._browser_fn(action, ctx, page=self._page)  # 测试 mock 路径
+            return
+        # 真实 Playwright（运行命用），首次调用时懒加载
+        from playwright.sync_api import sync_playwright
+
+        if self._page is None:
+            self._pw = sync_playwright().start()
+            self._browser = self._pw.chromium.launch(headless=True)
+            self._page = self._browser.new_page()
+        if action.op == "goto":
+            self._page.goto(render_vars(action.url, ctx), wait_until=action.wait_until)
+        elif action.op == "wait_for":
+            self._page.wait_for_selector(action.selector, timeout=action.timeout_ms)
+        elif action.op == "click":
+            self._page.click(action.selector)
+            self._page.wait_for_timeout(action.after_wait_ms)  # 点击后等待响应
 
     def _fetch(self, action: FetchAction, ctx: dict[str, Any]) -> None:
         """HTTP 获取，按 mode 解析后存入 ctx[last_fetch]。"""
@@ -135,7 +163,28 @@ class DslInterpreter:
         return str(rec.get(spec, "")) if isinstance(spec, str) else ""
 
     def _extract_from_html(self, action: ExtractAction, ctx: dict[str, Any]) -> list[dict]:
-        return []  # Task 6 实装
+        """按 selector: 从 Playwright 页面提取 items。"""
+        if self._browser_fn:
+            return self._browser_fn(action, ctx, page=self._page) or []
+        elements = self._page.query_selector_all(action.from_.removeprefix("selector:"))
+        result: list[dict] = []
+        for el in elements:
+            item: dict[str, Any] = {}
+            for field, spec in action.fields.items():
+                item[field] = self._resolve_html_field(spec, el)
+            result.append(item)
+        return result
+
+    def _resolve_html_field(self, spec: Any, el: Any) -> str:
+        """解析 HTML 字段：attr:取属性，其余按 selector 取文本。"""
+        if isinstance(spec, str) and spec.startswith("attr:"):
+            attr = spec.removeprefix("attr:")
+            child = el.query_selector(f"[{attr}]") or el
+            return child.get_attribute(attr) or ""
+        # "selector:text" 或裸 selector
+        sel = spec.split(":")[0] if ":" in spec else spec
+        child = el.query_selector(sel)
+        return child.inner_text() if child else ""
 
     def _set(self, action: SetAction, ctx: dict[str, Any]) -> None:
         """设置变量：expr 走简单算术表达式，value 走字面量。"""
@@ -172,3 +221,12 @@ class DslInterpreter:
                 self._exec(sub, ctx)
             for sub in action.on_each:  # 每轮后置动作（如 page+1）
                 self._exec(sub, ctx)
+
+    def _cleanup(self) -> None:
+        """关闭 Playwright 浏览器，run 结束时调用（mock 路径下 _page 为 None，no-op）。"""
+        if self._page is not None:
+            try:
+                self._browser.close()
+                self._pw.stop()
+            except Exception:
+                pass

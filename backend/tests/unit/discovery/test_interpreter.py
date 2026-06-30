@@ -91,3 +91,22 @@ def test_loop_max_iters_hard_stop():
     ])
     out = DslInterpreter(fetch_fn=fake_fetch).run(recipe)
     assert len(out["items"]) == 3  # max_iters=3 截断
+
+
+def test_goto_wait_click_extract():
+    # browser_fn 模拟 Playwright：记录动作，extract 返回固定 items
+    calls = []
+    def fake_browser(action, ctx, page=None):
+        calls.append(action.op)
+        if action.op == "extract":
+            return [{"title": "A", "url": "https://x.com/1"}, {"title": "B", "url": "https://x.com/2"}]
+        return None
+    recipe = DslRecipe(entry_url="https://x.com", actions=[
+        {"op": "goto", "url": "https://x.com/news"},
+        {"op": "wait_for", "selector": "article"},
+        {"op": "click", "selector": "button.load-more"},
+        {"op": "extract", "from": "selector:article", "fields": {"title": "h2", "url": "a@href"}},
+    ])
+    out = DslInterpreter(browser_fn=fake_browser).run(recipe)
+    assert calls == ["goto", "wait_for", "click", "extract"]
+    assert len(out["items"]) == 2
