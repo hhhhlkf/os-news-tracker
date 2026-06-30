@@ -7,6 +7,9 @@ attempt 用尽判 failed。worker 在 Task 11 实装，图组装在 Task 12。
 from __future__ import annotations
 
 from typing import TypedDict
+from urllib.parse import urljoin
+
+from pydantic import BaseModel, Field
 
 from app.config import get_settings
 
@@ -96,13 +99,74 @@ def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
     return {"exploration": {"raw": str(result)[:2000]}}  # 截断控 token
 
 
-def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
-    """Validator worker：推断 URL 规律 + 程序验证（技术真伪，非审计）。
+class UrlRule(BaseModel):
+    """LLM 推断的 URL 规律：模板 + id 字段 + 样本（供 test_url_template 程序验证）。"""
+    template: str | None = None
+    id_field: str = "id"
+    sample_items: list[dict] = Field(default_factory=list)
 
-    占位实现返回固定 url_rule；后续接入 test_url_template 做真实验证。
+
+def _first_sample_id(rule: UrlRule) -> str:
+    """取首个样本的 id 值，供 probe_url_patterns 探测；无样本时回退 "1"。"""
+    if not rule.sample_items:
+        return "1"
+    val = rule.sample_items[0].get(rule.id_field)
+    return str(val) if val is not None else "1"
+
+
+def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
+    """Validator worker：LLM 推断 URL 规律 + test_url_template 程序验证（技术真伪，非审计）。
+
+    主路：LLM 提 template + sample_items → test_url_template 拿真实 ID 逐个请求验证。
+    兜底：验证不通过或 LLM 没头绪 → probe_url_patterns 批量试常见 pattern（灵感来源）。
+    都不中 → evidence="unverified"，template 回退到 LLM 提的（若有）。
+    区别于 auditor：validator 验单条 URL 规律真伪，auditor 复核整份 Recipe 合理性/达标。
     """
     llm = llm or _make_llm()
-    return {"url_rule": {"template": "https://x/{item.no}", "evidence": "validated"}}
+    from app.discovery.tools import test_url_template, probe_url_patterns
+    structured = llm.with_structured_output(UrlRule)
+    rule = structured.invoke(
+        f"基于探查结果 {state.get('exploration')} 为站点 {state['site_url']} "
+        f"推断文章详情页 URL 模板。返回 template（含 {{id}} 占位符）、id_field、sample_items（真实样本）。"
+    )
+    # with_structured_output 真实路径返回 UrlRule 实例；mock/部分后端返回 dict —— 统一归一
+    rule_obj = rule if isinstance(rule, UrlRule) else UrlRule(**rule)
+
+    # 主路：test_url_template 程序验证（需 template + sample）
+    if rule_obj.template and rule_obj.sample_items:
+        test_out = test_url_template.invoke({
+            "template": rule_obj.template,
+            "id_field": rule_obj.id_field,
+            "sample_items": rule_obj.sample_items,
+        })
+        valid = [r for r in test_out.get("results", []) if r.get("is_article_page")]
+        if valid:
+            return {"url_rule": {
+                "template": rule_obj.template,
+                "id_field": rule_obj.id_field,
+                "evidence": "validated",
+                "verified": True,
+            }}
+
+    # 兜底：probe_url_patterns 批量试常见 pattern（LLM 没头绪 / 验证失败）
+    probe_out = probe_url_patterns.invoke({
+        "base_url": state["site_url"],
+        "id_value": _first_sample_id(rule_obj),
+    })
+    hit = next((p for p in probe_out if p.get("is_article_page")), None)
+    if hit:
+        return {"url_rule": {
+            "template": urljoin(state["site_url"], hit["pattern"]),
+            "id_field": rule_obj.id_field,
+            "evidence": "probed",
+            "verified": True,
+        }}
+    return {"url_rule": {
+        "template": rule_obj.template,
+        "id_field": rule_obj.id_field,
+        "evidence": "unverified",
+        "verified": False,
+    }}
 
 
 def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:

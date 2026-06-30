@@ -103,3 +103,81 @@ def test_auditor_passes_when_test_meets_threshold():
     out = auditor(state, llm=_MockChat(), test_fn=lambda recipe: {"discovered_count": 10})
     assert out["audit_result"]["passed"] is True
     assert out["attempt"] == 0  # 通过则 attempt 不增
+
+
+# --- validator worker ---
+
+def _fake_tool(ret):
+    """假 @tool：.invoke 忽略入参，固定返回 ret。"""
+    class _T:
+        def invoke(self, args):
+            return ret
+    return _T()
+
+
+def _mock_chat(guess):
+    """假 ChatModel：with_structured_output 返回 self，invoke 返回 guess dict。"""
+    class _C:
+        def with_structured_output(self, schema):
+            return self
+
+        def invoke(self, msgs):
+            return guess
+    return _C()
+
+
+_GUESS = {
+    "template": "https://x.com/blog/{id}",
+    "id_field": "no",
+    "sample_items": [{"no": "1"}, {"no": "2"}],
+}
+
+
+def test_validator_validates_when_test_url_template_succeeds(monkeypatch):
+    monkeypatch.setattr("app.discovery.tools.test_url_template",
+                        _fake_tool({"results": [{"url": "https://x.com/blog/1", "status": 200, "is_article_page": True}]}))
+    monkeypatch.setattr("app.discovery.tools.probe_url_patterns", _fake_tool([]))
+    from app.discovery.graph import validator
+    state = _state(site_url="https://x.com", exploration={"candidate_api": "https://x.com/api"})
+    out = validator(state, llm=_mock_chat(_GUESS))
+    assert out["url_rule"]["evidence"] == "validated"
+    assert out["url_rule"]["template"] == "https://x.com/blog/{id}"
+    assert out["url_rule"]["id_field"] == "no"
+
+
+def test_validator_falls_back_to_probe_when_test_fails(monkeypatch):
+    monkeypatch.setattr("app.discovery.tools.test_url_template",
+                        _fake_tool({"results": [{"url": "https://x.com/blog/1", "status": 404, "is_article_page": False}]}))
+    monkeypatch.setattr("app.discovery.tools.probe_url_patterns",
+                        _fake_tool([{"pattern": "/post/{id}", "generated_url": "https://x.com/post/1",
+                                     "status": 200, "is_article_page": True}]))
+    from app.discovery.graph import validator
+    state = _state(site_url="https://x.com")
+    out = validator(state, llm=_mock_chat(_GUESS))
+    assert out["url_rule"]["evidence"] == "probed"
+    assert out["url_rule"]["template"] == "https://x.com/post/{id}"
+
+
+def test_validator_returns_unverified_when_both_fail(monkeypatch):
+    monkeypatch.setattr("app.discovery.tools.test_url_template",
+                        _fake_tool({"results": [{"url": "https://x.com/blog/1", "status": 404, "is_article_page": False}]}))
+    monkeypatch.setattr("app.discovery.tools.probe_url_patterns",
+                        _fake_tool([{"pattern": "/post/{id}", "generated_url": "https://x.com/post/1",
+                                     "status": 404, "is_article_page": False}]))
+    from app.discovery.graph import validator
+    state = _state(site_url="https://x.com")
+    out = validator(state, llm=_mock_chat(_GUESS))
+    assert out["url_rule"]["evidence"] == "unverified"
+    assert out["url_rule"]["template"] == "https://x.com/blog/{id}"  # 回退到 LLM 模板
+
+
+def test_validator_probes_when_llm_gives_no_template(monkeypatch):
+    monkeypatch.setattr("app.discovery.tools.test_url_template", _fake_tool({"results": []}))
+    monkeypatch.setattr("app.discovery.tools.probe_url_patterns",
+                        _fake_tool([{"pattern": "/p/{id}", "generated_url": "https://x.com/p/1",
+                                     "status": 200, "is_article_page": True}]))
+    from app.discovery.graph import validator
+    state = _state(site_url="https://x.com")
+    out = validator(state, llm=_mock_chat({"template": None, "id_field": "no", "sample_items": [{"no": "1"}]}))
+    assert out["url_rule"]["evidence"] == "probed"
+    assert out["url_rule"]["template"] == "https://x.com/p/{id}"
