@@ -122,4 +122,48 @@ def test_url_template(template: str, id_field: str, sample_items: list[dict]) ->
     return {"results": results}
 
 
-TOOLS = [fetch_page, capture_network, inspect_item, test_url_template]
+_DEFAULT_URL_PATTERNS: list[str] = [
+    "/blog/{id}",
+    "/blog/detail/{id}",
+    "/post/{id}",
+    "/posts/{id}",
+    "/article/{id}",
+    "/articles/{id}",
+    "/news/{id}",
+    "/p/{id}",
+    "/{id}",
+]
+
+
+@tool
+def probe_url_patterns(base_url: str, id_value: str, patterns: list[str] | None = None) -> list:
+    """LLM 没头绪时批量试常见 URL pattern，返回每个 pattern 的验证结果，供 LLM 选规律用（灵感来源）。"""
+    import httpx
+    candidates = patterns if patterns is not None else _DEFAULT_URL_PATTERNS
+    results: list = []
+    for pat in candidates:
+        path = pat.replace("{id}", str(id_value))
+        if not path.startswith("/"):
+            path = "/" + path
+        generated = urljoin(base_url, path)
+        try:
+            r = httpx.get(generated, timeout=15, follow_redirects=True)
+            is_article = r.status_code == 200 and "<title>" in r.text
+            results.append({
+                "pattern": pat,
+                "generated_url": generated,
+                "status": r.status_code,
+                "is_article_page": is_article,
+            })
+        except Exception as e:
+            results.append({
+                "pattern": pat,
+                "generated_url": generated,
+                "status": 0,
+                "is_article_page": False,
+                "error": str(e),
+            })
+    return results
+
+
+TOOLS = [fetch_page, capture_network, inspect_item, test_url_template, probe_url_patterns]

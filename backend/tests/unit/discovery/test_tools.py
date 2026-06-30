@@ -1,6 +1,6 @@
 """LangChain @tool 工具集单元测试 — mock httpx/Playwright 验证工具产出。"""
 
-from app.discovery.tools import fetch_page, capture_network, inspect_item, test_url_template
+from app.discovery.tools import fetch_page, capture_network, inspect_item, test_url_template, probe_url_patterns
 
 
 def test_fetch_page_returns_summary(monkeypatch):
@@ -93,3 +93,62 @@ def test_capture_network_parses_json_responses(monkeypatch):
     assert out and out[0]["api_url"] == "https://x.com/api"
     assert out[0]["method"] == "GET"
     assert out[0]["parsed_json"] == {"a": 1}
+
+
+def test_probe_url_patterns_uses_default_candidates(monkeypatch):
+    class FakeResp:
+        status_code = 200
+        text = "<html><title>Article</title></html>"
+    monkeypatch.setattr("httpx.get", lambda *a, **k: FakeResp())
+    out = probe_url_patterns.invoke({"base_url": "https://x.com", "id_value": "42"})
+    assert isinstance(out, list) and len(out) > 0
+    # spec §4.4 形状：每条含 pattern/generated_url/status/is_article_page
+    first = out[0]
+    assert {"pattern", "generated_url", "status", "is_article_page"} <= set(first.keys())
+    assert first["status"] == 200
+    assert first["is_article_page"] is True
+    assert "42" in first["generated_url"]
+
+
+def test_probe_url_patterns_with_custom_patterns(monkeypatch):
+    calls = []
+
+    class FakeResp:
+        status_code = 200
+        text = "<html><title>T</title></html>"
+
+    def fake_get(url, **k):
+        calls.append(url)
+        return FakeResp()
+
+    monkeypatch.setattr("httpx.get", fake_get)
+    out = probe_url_patterns.invoke({
+        "base_url": "https://x.com",
+        "id_value": "7",
+        "patterns": ["/blog/{id}", "/post/{id}"],
+    })
+    assert len(out) == 2
+    assert out[0]["pattern"] == "/blog/{id}"
+    assert out[0]["generated_url"] == "https://x.com/blog/7"
+    assert out[1]["pattern"] == "/post/{id}"
+    assert out[1]["generated_url"] == "https://x.com/post/7"
+    assert calls == ["https://x.com/blog/7", "https://x.com/post/7"]
+
+
+def test_probe_url_patterns_marks_non_article_and_errors(monkeypatch):
+    def fake_get(url, **k):
+        if "/blog/" in url:
+            return type("R", (), {"status_code": 404, "text": "<html><title>Not Found</title></html>"})()
+        raise Exception("boom")
+
+    monkeypatch.setattr("httpx.get", fake_get)
+    out = probe_url_patterns.invoke({
+        "base_url": "https://x.com",
+        "id_value": "1",
+        "patterns": ["/blog/{id}", "/post/{id}"],
+    })
+    assert out[0]["status"] == 404
+    assert out[0]["is_article_page"] is False  # status != 200
+    assert out[1]["status"] == 0
+    assert out[1]["is_article_page"] is False
+    assert "error" in out[1]  # 异常带 error 字段
