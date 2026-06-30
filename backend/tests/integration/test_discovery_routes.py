@@ -100,3 +100,59 @@ def test_discovery_fetch_endpoint(client, session):
     # last_run_at 被更新
     session.refresh(m)
     assert m.last_run_at is not None
+
+
+# --- Task 16: methods CRUD ---
+
+def _make_crawl_method(session, domain="x.com", **overrides):
+    """建 Source(discovery) + CrawlMethod（带 source_id），返回 method（已 flush，caller 负责 commit）。"""
+    from app.enums import SourceType
+    from app.models import CrawlMethod, Source
+    src = Source(name=domain, type=SourceType.DISCOVERY.value, url=f"https://{domain}")
+    session.add(src); session.flush()
+    defaults = dict(entry_url=f"https://{domain}", dsl_recipe={"actions": []}, signature="a", status="active")
+    defaults.update(overrides)
+    m = CrawlMethod(domain=domain, source_id=src.id, **defaults)
+    session.add(m); session.flush()
+    return m
+
+
+def test_list_methods(client, session):
+    _make_crawl_method(session, domain="x.com")
+    session.commit()
+    r = client.get("/discovery/methods")
+    assert r.status_code == 200
+    assert any(m["domain"] == "x.com" for m in r.json())
+
+
+def test_get_method_detail(client, session):
+    m = _make_crawl_method(
+        session, domain="x.com",
+        dsl_recipe={"recipe_type": "dsl", "entry_url": "https://x.com", "actions": []},
+    )
+    session.commit()
+    r = client.get(f"/discovery/methods/{m.id}")
+    assert r.status_code == 200
+    assert r.json()["dsl_recipe"]["recipe_type"] == "dsl"
+
+
+def test_patch_method_disable(client, session):
+    m = _make_crawl_method(session, domain="x.com", status="active")
+    session.commit()
+    r = client.patch(f"/discovery/methods/{m.id}", json={"status": "disabled"})
+    assert r.status_code == 200
+    assert r.json()["status"] == "disabled"
+    session.refresh(m)
+    assert m.status == "disabled"
+
+
+def test_delete_method_cascades_domain(client, session):
+    from app.models import CrawlMethodDomain
+    m = _make_crawl_method(session, domain="x.com")
+    session.add(CrawlMethodDomain(domain="x.com", method_id=m.id))
+    session.commit()
+    mid = m.id
+    r = client.delete(f"/discovery/methods/{mid}")
+    assert r.status_code == 204
+    assert session.get(CrawlMethod, mid) is None
+    assert session.query(CrawlMethodDomain).filter_by(method_id=mid).count() == 0

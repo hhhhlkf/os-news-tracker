@@ -14,7 +14,7 @@ from app.api.deps import get_db
 from app.discovery.dsl import DslRecipe
 from app.discovery.graph import check_existing_method, start_discovery_run
 from app.discovery.interpreter import DslInterpreter
-from app.models import CrawlMethod, SiteDiscoveryRun
+from app.models import CrawlMethod, CrawlMethodDomain, SiteDiscoveryRun
 
 router = APIRouter(prefix="/discovery", tags=["discovery"])
 
@@ -66,6 +66,52 @@ def get_discovery_run(run_id: int, db: Session = Depends(get_db)):
             "started_at": r.started_at.isoformat() if r.started_at else None,
             "ended_at": r.ended_at.isoformat() if r.ended_at else None,
             "error_message": r.error_message}
+
+
+class MethodPatch(BaseModel):
+    status: str | None = None  # active | disabled | failed
+
+
+@router.get("/methods")
+def list_methods(db: Session = Depends(get_db)):
+    """列出所有已发现的爬取方式（摘要，不含完整 DSL Recipe）。"""
+    ms = db.scalars(select(CrawlMethod).order_by(CrawlMethod.id.desc())).all()
+    return [{"id": m.id, "domain": m.domain, "entry_url": m.entry_url, "status": m.status,
+             "signature": m.signature, "last_run_at": m.last_run_at.isoformat() if m.last_run_at else None,
+             "last_run_status": m.last_run_status} for m in ms]
+
+
+@router.get("/methods/{method_id}")
+def get_method(method_id: int, db: Session = Depends(get_db)):
+    """单方法详情，含完整 DSL Recipe（前端可展示/编辑）。"""
+    m = db.get(CrawlMethod, method_id)
+    if not m:
+        raise HTTPException(404, "method not found")
+    return {"id": m.id, "domain": m.domain, "entry_url": m.entry_url, "status": m.status,
+            "dsl_recipe": m.dsl_recipe, "signature": m.signature,
+            "last_run_at": m.last_run_at.isoformat() if m.last_run_at else None}
+
+
+@router.patch("/methods/{method_id}")
+def patch_method(method_id: int, body: MethodPatch, db: Session = Depends(get_db)):
+    """禁用/启用方法（改 status）。"""
+    m = db.get(CrawlMethod, method_id)
+    if not m:
+        raise HTTPException(404, "method not found")
+    if body.status:
+        m.status = body.status
+    db.commit()
+    return {"id": m.id, "status": m.status}
+
+
+@router.delete("/methods/{method_id}", status_code=204)
+def delete_method(method_id: int, db: Session = Depends(get_db)):
+    """删除方法 + 级联清 crawl_method_domains 映射。"""
+    m = db.get(CrawlMethod, method_id)
+    if not m:
+        raise HTTPException(404, "method not found")
+    db.query(CrawlMethodDomain).filter_by(method_id=method_id).delete()  # 级联清映射
+    db.delete(m); db.commit()
 
 
 @router.post("/methods/{method_id}/fetch")
