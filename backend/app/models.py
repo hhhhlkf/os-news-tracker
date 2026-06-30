@@ -299,3 +299,43 @@ class AgentCrawlRun(Base):
     triggered_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="running")   # running | completed | failed | plan_failed
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class CrawlMethod(Base):
+    """统一爬取方式：存 DSL Recipe + 去重签名 + 运行状态。"""
+    __tablename__ = "crawl_methods"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    domain: Mapped[str] = mapped_column(String(255), nullable=False)
+    entry_url: Mapped[str] = mapped_column(String(1000), nullable=False)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"), nullable=False)  # 关联 sources(type=discovery)
+    dsl_recipe: Mapped[dict] = mapped_column(JSON, nullable=False)
+    signature: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_run_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+
+class CrawlMethodDomain(Base):
+    """去重映射：domain → crawl_method，同类站复用已存 method。"""
+    __tablename__ = "crawl_method_domains"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    domain: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    method_id: Mapped[int] = mapped_column(ForeignKey("crawl_methods.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class SiteDiscoveryRun(Base):
+    """生成命审计：节点轨迹 + token 消耗 + 最终 method/失败原因。"""
+    __tablename__ = "site_discovery_runs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    site_url: Mapped[str] = mapped_column(String(1000), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
+    node_trace: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    resulting_method_id: Mapped[int | None] = mapped_column(ForeignKey("crawl_methods.id"), nullable=True)
+    llm_token_usage: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

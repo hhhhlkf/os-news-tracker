@@ -7,6 +7,7 @@ class SourceType(StrEnum):
     PAGE_MONITOR = "page_monitor"
     SEARCH = "search"
     AGENT_CRAWL = "agent_crawl"
+    DISCOVERY = "discovery"   # LangGraph discovery agent（和 agent_crawl 并存，后者保留给 Handoff Chain）
 
 
 class Stream(StrEnum):
@@ -88,3 +89,15 @@ MAIN_CATEGORIES = [
     "OS性能发展",
     "司内AI工具",
 ]
+
+
+class CrawlMethodStatus(StrEnum):
+    ACTIVE = "active"
+    DISABLED = "disabled"
+    FAILED = "failed"
+
+
+class DiscoveryRunStatus(StrEnum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
