@@ -1,0 +1,108 @@
+<mxfile host="app.diagrams.net" modified="2026-06-25T00:00:00.000Z" agent="Codex" version="24.7.17" type="device">
+  <diagram id="agent-crawl-planagent" name="Agent Crawl PlanAgent">
+    <mxGraphModel dx="1500" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="bg" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="0" y="0" width="1500" height="900" as="geometry" />
+        </mxCell>
+
+        <mxCell id="title" value="OS News Tracker Agent Crawl 架构" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=28;fontStyle=1;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="390" y="35" width="720" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="主线保持简洁；右侧展开 PlanAgent 的 URL 规划细节" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=14;fontColor=#475569;" vertex="1" parent="1">
+          <mxGeometry x="390" y="78" width="720" height="28" as="geometry" />
+        </mxCell>
+
+        <mxCell id="input" value="输入来源&lt;br&gt;&lt;font style=&quot;font-size: 12px&quot;&gt;RSS / API Probe / 普通网页&lt;br&gt;手动运行 / 定时任务&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;strokeWidth=2;fontColor=#075985;fontSize=17;fontStyle=1;arcSize=12;spacing=14;" vertex="1" parent="1">
+          <mxGeometry x="450" y="130" width="260" height="88" as="geometry" />
+        </mxCell>
+
+        <mxCell id="orchestrator" value="AgentCrawlFetcher&lt;br&gt;&lt;font style=&quot;font-size: 12px&quot;&gt;读取配置、创建运行记录、编排流程&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0F172A;strokeColor=#0F172A;strokeWidth=2;fontColor=#FFFFFF;fontSize=17;fontStyle=1;arcSize=12;spacing=14;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="450" y="260" width="260" height="88" as="geometry" />
+        </mxCell>
+
+        <mxCell id="agent-core" value="Agent 决策层" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;strokeWidth=3;fontColor=#9A3412;fontSize=20;fontStyle=1;verticalAlign=top;spacingTop=16;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="330" y="395" width="500" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="plan" value="1. PlanAgent：URL 规划" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#FB923C;strokeWidth=2;fontColor=#7C2D12;fontSize=15;fontStyle=1;arcSize=10;spacing=10;" vertex="1" parent="1">
+          <mxGeometry x="380" y="450" width="400" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="quality" value="2. QualityWorkerPool：质量评估 / 过滤" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#FB923C;strokeWidth=2;fontColor=#7C2D12;fontSize=15;fontStyle=1;arcSize=10;spacing=10;" vertex="1" parent="1">
+          <mxGeometry x="380" y="510" width="400" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="summary" value="3. SummaryWorkerPool：摘要 / 技术要点 / 热点标签" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#FB923C;strokeWidth=2;fontColor=#7C2D12;fontSize=15;fontStyle=1;arcSize=10;spacing=10;" vertex="1" parent="1">
+          <mxGeometry x="380" y="570" width="400" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="output" value="输出入库&lt;br&gt;&lt;font style=&quot;font-size: 12px&quot;&gt;AgentItem → RawItem.extra&lt;br&gt;Item(status=agent_enriched)&lt;br&gt;前端展示摘要、热点、原文链接&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;strokeWidth=2;fontColor=#14532D;fontSize=17;fontStyle=1;arcSize=12;spacing=14;" vertex="1" parent="1">
+          <mxGeometry x="450" y="675" width="260" height="105" as="geometry" />
+        </mxCell>
+
+        <mxCell id="support" value="支撑能力&lt;br&gt;&lt;font style=&quot;font-size: 12px&quot;&gt;Runtime API Discovery&lt;br&gt;CrawlDAG 并发抓取&lt;br&gt;SiteMemory 缓存&lt;br&gt;AgentCrawlRun / SSE Logs&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F1F5F9;strokeColor=#64748B;strokeWidth=2;fontColor=#334155;fontSize=15;fontStyle=1;arcSize=12;spacing=14;" vertex="1" parent="1">
+          <mxGeometry x="55" y="450" width="225" height="150" as="geometry" />
+        </mxCell>
+
+        <mxCell id="llm" value="LlmClient&lt;br&gt;&lt;font style=&quot;font-size: 12px&quot;&gt;为三个 Agent 节点提供：&lt;br&gt;语义规划&lt;br&gt;质量判断&lt;br&gt;摘要生成&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FED7AA;strokeColor=#EA580C;strokeWidth=2;fontColor=#7C2D12;fontSize=15;fontStyle=1;arcSize=12;spacing=14;" vertex="1" parent="1">
+          <mxGeometry x="55" y="260" width="225" height="135" as="geometry" />
+        </mxCell>
+
+        <mxCell id="plan-detail" value="PlanAgent 内部流程：把来源站点变成 CrawlPlan" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#FB923C;strokeWidth=3;fontColor=#9A3412;fontSize=18;fontStyle=1;verticalAlign=top;spacingTop=14;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="900" y="185" width="510" height="485" as="geometry" />
+        </mxCell>
+        <mxCell id="pd-input" value="输入&lt;br&gt;&lt;font style=&quot;font-size: 12px&quot;&gt;source.url + focus_areas&lt;br&gt;max_urls_per_run + SiteMemory&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;strokeWidth=2;fontColor=#1E3A8A;fontSize=14;fontStyle=1;arcSize=10;spacing=10;" vertex="1" parent="1">
+          <mxGeometry x="955" y="250" width="400" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="pd-fetch" value="① 提取首页链接&lt;br&gt;&lt;font style=&quot;font-size: 12px&quot;&gt;httpx 获取 HTML，HTMLParser 提取 a[href] 与链接文字&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;strokeWidth=2;fontColor=#172554;fontSize=14;fontStyle=1;arcSize=10;spacing=10;" vertex="1" parent="1">
+          <mxGeometry x="955" y="335" width="400" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="pd-llm" value="② LLM 语义筛选与排序&lt;br&gt;&lt;font style=&quot;font-size: 12px&quot;&gt;按 OS maintainer 价值选择技术文章、公告、安全/性能内容&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#FB923C;strokeWidth=2;fontColor=#7C2D12;fontSize=14;fontStyle=1;arcSize=10;spacing=10;" vertex="1" parent="1">
+          <mxGeometry x="955" y="420" width="400" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="pd-validate" value="③ 确定性校验&lt;br&gt;&lt;font style=&quot;font-size: 12px&quot;&gt;JSON 解析、http/https、同域过滤、SiteMemory 跳过低质 URL&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F1F5F9;strokeColor=#64748B;strokeWidth=2;fontColor=#334155;fontSize=14;fontStyle=1;arcSize=10;spacing=10;" vertex="1" parent="1">
+          <mxGeometry x="955" y="505" width="400" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="pd-output" value="输出&lt;br&gt;&lt;font style=&quot;font-size: 12px&quot;&gt;CrawlPlan：PlanUrl(url, guessed_topic) 列表&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;strokeWidth=2;fontColor=#14532D;fontSize=14;fontStyle=1;arcSize=10;spacing=10;" vertex="1" parent="1">
+          <mxGeometry x="955" y="590" width="400" height="58" as="geometry" />
+        </mxCell>
+
+        <mxCell id="note" value="读图说明：左侧是 Agent Crawl 主链路；右侧只展开 PlanAgent。PlanAgent 不抓正文，它只负责从站点链接中选出本轮应该抓取的 URL。" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#CBD5E1;fontColor=#334155;fontSize=14;arcSize=10;spacing=12;" vertex="1" parent="1">
+          <mxGeometry x="330" y="820" width="840" height="45" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#334155;strokeWidth=3;endArrow=block;endFill=1;" edge="1" parent="1" source="input" target="orchestrator">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#334155;strokeWidth=3;endArrow=block;endFill=1;" edge="1" parent="1" source="orchestrator" target="agent-core">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#334155;strokeWidth=3;endArrow=block;endFill=1;" edge="1" parent="1" source="agent-core" target="output">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-support" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#64748B;strokeWidth=2;dashed=1;endArrow=none;" edge="1" parent="1" source="support" target="agent-core">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-llm" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#EA580C;strokeWidth=2;dashed=1;endArrow=none;" edge="1" parent="1" source="llm" target="agent-core">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-plan-detail" value="展开说明" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#FB923C;strokeWidth=2;dashed=1;endArrow=none;fontSize=12;fontColor=#9A3412;" edge="1" parent="1" source="plan" target="plan-detail">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="pd-e1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#334155;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="pd-input" target="pd-fetch">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="pd-e2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#334155;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="pd-fetch" target="pd-llm">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="pd-e3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#334155;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="pd-llm" target="pd-validate">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="pd-e4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#334155;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="pd-validate" target="pd-output">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -43,7 +43,7 @@
 - 全新的 **SiteDiscoveryAgent**：LLM 驱动的链接发现，首次分析网站时运行。
 - **17 个工具**支撑 LLM 探查网站（见 §4）。
 - **Recipe 配置结构**（JSON API 型）+ **插件式通用接口**（`RecipeExecutor`）。
-- **脚本兜底机制**：LLM 写 .py 脚本 + 受限命令行执行（`ScriptExecutor`）+ 统一执行/停止接口。第一子项目实装到"能存能加载能跑"，**安全沙箱留 TODO**。
+- **脚本兜底机制**：LLM 写 .py 脚本 + 受限命令行执行（`ScriptExecutor`）+ 统一执行/停止接口。第要求完整运行，环境先不用进行隔离，**安全沙箱留 TODO**。
 - **数据模型**：4 张表统一管理爬取方式与执行生命周期。
 - **去重**：爬取方式去重（避免重复存）+ 产出链接去重（避免重复算）。
 - **绿地重建**：删旧 `api_discovery.py` / `detector.py` 的 JSON 识别部分 / `agent_crawl.py` 旧 probe 逻辑；改写编排器阶段 1/2；阶段 3~5（CrawlDAG/Quality/Summary）复用。

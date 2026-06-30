@@ -1,0 +1,203 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Page-1" id="5AoZ992jiAGuMOfjxc2O">
+    <mxGraphModel dx="1623" dy="933" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="900" math="0" shadow="0" adaptiveColors="auto">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="bg" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=none;" value="" vertex="1">
+          <mxGeometry height="900" width="1500" as="geometry" />
+        </mxCell>
+        <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;fontColor=#0F172A;fontSize=36;fontStyle=1;align=center;verticalAlign=middle;" value="🧭 智能探测 Agent 逻辑" vertex="1">
+          <mxGeometry height="58" width="920" x="290" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" parent="1" style="text;html=1;strokeColor=none;fillColor=none;fontColor=#0E7490;fontSize=17;fontStyle=1;align=center;verticalAlign=middle;" value="从页面行为中发现 API，自动沉淀为可复用的批量抓取规则" vertex="1">
+          <mxGeometry height="34" width="860" x="320" y="86" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_observe" parent="1" style="swimlane;startSize=34;rounded=1;arcSize=8;fillColor=#ECFEFF;strokeColor=#06B6D4;fontColor=#0E7490;fontSize=16;fontStyle=1;html=1;" value="👁️ 观察页面" vertex="1">
+          <mxGeometry height="170" width="1320" x="90" y="145" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_reason" parent="1" style="swimlane;startSize=34;rounded=1;arcSize=8;fillColor=#FFF7ED;strokeColor=#F97316;fontColor=#C2410C;fontSize=16;fontStyle=1;html=1;" value="🧠 推断规则" vertex="1">
+          <mxGeometry height="230" width="1320" x="90" y="345" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_decide" parent="1" style="swimlane;startSize=34;rounded=1;arcSize=8;fillColor=#ECFDF5;strokeColor=#10B981;fontColor=#047857;fontSize=16;fontStyle=1;html=1;" value="✅ 验证与落地" vertex="1">
+          <mxGeometry height="185" width="1320" x="90" y="605" as="geometry" />
+        </mxCell>
+        <mxCell id="tag_bottom" parent="lane_decide" style="rounded=1;arcSize=50;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#F59E0B;strokeWidth=2;fontColor=#713F12;fontSize=15;fontStyle=1;" value="🚀 成功一次，后续稳定复用" vertex="1">
+          <mxGeometry height="38" width="235" x="1040" y="9" as="geometry" />
+        </mxCell>
+        <mxCell id="n_url" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" value="🌐 目标网页&lt;br&gt;&lt;font color=&quot;#0369A1&quot;&gt;root_url&lt;/font&gt;" vertex="1">
+          <mxGeometry height="72" width="140" x="125" y="205" as="geometry" />
+        </mxCell>
+        <mxCell id="n_render" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#FAE8FF;strokeColor=#C026D3;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" value="🎭 渲染页面&lt;br&gt;&lt;font color=&quot;#A21CAF&quot;&gt;Playwright&lt;/font&gt;" vertex="1">
+          <mxGeometry height="72" width="145" x="345" y="205" as="geometry" />
+        </mxCell>
+        <mxCell id="n_xhr" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#CCFBF1;strokeColor=#0D9488;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" value="📡 捕获响应&lt;br&gt;&lt;font color=&quot;#0E7490&quot;&gt;XHR / Fetch&lt;/font&gt;" vertex="1">
+          <mxGeometry height="72" width="145" x="565" y="205" as="geometry" />
+        </mxCell>
+        <mxCell id="n_json" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" value="🧾 JSON 过滤&lt;br&gt;&lt;font color=&quot;#1D4ED8&quot;&gt;保留接口数据&lt;/font&gt;" vertex="1">
+          <mxGeometry height="72" width="150" x="785" y="205" as="geometry" />
+        </mxCell>
+        <mxCell id="n_anchor" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#7C3AED;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" value="🔗 页面链接&lt;br&gt;&lt;font color=&quot;#6D28D9&quot;&gt;辅助 URL 模板&lt;/font&gt;" vertex="1">
+          <mxGeometry height="72" width="165" x="1020" y="205" as="geometry" />
+        </mxCell>
+        <mxCell id="n_arrays" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#EA580C;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" value="🧩 找列表&lt;br&gt;&lt;font color=&quot;#C2410C&quot;&gt;递归数组扫描&lt;/font&gt;" vertex="1">
+          <mxGeometry height="72" width="145" x="150" y="415" as="geometry" />
+        </mxCell>
+        <mxCell id="n_fields" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" value="🏷️ 映射字段&lt;br&gt;&lt;font color=&quot;#A16207&quot;&gt;title / url / date&lt;/font&gt;" vertex="1">
+          <mxGeometry height="72" width="160" x="355" y="415" as="geometry" />
+        </mxCell>
+        <mxCell id="n_score" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#FFE4E6;strokeColor=#E11D48;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" value="📊 候选评分&lt;br&gt;&lt;font color=&quot;#BE123C&quot;&gt;选文章 API&lt;/font&gt;" vertex="1">
+          <mxGeometry height="72" width="150" x="575" y="415" as="geometry" />
+        </mxCell>
+        <mxCell id="n_urltpl" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" value="🧬 URL 模板&lt;br&gt;&lt;font color=&quot;#6D28D9&quot;&gt;字段或链接推断&lt;/font&gt;" vertex="1">
+          <mxGeometry height="72" width="165" x="790" y="385" as="geometry" />
+        </mxCell>
+        <mxCell id="n_page" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#CCFBF1;strokeColor=#0D9488;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" value="📄 分页推断&lt;br&gt;&lt;font color=&quot;#0F766E&quot;&gt;page / total / more&lt;/font&gt;" vertex="1">
+          <mxGeometry height="72" width="165" x="790" y="485" as="geometry" />
+        </mxCell>
+        <mxCell id="n_probe" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;strokeWidth=2;fontColor=#0F172A;fontSize=17;fontStyle=1;shadow=1;" value="⚙️ 生成 Probe&lt;br&gt;&lt;font color=&quot;#047857&quot;&gt;固定爬取规则&lt;/font&gt;" vertex="1">
+          <mxGeometry height="82" width="170" x="1040" y="432" as="geometry" />
+        </mxCell>
+        <mxCell id="n_self" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#D1FAE5;strokeColor=#059669;strokeWidth=2;fontColor=#0F172A;fontSize=17;fontStyle=1;shadow=1;" value="🧪 自检 Probe&lt;br&gt;&lt;font color=&quot;#047857&quot;&gt;ApiAdapter 复跑&lt;/font&gt;" vertex="1">
+          <mxGeometry height="78" width="170" x="165" y="670" as="geometry" />
+        </mxCell>
+        <mxCell id="n_valid" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;strokeWidth=2;fontColor=#0F172A;fontSize=15;fontStyle=1;shadow=1;" value="✅ 有效条目?&lt;br&gt;&lt;font color=&quot;#047857&quot;&gt;title + url&lt;/font&gt;" vertex="1">
+          <mxGeometry height="95" width="155" x="405" y="660" as="geometry" />
+        </mxCell>
+        <mxCell id="n_success" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;strokeWidth=2;fontColor=#0F172A;fontSize=17;fontStyle=1;shadow=1;" value="💾 写回规则&lt;br&gt;&lt;font color=&quot;#047857&quot;&gt;api_config.probe&lt;/font&gt;" vertex="1">
+          <mxGeometry height="78" width="170" x="630" y="670" as="geometry" />
+        </mxCell>
+        <mxCell id="n_run" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#CCFBF1;strokeColor=#0D9488;strokeWidth=2;fontColor=#0F172A;fontSize=17;fontStyle=1;shadow=1;" value="⚡ 批量运行&lt;br&gt;&lt;font color=&quot;#0F766E&quot;&gt;复用固定规则&lt;/font&gt;" vertex="1">
+          <mxGeometry height="78" width="170" x="865" y="670" as="geometry" />
+        </mxCell>
+        <mxCell id="n_fail" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;dashed=1;shadow=1;" value="🧠 回退 PlanAgent&lt;br&gt;&lt;font color=&quot;#6D28D9&quot;&gt;LLM 选链接&lt;/font&gt;" vertex="1">
+          <mxGeometry height="78" width="170" x="1135" y="670" as="geometry" />
+        </mxCell>
+        <mxCell id="tag_top" parent="1" style="rounded=1;arcSize=50;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;strokeWidth=2;fontColor=#164E63;fontSize=15;fontStyle=1;" value="🔍 观察真实页面行为，而不是猜 URL" vertex="1">
+          <mxGeometry height="38" width="260" x="1120" y="150" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="n_url" style="rounded=1;html=1;strokeColor=#0284C7;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;curved=0;" target="n_render" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="n_render" style="rounded=1;html=1;strokeColor=#0D9488;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;curved=0;" target="n_xhr" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="n_xhr" style="rounded=1;html=1;strokeColor=#2563EB;strokeWidth=3;fontColor=#1D4ED8;endArrow=classic;edgeStyle=orthogonalEdgeStyle;curved=0;" target="n_json" value="JSON">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="n_render" style="rounded=1;html=1;strokeColor=#7C3AED;strokeWidth=2;fontColor=#6D28D9;dashed=1;endArrow=classic;edgeStyle=orthogonalEdgeStyle;curved=0;" target="n_anchor" value="anchors">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="418" y="189" />
+              <mxPoint x="1103" y="189" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="n_json" style="rounded=1;html=1;strokeColor=#EA580C;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;curved=0;" target="n_arrays" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="860" y="311" />
+              <mxPoint x="109" y="311" />
+              <mxPoint x="109" y="451" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="n_arrays" style="rounded=1;html=1;strokeColor=#D97706;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;curved=0;" target="n_fields" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="1" source="n_fields" style="rounded=1;html=1;strokeColor=#E11D48;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;curved=0;" target="n_score" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="n_anchor" style="rounded=1;html=1;strokeColor=#9333EA;strokeWidth=2;fontColor=#6D28D9;endArrow=classic;edgeStyle=orthogonalEdgeStyle;curved=0;" target="n_urltpl" value="补 URL">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1374" y="241" />
+              <mxPoint x="1374" y="364" />
+              <mxPoint x="873" y="364" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e9" edge="1" parent="1" source="n_score" style="rounded=1;html=1;strokeColor=#9333EA;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;curved=0;" target="n_urltpl" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="758" y="451" />
+              <mxPoint x="758" y="421" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="n_score" style="rounded=1;html=1;strokeColor=#0D9488;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;curved=0;" target="n_page" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="650" y="521" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e11" edge="1" parent="1" source="n_urltpl" style="rounded=1;html=1;strokeColor=#16A34A;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;curved=0;" target="n_probe" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="998" y="421" />
+              <mxPoint x="998" y="473" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e12" edge="1" parent="1" source="n_page" style="rounded=1;html=1;strokeColor=#16A34A;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;curved=0;" target="n_probe" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="998" y="521" />
+              <mxPoint x="998" y="473" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e13" edge="1" parent="1" source="n_probe" style="rounded=1;html=1;strokeColor=#059669;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;curved=0;" target="n_self" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1125" y="581" />
+              <mxPoint x="110" y="581" />
+              <mxPoint x="110" y="709" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e14" edge="1" parent="1" source="n_self" style="rounded=1;html=1;strokeColor=#16A34A;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;curved=0;" target="n_valid" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="370" y="709" />
+              <mxPoint x="370" y="708" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e15" edge="1" parent="1" source="n_valid" style="rounded=1;html=1;strokeColor=#16A34A;strokeWidth=3;fontColor=#047857;endArrow=classic;edgeStyle=orthogonalEdgeStyle;curved=0;" target="n_success" value="Yes">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="602" y="708" />
+              <mxPoint x="602" y="709" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e16" edge="1" parent="1" source="n_success" style="rounded=1;html=1;strokeColor=#0D9488;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;curved=0;" target="n_run" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e17" edge="1" parent="1" source="n_valid" style="rounded=1;html=1;strokeColor=#9333EA;strokeWidth=2;fontColor=#6D28D9;dashed=1;endArrow=classic;edgeStyle=orthogonalEdgeStyle;curved=0;" target="n_fail" value="No">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="588" y="708" />
+              <mxPoint x="588" y="764" />
+              <mxPoint x="1220" y="764" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
