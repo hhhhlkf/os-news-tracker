@@ -71,7 +71,37 @@ discover_and_fetch(site_url)
 | `app/discovery/`                                            | **全新增**，与旧探测并存              |
 
 
-**接入方式**：新端点 `POST /discovery/run`（触发生成命）、`POST /discovery/methods/{id}/fetch`（触发运行命）。不替换旧 `/sources/discover`，不接入 `agent_crawl` 主流程。
+**接入方式**：新端点独立提供能力，不替换旧 `/sources/discover`，不接入 `agent_crawl` 主流程。完整接口见 §2.4。
+
+### 2.4 接口契约（8 端点）
+
+**生成命（异步 + 前置去重）**
+
+| 端点 | 请求 | 响应 |
+|------|------|------|
+| `POST /discovery/run` | `{"url","force?":bool}` | 无重复/force=true → `{"status":"started","run_id":N}`；重复且 force=false → `{"status":"duplicate","existing_method":{method_id,domain,signature,dsl_recipe,last_run_at,last_run_status}}` |
+| `GET /discovery/runs` | `?limit=20` | `[{id,site_url,status,resulting_method_id,llm_token_usage,started_at,ended_at,error_message}]` |
+| `GET /discovery/runs/{id}` | — | `{id,site_url,status,resulting_method_id,llm_token_usage,node_trace,retry_count,started_at,ended_at,error_message}`（前端轮询看 status）|
+
+**运行命**
+
+| 端点 | 请求 | 响应 |
+|------|------|------|
+| `POST /discovery/methods/{id}/fetch` | — | `{"items":[...],"stats":{"discovered_count":N}}` |
+
+**方法管理（crawl_methods CRUD）**
+
+| 端点 | 请求 | 响应 |
+|------|------|------|
+| `GET /discovery/methods` | — | `[{id,domain,entry_url,status,signature,last_run_at,last_run_status}]` |
+| `GET /discovery/methods/{id}` | — | `{id,domain,entry_url,status,dsl_recipe,signature,last_run_at}`（含完整 DSL）|
+| `PATCH /discovery/methods/{id}` | `{"status":"active\|disabled"}` | `{id,status}` |
+| `DELETE /discovery/methods/{id}` | — | 204（级联清 crawl_method_domains 映射）|
+
+**关键交互**：
+- **生成命异步**：`POST /run` 立即返回 run_id，后台线程跑 SiteDiscoveryGraph，前端轮询 `GET /runs/{id}` 至 status=completed/failed。
+- **前置去重**：`POST /run` force=false 先按 domain 查 `crawl_method_domains`，命中返回 duplicate 不跑；用户确认覆盖后 force=true 重发，`save_method` 覆盖旧范式（保留 method_id）。
+- **覆盖保留历史**：`site_discovery_runs` 全保留，能看到"第 N 次发现覆盖了旧范式"。
 
 ---
 
@@ -435,7 +465,7 @@ LLM 接入：`ChatOpenAI(base_url="https://api.deepseek.com", model="deepseek-v4
 | `app/discovery/interpreter.py` | **新建** DslInterpreter                                      |
 | `app/discovery/ingester.py`    | **新建** CrawlOutputIngester                                 |
 | `app/discovery/signature.py`   | **新建** 去重签名                                                |
-| `app/api/discovery_routes.py`  | **新建** `/discovery/run`、`/discovery/methods/{id}/fetch` 端点 |
+| `app/api/discovery_routes.py`  | **新建** discovery 全部端点（见 §2.4 接口契约）                          |
 | `app/models.py`                | **加** 3 张表 ORM                                             |
 | `app/enums.py`                 | **加** `CrawlMethodStatus`/`DiscoveryRunStatus`             |
 | `alembic/versions/`            | **新建** 迁移                                                  |

@@ -14,33 +14,36 @@
 
 ## 文件结构
 
-| 文件 | 职责 | 动作 |
-|------|------|------|
-| `pyproject.toml` | 加 langchain/langgraph 依赖 | 修改 |
-| `app/enums.py` | 加 `CrawlMethodStatus`/`DiscoveryRunStatus` | 修改 |
-| `app/models.py` | 加 `CrawlMethod`/`CrawlMethodDomain`/`SiteDiscoveryRun` ORM | 修改 |
-| `alembic/versions/<rev>_discovery_tables.py` | 建 3 表迁移 | 新建 |
-| `app/discovery/dsl.py` | DSL Pydantic 模型 + 结构/语义校验 + 变量替换 + loop 条件求值 | 新建 |
-| `app/discovery/interpreter.py` | `DslInterpreter`：执行 DSL，httpx + Playwright | 新建 |
-| `app/discovery/signature.py` | 去重签名 | 新建 |
-| `app/discovery/ingester.py` | `CrawlOutputIngester`：DSL 产出 JSON → RawItem → pipeline | 新建 |
-| `app/discovery/tools.py` | LangChain `@tool` 工具集 | 新建 |
-| `app/discovery/graph.py` | `SiteDiscoveryGraph`：StateGraph + supervisor + 4 worker + 确定性节点 | 新建 |
-| `app/api/discovery_routes.py` | `/discovery/run`、`/discovery/methods/{id}/fetch` 端点 | 新建 |
-| `app/api/main.py` | 注册 discovery 路由 | 修改 |
-| `tests/unit/discovery/test_dsl.py` | DSL 模型/校验/变量/loop 单测 | 新建 |
-| `tests/unit/discovery/test_interpreter.py` | 解释器单测（mock httpx/Playwright） | 新建 |
-| `tests/unit/discovery/test_signature.py` | 签名单测 | 新建 |
-| `tests/unit/discovery/test_ingester.py` | ingester 单测 | 新建 |
-| `tests/unit/discovery/test_tools.py` | 工具单测 | 新建 |
-| `tests/unit/discovery/test_graph.py` | 图/supervisor/worker/token 单测（mock LLM） | 新建 |
-| `tests/integration/test_discovery_routes.py` | 端点集成测试 | 新建 |
+
+| 文件                                           | 职责                                                              | 动作  |
+| -------------------------------------------- | --------------------------------------------------------------- | --- |
+| `pyproject.toml`                             | 加 langchain/langgraph 依赖                                        | 修改  |
+| `app/enums.py`                               | 加 `CrawlMethodStatus`/`DiscoveryRunStatus`                      | 修改  |
+| `app/models.py`                              | 加 `CrawlMethod`/`CrawlMethodDomain`/`SiteDiscoveryRun` ORM      | 修改  |
+| `alembic/versions/<rev>_discovery_tables.py` | 建 3 表迁移                                                         | 新建  |
+| `app/discovery/dsl.py`                       | DSL Pydantic 模型 + 结构/语义校验 + 变量替换 + loop 条件求值                    | 新建  |
+| `app/discovery/interpreter.py`               | `DslInterpreter`：执行 DSL，httpx + Playwright                      | 新建  |
+| `app/discovery/signature.py`                 | 去重签名                                                            | 新建  |
+| `app/discovery/ingester.py`                  | `CrawlOutputIngester`：DSL 产出 JSON → RawItem → pipeline          | 新建  |
+| `app/discovery/tools.py`                     | LangChain `@tool` 工具集                                           | 新建  |
+| `app/discovery/graph.py`                     | `SiteDiscoveryGraph`：StateGraph + supervisor + 4 worker + 确定性节点 | 新建  |
+| `app/api/discovery_routes.py` | discovery 全部端点：/run（生成命+去重+异步）、/methods（CRUD）、/runs（审计查询）、/methods/{id}/fetch（运行命）| 新建 |
+| `app/api/main.py`                            | 注册 discovery 路由                                                 | 修改  |
+| `tests/unit/discovery/test_dsl.py`           | DSL 模型/校验/变量/loop 单测                                            | 新建  |
+| `tests/unit/discovery/test_interpreter.py`   | 解释器单测（mock httpx/Playwright）                                    | 新建  |
+| `tests/unit/discovery/test_signature.py`     | 签名单测                                                            | 新建  |
+| `tests/unit/discovery/test_ingester.py`      | ingester 单测                                                     | 新建  |
+| `tests/unit/discovery/test_tools.py`         | 工具单测                                                            | 新建  |
+| `tests/unit/discovery/test_graph.py`         | 图/supervisor/worker/token 单测（mock LLM）                          | 新建  |
+| `tests/integration/test_discovery_routes.py` | 端点集成测试                                                          | 新建  |
+
 
 ---
 
 ## Task 1: 依赖、Enum、ORM 模型、迁移
 
 **Files:**
+
 - Modify: `backend/pyproject.toml`
 - Modify: `backend/app/enums.py`
 - Modify: `backend/app/models.py`
@@ -50,6 +53,7 @@
 - [ ] **Step 1: 加依赖**
 
 `backend/pyproject.toml` 的 `dependencies` 列表加三项：
+
 ```toml
     "langchain-core>=0.3",
     "langgraph[postgres]>=0.2",
@@ -59,6 +63,7 @@
 - [ ] **Step 2: 加 Enum**
 
 `backend/app/enums.py` 末尾加：
+
 ```python
 class CrawlMethodStatus(str, Enum):
     ACTIVE = "active"
@@ -74,6 +79,7 @@ class DiscoveryRunStatus(str, Enum):
 - [ ] **Step 3: 加 ORM 模型**
 
 `backend/app/models.py` 加：
+
 ```python
 class CrawlMethod(Base):
     """统一爬取方式：存 DSL Recipe + 去重签名 + 运行状态。"""
@@ -111,11 +117,13 @@ class SiteDiscoveryRun(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 ```
+
 （`JSONB`/`func`/`ForeignKey`/`Text`/`Integer` 按文件顶部现有 import 补齐。）
 
 - [ ] **Step 4: 写失败测试**
 
 `backend/tests/unit/test_models.py` 加：
+
 ```python
 def test_crawl_method_table_created(session):
     from app.models import CrawlMethod
@@ -131,6 +139,7 @@ def test_crawl_method_table_created(session):
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/test_models.py::test_crawl_method_table_created -v
 alembic revision --autogenerate -m "discovery tables"
 ```
+
 手动检查迁移文件含 3 张 `create_table`，无意外 drop。再跑 `alembic upgrade head` 验证。
 
 - [ ] **Step 6: Commit**
@@ -145,6 +154,7 @@ git commit -m "Add discovery tables, enums, langchain/langgraph deps"
 ## Task 2: DSL 原语 Pydantic 模型 + 结构校验
 
 **Files:**
+
 - Create: `backend/app/discovery/dsl.py`
 - Test: `backend/tests/unit/discovery/test_dsl.py`
 
@@ -183,6 +193,7 @@ def test_dsl_recipe_discriminated_union():
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_dsl.py -v
 ```
+
 Expected: FAIL（`app.discovery.dsl` 不存在）
 
 - [ ] **Step 3: 实现 DSL 模型**
@@ -280,6 +291,7 @@ class DslRecipe(BaseModel):
     entry_url: str
     actions: list[Action]
 ```
+
 `LoopAction.model_rebuild()` 在文件末尾调用以解析 `Action` 前向引用。
 
 - [ ] **Step 4: 跑测试确认通过**
@@ -287,6 +299,7 @@ class DslRecipe(BaseModel):
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_dsl.py -v
 ```
+
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -301,6 +314,7 @@ git commit -m "Add DSL Pydantic models with discriminated-union actions"
 ## Task 3: DSL 语义校验 + 变量替换 + loop 条件求值
 
 **Files:**
+
 - Modify: `backend/app/discovery/dsl.py`
 - Test: `backend/tests/unit/discovery/test_dsl.py`
 
@@ -346,6 +360,7 @@ def test_eval_condition_count_of():
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_dsl.py -v
 ```
+
 Expected: FAIL（`validate_semantics` 等未定义）
 
 - [ ] **Step 3: 实现语义校验 + 变量替换 + 条件求值**
@@ -431,6 +446,7 @@ def validate_semantics(recipe: DslRecipe) -> list[str]:
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_dsl.py -v
 ```
+
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -445,6 +461,7 @@ git commit -m "Add DSL semantic validation, var rendering, loop condition eval"
 ## Task 4: DslInterpreter 引擎 + fetch/extract/set/dedup 原语
 
 **Files:**
+
 - Create: `backend/app/discovery/interpreter.py`
 - Test: `backend/tests/unit/discovery/test_interpreter.py`
 
@@ -488,6 +505,7 @@ def test_dedup_by_url(monkeypatch):
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_interpreter.py -v
 ```
+
 Expected: FAIL（模块不存在）
 
 - [ ] **Step 3: 实现 DslInterpreter（fetch/extract/set/dedup）**
@@ -620,6 +638,7 @@ class DslInterpreter:
             seen.add(k); out.append(it)
         ctx["items"] = out
 ```
+
 注：`eval` 仅用于 `{{page}} + 1` 这类纯算术，`__builtins__` 置空限制。Task 5 可换成更安全的算术解析。
 
 - [ ] **Step 4: 跑测试确认通过**
@@ -627,6 +646,7 @@ class DslInterpreter:
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_interpreter.py -v
 ```
+
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -641,6 +661,7 @@ git commit -m "Add DslInterpreter with fetch/extract/set/dedup primitives"
 ## Task 5: loop 原语 + 四类站执行
 
 **Files:**
+
 - Modify: `backend/app/discovery/interpreter.py`
 - Test: `backend/tests/unit/discovery/test_interpreter.py`
 
@@ -689,16 +710,20 @@ def test_loop_max_iters_hard_stop(monkeypatch):
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_interpreter.py -k loop -v
 ```
+
 Expected: FAIL（loop 未实现）
 
 - [ ] **Step 3: 实现 loop**
 
 在 `_exec` 加分支：
+
 ```python
         elif isinstance(action, LoopAction):
             self._loop(action, ctx)
 ```
+
 方法：
+
 ```python
     def _loop(self, action: LoopAction, ctx: dict) -> None:
         """循环：until 条件为真或 max_iters 用尽则停（先到先停，防死循环）。"""
@@ -717,6 +742,7 @@ Expected: FAIL（loop 未实现）
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_interpreter.py -v
 ```
+
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -731,6 +757,7 @@ git commit -m "Add loop primitive with until condition and max_iters hard stop"
 ## Task 6: Playwright 原语（goto/wait_for/click）+ HTML extract
 
 **Files:**
+
 - Modify: `backend/app/discovery/interpreter.py`
 - Test: `backend/tests/unit/discovery/test_interpreter.py`
 
@@ -761,16 +788,20 @@ def test_goto_wait_click_extract(monkeypatch):
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_interpreter.py -k goto -v
 ```
+
 Expected: FAIL
 
 - [ ] **Step 3: 实现 Playwright 原语**
 
 `_exec` 加分支：
+
 ```python
         elif isinstance(action, (GotoAction, WaitForAction, ClickAction)):
             self._browser_action(action, ctx)
 ```
+
 `__init__` 加 `self._page = None`。方法：
+
 ```python
     def _browser_action(self, action, ctx):
         """Playwright 浏览器动作（goto/wait_for/click），懒加载浏览器。"""
@@ -817,7 +848,9 @@ Expected: FAIL
         child = el.query_selector(sel)
         return child.inner_text() if child else ""
 ```
+
 `run` 末尾加 `self._cleanup()` 关闭 browser/pw：
+
 ```python
     def _cleanup(self):
         """关闭 Playwright 浏览器，run 结束时调用。"""
@@ -831,6 +864,7 @@ Expected: FAIL
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_interpreter.py -v
 ```
+
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -845,6 +879,7 @@ git commit -m "Add Playwright primitives (goto/wait_for/click) and HTML extract"
 ## Task 7: 去重签名
 
 **Files:**
+
 - Create: `backend/app/discovery/signature.py`
 - Test: `backend/tests/unit/discovery/test_signature.py`
 
@@ -881,6 +916,7 @@ def test_signature_differs_when_loop_added():
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_signature.py -v
 ```
+
 Expected: FAIL
 
 - [ ] **Step 3: 实现**
@@ -919,6 +955,7 @@ def compute_signature(recipe: DslRecipe) -> str:
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_signature.py -v
 ```
+
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -933,6 +970,7 @@ git commit -m "Add crawl method dedup signature"
 ## Task 8: CrawlOutputIngester
 
 **Files:**
+
 - Create: `backend/app/discovery/ingester.py`
 - Test: `backend/tests/unit/discovery/test_ingester.py`
 
@@ -964,13 +1002,14 @@ def test_ingest_drops_item_without_url():
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_ingester.py -v
 ```
+
 Expected: FAIL
 
 - [ ] **Step 3: 实现**
 
 ```python
 # app/discovery/ingester.py
-"""CrawlOutputIngester：把 DSL 产出 JSON 转成 RawItem，接入现有 pipeline。"""
+"""CrawlOutputIngester：把 DSL 产出 JSON 转成 RawItem，接入现有pipeline。"""
 from __future__ import annotations
 from datetime import datetime
 from app.schemas import RawItem
@@ -1001,6 +1040,7 @@ class CrawlOutputIngester:
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_ingester.py -v
 ```
+
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -1015,6 +1055,7 @@ git commit -m "Add CrawlOutputIngester to convert DSL output to RawItem"
 ## Task 9: LangChain @tool 工具集
 
 **Files:**
+
 - Create: `backend/app/discovery/tools.py`
 - Test: `backend/tests/unit/discovery/test_tools.py`
 
@@ -1045,6 +1086,7 @@ def test_test_url_template_validates(monkeypatch):
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_tools.py -v
 ```
+
 Expected: FAIL
 
 - [ ] **Step 3: 实现工具集**
@@ -1137,6 +1179,7 @@ TOOLS = [fetch_page, capture_network, inspect_item, test_url_template]
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_tools.py -v
 ```
+
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -1151,6 +1194,7 @@ git commit -m "Add LangChain @tool discovery tools"
 ## Task 10: Graph State + 确定性节点 + supervisor 路由
 
 **Files:**
+
 - Create: `backend/app/discovery/graph.py`
 - Test: `backend/tests/unit/discovery/test_graph.py`
 
@@ -1190,6 +1234,7 @@ def test_route_token_exceeded_goes_to_end():
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_graph.py -v
 ```
+
 Expected: FAIL
 
 - [ ] **Step 3: 实现 State + 路由 + 确定性节点**
@@ -1221,6 +1266,7 @@ class DiscoveryState(TypedDict, total=False):
     verdict: str | None     # "dsl" | "failed"
     method_id: int | None   # 最终存入的 crawl_methods.id
     token_used: int         # 累计 token（硬中止用）
+    force: bool             # true=覆盖同 domain 旧范式（去重覆盖用，Task 15）
     error: str | None
 
 def supervisor_route(state: DiscoveryState) -> str:
@@ -1265,6 +1311,7 @@ def save_method(state: DiscoveryState) -> DiscoveryState:
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_graph.py -k route -v
 ```
+
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -1279,6 +1326,7 @@ git commit -m "Add discovery graph State, supervisor routing, deterministic node
 ## Task 11: 4 worker agents + token 硬中止
 
 **Files:**
+
 - Modify: `backend/app/discovery/graph.py`
 - Test: `backend/tests/unit/discovery/test_graph.py`
 
@@ -1314,6 +1362,7 @@ def test_auditor_rejects_when_test_fails(monkeypatch):
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_graph.py -k writer -v
 ```
+
 Expected: FAIL
 
 - [ ] **Step 3: 实现 4 worker + token 计数**
@@ -1371,6 +1420,7 @@ def auditor(state: DiscoveryState, llm=None, test_fn=None) -> DiscoveryState:
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_graph.py -v
 ```
+
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -1385,6 +1435,7 @@ git commit -m "Add 4 worker agents with structured output and token accounting"
 ## Task 12: 组装 StateGraph + PostgresSaver + 审计 + save_method
 
 **Files:**
+
 - Modify: `backend/app/discovery/graph.py`
 - Test: `backend/tests/unit/discovery/test_graph.py`
 
@@ -1417,6 +1468,7 @@ def test_save_method_writes_crawl_method(monkeypatch):
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_graph.py -k build_graph -v
 ```
+
 Expected: FAIL
 
 - [ ] **Step 3: 实现组装 + save_method + 审计**
@@ -1451,27 +1503,49 @@ def supervisor_node(state: DiscoveryState) -> DiscoveryState:
     return state
 
 def save_method_with_db(state: DiscoveryState) -> DiscoveryState:
-    """确定性节点：去重签名 + 存 crawl_methods + crawl_method_domains 映射。"""
+    """确定性节点：去重签名 + 存 crawl_methods + crawl_method_domains 映射。
+
+    force=true 且同 domain 已有 → 覆盖更新（保留 method_id，历史连续）；
+    否则新建。state.force 由 run_discovery 初始化时塞入。
+    """
     from app.db import SessionLocal
     from app.models import CrawlMethod, CrawlMethodDomain, SiteDiscoveryRun
     from app.discovery.dsl import DslRecipe
     from app.discovery.signature import compute_signature
     from urllib.parse import urlparse
+    from datetime import datetime, timezone
     s = SessionLocal()
     try:
         recipe = DslRecipe(**state["dsl_recipe"])
         sig = compute_signature(recipe)
         domain = urlparse(state["site_url"]).netloc
-        m = CrawlMethod(domain=domain, entry_url=state["site_url"], dsl_recipe=recipe.model_dump(), signature=sig)
-        s.add(m); s.flush()
-        s.add(CrawlMethodDomain(domain=domain, method_id=m.id))  # 去重映射
+        existing = s.query(CrawlMethodDomain).filter_by(domain=domain).first()
+        if existing is not None and state.get("force"):
+            # 覆盖：更新现有 method，保留 method_id，审计历史连续
+            m = s.get(CrawlMethod, existing.method_id)
+            m.dsl_recipe = recipe.model_dump()
+            m.signature = sig
+            m.status = "active"
+            m.updated_at = datetime.now(timezone.utc)
+        elif existing is not None:
+            # 同 domain 已有且未 force：保留旧（兜底，正常流程前置检查已拦截）
+            m = s.get(CrawlMethod, existing.method_id)
+        else:
+            # 新建
+            m = CrawlMethod(domain=domain, entry_url=state["site_url"],
+                            dsl_recipe=recipe.model_dump(), signature=sig)
+            s.add(m); s.flush()
+            s.add(CrawlMethodDomain(domain=domain, method_id=m.id))  # 去重映射
         s.commit()
         return {"verdict": "dsl", "method_id": m.id}
     finally:
         s.close()
 
-def run_discovery(site_url: str) -> dict:
-    """生成命入口：建图（PostgresSaver 跨进程续跑）+ 跑 + 落审计 site_discovery_runs。"""
+def run_discovery(site_url: str, force: bool = False) -> dict:
+    """生成命入口：建图（PostgresSaver 跨进程续跑）+ 跑 + 落审计 site_discovery_runs。
+
+    force 透传到初始 state，save_method 据此决定覆盖/新建。
+    """
     from langgraph.checkpoint.postgres import PostgresSaver
     from app.db import engine_url  # 复用 DATABASE_URL
     from app.models import SiteDiscoveryRun
@@ -1486,7 +1560,7 @@ def run_discovery(site_url: str) -> dict:
         run = SiteDiscoveryRun(site_url=site_url, status="running")
         db_sess.add(run); db_sess.commit()
         # thread_id 关联 run，崩了重启可从 checkpoint 续跑
-        final = g.invoke({"site_url": site_url, "attempt": 0, "token_used": 0},
+        final = g.invoke({"site_url": site_url, "attempt": 0, "token_used": 0, "force": force},
                          config={"configurable": {"thread_id": f"discovery-{run.id}"}})
         # 落审计
         run.status = "completed" if final.get("verdict") == "dsl" else "failed"
@@ -1506,6 +1580,7 @@ def run_discovery(site_url: str) -> dict:
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/unit/discovery/test_graph.py -v
 ```
+
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -1520,6 +1595,7 @@ git commit -m "Assemble StateGraph with PostgresSaver, audit, save_method"
 ## Task 13: 新端点 /discovery/run + /methods/{id}/fetch
 
 **Files:**
+
 - Create: `backend/app/api/discovery_routes.py`
 - Modify: `backend/app/api/main.py`
 - Test: `backend/tests/integration/test_discovery_routes.py`
@@ -1547,6 +1623,7 @@ def test_discovery_fetch_endpoint(client, session):
         r = client.post(f"/discovery/methods/{m.id}/fetch")
     assert r.status_code == 200
 ```
+
 （`client` fixture 复用 `tests/integration/test_source_routes.py` 的模式。）
 
 - [ ] **Step 2: 跑测试确认失败**
@@ -1554,6 +1631,7 @@ def test_discovery_fetch_endpoint(client, session):
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/integration/test_discovery_routes.py -v
 ```
+
 Expected: FAIL
 
 - [ ] **Step 3: 实现端点**
@@ -1569,7 +1647,7 @@ from pydantic import BaseModel, HttpUrl
 from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.models import CrawlMethod, CrawlMethodDomain
-from app.discovery.graph import run_discovery
+from app.discovery.graph import run_discovery, check_existing_method
 from app.discovery.interpreter import DslInterpreter
 from app.discovery.dsl import DslRecipe
 from app.discovery.ingester import CrawlOutputIngester
@@ -1578,12 +1656,21 @@ router = APIRouter(prefix="/discovery", tags=["discovery"])
 
 class DiscoverRequest(BaseModel):
     url: HttpUrl
+    force: bool = False   # true=跳过去重检查/覆盖同 domain 旧范式
 
 @router.post("/run")
 def discover_run(body: DiscoverRequest):
-    """生成命：触发 SiteDiscoveryGraph 产出 DSL Recipe 并存库。"""
-    result = run_discovery(str(body.url))
-    return result
+    """生成命：force=false 先查重，重复返回 duplicate 不跑；force=true 覆盖。
+
+    第一子项目同步调用 run_discovery（Task 15 改异步）。
+    """
+    site_url = str(body.url)
+    if not body.force:
+        existing = check_existing_method(site_url)
+        if existing:
+            return {"status": "duplicate", "existing_method": existing}
+    result = run_discovery(site_url, force=body.force)
+    return {"status": "completed", **result}
 
 @router.post("/methods/{method_id}/fetch")
 def discovery_fetch(method_id: int, db: Session = Depends(get_db)):
@@ -1597,7 +1684,38 @@ def discovery_fetch(method_id: int, db: Session = Depends(get_db)):
     db.commit()
     return output
 ```
+
+`graph.py` 追加去重检查函数（供 `/run` 前置查重）：
+
+```python
+# 追加到 graph.py
+def check_existing_method(site_url: str) -> dict | None:
+    """按 domain 查 crawl_method_domains，命中返回已有范式摘要，否则 None。
+
+    去重粒度=domain（用户感知是"这个网站"），signature 同形去重留作 save_method 内部。
+    """
+    from app.db import SessionLocal
+    from app.models import CrawlMethod, CrawlMethodDomain
+    from urllib.parse import urlparse
+    domain = urlparse(site_url).netloc
+    s = SessionLocal()
+    try:
+        mapping = s.query(CrawlMethodDomain).filter_by(domain=domain).first()
+        if mapping is None:
+            return None
+        m = s.get(CrawlMethod, mapping.method_id)
+        return {
+            "method_id": m.id, "domain": m.domain, "signature": m.signature,
+            "dsl_recipe": m.dsl_recipe,
+            "last_run_at": m.last_run_at.isoformat() if m.last_run_at else None,
+            "last_run_status": m.last_run_status,
+        }
+    finally:
+        s.close()
+```
+
 `app/api/main.py` 注册：`from app.api.discovery_routes import router as discovery_router; app.include_router(discovery_router)`。`run_method` 别名指向 `DslInterpreter().run`（供测试 mock）：
+
 ```python
 def run_method(method_id, db): ...  # 包装 discovery_fetch 的执行部分
 ```
@@ -1607,6 +1725,7 @@ def run_method(method_id, db): ...  # 包装 discovery_fetch 的执行部分
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/integration/test_discovery_routes.py -v
 ```
+
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -1621,6 +1740,7 @@ git commit -m "Add /discovery/run and /discovery/methods/{id}/fetch endpoints"
 ## Task 14: 端到端集成测试 + 旧功能回归
 
 **Files:**
+
 - Test: `backend/tests/integration/test_discovery_e2e.py`
 
 - [ ] **Step 1: 写端到端测试（mock 站点 + mock LLM）**
@@ -1663,6 +1783,7 @@ def test_e2e_json_api_site(client, session, monkeypatch):
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/integration/test_discovery_e2e.py -v
 ```
+
 Expected: PASS
 
 - [ ] **Step 3: 跑旧功能回归（确认增量未破坏）**
@@ -1670,6 +1791,7 @@ Expected: PASS
 ```bash
 ENABLE_SCHEDULER=0 python -m pytest tests/ -q
 ```
+
 Expected: 全部通过（含旧 `test_api_discovery`/`test_source_routes`/`test_agent_crawl` 等回归）
 
 - [ ] **Step 4: Commit**
@@ -1681,21 +1803,327 @@ git commit -m "Add discovery end-to-end test and verify legacy regression"
 
 ---
 
+## Task 15: /run 异步化 + runs 查询端点
+
+**Files:**
+- Modify: `backend/app/discovery/graph.py`（拆 run_discovery 为异步入口 + 执行核心）
+- Modify: `backend/app/api/discovery_routes.py`（/run 异步 + GET runs）
+- Test: `backend/tests/integration/test_discovery_routes.py`
+
+**背景：** Task 12 的 `run_discovery` 同步阻塞（LLM 多轮几分钟），Task 13 的 `/run` 同步调用会卡住前端。本 task 改异步：POST /run 立即返回 run_id，后台线程跑，前端轮询 `GET /discovery/runs/{id}`。复用现有 `agent_crawl` 的 `_start_agent_source_run` 后台线程模式。
+
+- [ ] **Step 1: 重构 graph.py——异步入口 + 执行核心**
+
+把 Task 12 的 `run_discovery` 拆成 `start_discovery_run`（建记录 + 启后台线程）和 `_execute_discovery`（执行图 + 更新记录）：
+```python
+# 替换 Task 12 的 run_discovery，追加到 graph.py
+import threading
+
+def start_discovery_run(site_url: str, force: bool = False) -> int:
+    """异步触发生成命：建 site_discovery_runs 记录 + 后台线程跑 _execute_discovery。
+
+    复用现有 agent_crawl 的 _start_agent_source_run 后台线程模式。返回 run_id 供轮询。
+    """
+    from app.db import SessionLocal
+    from app.models import SiteDiscoveryRun
+    s = SessionLocal()
+    try:
+        run = SiteDiscoveryRun(site_url=site_url, status="running")
+        s.add(run); s.commit()
+        run_id = run.id
+    finally:
+        s.close()
+    threading.Thread(
+        target=_execute_discovery, args=(run_id, site_url, force),
+        daemon=True, name=f"discovery-run-{run_id}",
+    ).start()
+    return run_id
+
+def _execute_discovery(run_id: int, site_url: str, force: bool) -> None:
+    """后台线程执行核心：建图（PostgresSaver）+ 跑 + 更新 site_discovery_runs。
+
+    进程崩了可从 PostgresSaver checkpoint 跨进程续跑（thread_id 关联 run_id）。
+    """
+    from langgraph.checkpoint.postgres import PostgresSaver
+    from app.models import SiteDiscoveryRun
+    from sqlalchemy import create_engine
+    from app.config import get_settings
+    from datetime import datetime, timezone
+    s = get_settings()
+    eng = create_engine(s.database_url)
+    checkpointer = PostgresSaver(eng); checkpointer.setup()  # 自动建 checkpoint 表
+    g = build_graph(checkpointer=checkpointer)
+    db_sess = SessionLocal()
+    try:
+        final = g.invoke({"site_url": site_url, "attempt": 0, "token_used": 0, "force": force},
+                         config={"configurable": {"thread_id": f"discovery-{run_id}"}})
+        # 落审计
+        run = db_sess.get(SiteDiscoveryRun, run_id)
+        run.status = "completed" if final.get("verdict") == "dsl" else "failed"
+        run.resulting_method_id = final.get("method_id")
+        run.llm_token_usage = final.get("token_used", 0)
+        run.node_trace = [{"verdict": final.get("verdict")}]
+        run.ended_at = datetime.now(timezone.utc)
+        if final.get("error"): run.error_message = final["error"]
+        db_sess.commit()
+    except Exception as e:
+        # 兜底：图级异常标 failed（节点级异常已在 supervisor 路由处理）
+        run = db_sess.get(SiteDiscoveryRun, run_id)
+        if run and run.status == "running":
+            run.status = "failed"; run.error_message = str(e)
+            run.ended_at = datetime.now(timezone.utc)
+            db_sess.commit()
+    finally:
+        db_sess.close(); eng.dispose()
+
+# run_discovery 保留为同步入口（测试/同步场景用），内部调 _execute_discovery
+def run_discovery(site_url: str, force: bool = False) -> dict:
+    """同步入口（测试用）：建记录 + 同步跑 _execute_discovery，返回最终结果摘要。"""
+    from app.db import SessionLocal
+    from app.models import SiteDiscoveryRun
+    s = SessionLocal()
+    try:
+        run = SiteDiscoveryRun(site_url=site_url, status="running")
+        s.add(run); s.commit(); run_id = run.id
+    finally:
+        s.close()
+    _execute_discovery(run_id, site_url, force)
+    s = SessionLocal()
+    try:
+        run = s.get(SiteDiscoveryRun, run_id)
+        return {"verdict": "dsl" if run.status == "completed" else "failed",
+                "method_id": run.resulting_method_id, "run_id": run_id}
+    finally:
+        s.close()
+```
+
+- [ ] **Step 2: /run 端点改异步**
+
+`discovery_routes.py` 的 `discover_run` 改调 `start_discovery_run`（duplicate 仍同步返回）：
+```python
+from app.discovery.graph import run_discovery, check_existing_method, start_discovery_run
+
+@router.post("/run")
+def discover_run(body: DiscoverRequest):
+    """生成命：force=false 先查重；无重复/force=true 异步启动，返回 run_id。"""
+    site_url = str(body.url)
+    if not body.force:
+        existing = check_existing_method(site_url)
+        if existing:
+            return {"status": "duplicate", "existing_method": existing}
+    run_id = start_discovery_run(site_url, force=body.force)
+    return {"status": "started", "run_id": run_id}
+```
+
+**注：** 此改动使 Task 13 的 `test_discover_run_endpoint`（mock `run_discovery`）失效——`discover_run` 不再调 `run_discovery`。Step 4 的 `test_discover_run_async_returns_run_id`（mock `start_discovery_run`）替代它，**删除 Task 13 的 `test_discover_run_endpoint`**。
+
+- [ ] **Step 3: runs 查询端点（列表 + 详情/轮询）**
+
+`discovery_routes.py` 顶部补 `from sqlalchemy import select`，追加：
+```python
+@router.get("/runs")
+def list_discovery_runs(limit: int = 20, db: Session = Depends(get_db)):
+    """列出生成命历史（最近 limit 条），按 started_at 倒序。"""
+    runs = db.scalars(
+        select(SiteDiscoveryRun).order_by(SiteDiscoveryRun.started_at.desc()).limit(limit)
+    ).all()
+    return [{"id": r.id, "site_url": r.site_url, "status": r.status,
+             "resulting_method_id": r.resulting_method_id, "llm_token_usage": r.llm_token_usage,
+             "started_at": r.started_at.isoformat() if r.started_at else None,
+             "ended_at": r.ended_at.isoformat() if r.ended_at else None,
+             "error_message": r.error_message} for r in runs]
+
+@router.get("/runs/{run_id}")
+def get_discovery_run(run_id: int, db: Session = Depends(get_db)):
+    """单 run 详情/轮询：含 node_trace 审计。前端轮询此端点看 status。"""
+    r = db.get(SiteDiscoveryRun, run_id)
+    if not r: raise HTTPException(404, "run not found")
+    return {"id": r.id, "site_url": r.site_url, "status": r.status,
+            "resulting_method_id": r.resulting_method_id, "llm_token_usage": r.llm_token_usage,
+            "node_trace": r.node_trace, "retry_count": r.retry_count,
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+            "ended_at": r.ended_at.isoformat() if r.ended_at else None,
+            "error_message": r.error_message}
+```
+（`SiteDiscoveryRun` 已在文件顶部 import，确认补上。）
+
+- [ ] **Step 4: 写测试**
+
+```python
+# 追加到 test_discovery_routes.py
+def test_discover_run_async_returns_run_id(client):
+    from unittest.mock import patch
+    with patch("app.api.discovery_routes.start_discovery_run", return_value=42):
+        r = client.post("/discovery/run", json={"url": "https://x.com"})
+    assert r.status_code == 200
+    assert r.json() == {"status": "started", "run_id": 42}
+
+def test_discover_run_duplicate_returns_existing(client, session):
+    from app.models import CrawlMethod, CrawlMethodDomain
+    m = CrawlMethod(domain="x.com", entry_url="https://x.com", dsl_recipe={"actions":[]}, signature="abc")
+    session.add(m); session.flush()
+    session.add(CrawlMethodDomain(domain="x.com", method_id=m.id)); session.commit()
+    r = client.post("/discovery/run", json={"url": "https://x.com"})  # force 默认 false
+    assert r.json()["status"] == "duplicate"
+    assert r.json()["existing_method"]["method_id"] == m.id
+
+def test_list_discovery_runs(client, session):
+    from app.models import SiteDiscoveryRun
+    session.add(SiteDiscoveryRun(site_url="https://x.com", status="completed"))
+    session.commit()
+    r = client.get("/discovery/runs")
+    assert r.status_code == 200
+    assert len(r.json()) >= 1
+    assert r.json()[0]["status"] == "completed"
+
+def test_get_discovery_run(client, session):
+    from app.models import SiteDiscoveryRun
+    run = SiteDiscoveryRun(site_url="https://x.com", status="running")
+    session.add(run); session.commit()
+    r = client.get(f"/discovery/runs/{run.id}")
+    assert r.json()["status"] == "running"
+```
+
+- [ ] **Step 5: 跑测试 + Commit**
+
+```bash
+ENABLE_SCHEDULER=0 python -m pytest tests/integration/test_discovery_routes.py -v
+```
+Expected: PASS
+```bash
+git add backend/app/discovery/graph.py backend/app/api/discovery_routes.py backend/tests/integration/test_discovery_routes.py
+git commit -m "Async /discovery/run with run_id polling + runs list/detail endpoints"
+```
+
+---
+
+## Task 16: methods 管理端点（列表/详情/禁用/删除）
+
+**Files:**
+- Modify: `backend/app/api/discovery_routes.py`
+- Test: `backend/tests/integration/test_discovery_routes.py`
+
+- [ ] **Step 1: 写失败测试**
+
+```python
+# 追加到 test_discovery_routes.py
+def test_list_methods(client, session):
+    from app.models import CrawlMethod
+    session.add(CrawlMethod(domain="x.com", entry_url="https://x.com", dsl_recipe={"actions":[]}, signature="a"))
+    session.commit()
+    r = client.get("/discovery/methods")
+    assert r.status_code == 200
+    assert any(m["domain"] == "x.com" for m in r.json())
+
+def test_get_method_detail(client, session):
+    from app.models import CrawlMethod
+    m = CrawlMethod(domain="x.com", entry_url="https://x.com",
+                    dsl_recipe={"recipe_type":"dsl","entry_url":"https://x.com","actions":[]}, signature="a")
+    session.add(m); session.commit()
+    r = client.get(f"/discovery/methods/{m.id}")
+    assert r.json()["dsl_recipe"]["recipe_type"] == "dsl"
+
+def test_patch_method_disable(client, session):
+    from app.models import CrawlMethod
+    m = CrawlMethod(domain="x.com", entry_url="https://x.com", dsl_recipe={"actions":[]}, signature="a", status="active")
+    session.add(m); session.commit()
+    r = client.patch(f"/discovery/methods/{m.id}", json={"status": "disabled"})
+    assert r.json()["status"] == "disabled"
+
+def test_delete_method_cascades_domain(client, session):
+    from app.models import CrawlMethod, CrawlMethodDomain
+    m = CrawlMethod(domain="x.com", entry_url="https://x.com", dsl_recipe={"actions":[]}, signature="a")
+    session.add(m); session.flush()
+    session.add(CrawlMethodDomain(domain="x.com", method_id=m.id)); session.commit()
+    mid = m.id
+    r = client.delete(f"/discovery/methods/{mid}")
+    assert r.status_code == 204
+    assert session.get(CrawlMethod, mid) is None
+    assert session.query(CrawlMethodDomain).filter_by(method_id=mid).count() == 0
+```
+
+- [ ] **Step 2: 跑测试确认失败**
+
+```bash
+ENABLE_SCHEDULER=0 python -m pytest tests/integration/test_discovery_routes.py -k "list_methods or get_method_detail or patch_method or delete_method" -v
+```
+Expected: FAIL
+
+- [ ] **Step 3: 实现管理端点**
+
+`discovery_routes.py` 追加：
+```python
+class MethodPatch(BaseModel):
+    status: str | None = None   # active | disabled
+
+@router.get("/methods")
+def list_methods(db: Session = Depends(get_db)):
+    """列出所有已发现的爬取方式。"""
+    ms = db.scalars(select(CrawlMethod).order_by(CrawlMethod.id.desc())).all()
+    return [{"id": m.id, "domain": m.domain, "entry_url": m.entry_url, "status": m.status,
+             "signature": m.signature, "last_run_at": m.last_run_at.isoformat() if m.last_run_at else None,
+             "last_run_status": m.last_run_status} for m in ms]
+
+@router.get("/methods/{method_id}")
+def get_method(method_id: int, db: Session = Depends(get_db)):
+    """单方法详情，含完整 DSL Recipe（前端可展示/编辑）。"""
+    m = db.get(CrawlMethod, method_id)
+    if not m: raise HTTPException(404, "method not found")
+    return {"id": m.id, "domain": m.domain, "entry_url": m.entry_url, "status": m.status,
+            "dsl_recipe": m.dsl_recipe, "signature": m.signature,
+            "last_run_at": m.last_run_at.isoformat() if m.last_run_at else None}
+
+@router.patch("/methods/{method_id}")
+def patch_method(method_id: int, body: MethodPatch, db: Session = Depends(get_db)):
+    """禁用/启用方法（改 status）。"""
+    m = db.get(CrawlMethod, method_id)
+    if not m: raise HTTPException(404, "method not found")
+    if body.status: m.status = body.status
+    db.commit()
+    return {"id": m.id, "status": m.status}
+
+@router.delete("/methods/{method_id}", status_code=204)
+def delete_method(method_id: int, db: Session = Depends(get_db)):
+    """删除方法 + 级联清 crawl_method_domains 映射。"""
+    m = db.get(CrawlMethod, method_id)
+    if not m: raise HTTPException(404, "method not found")
+    db.query(CrawlMethodDomain).filter_by(method_id=method_id).delete()  # 级联清映射
+    db.delete(m); db.commit()
+```
+
+- [ ] **Step 4: 跑测试确认通过**
+
+```bash
+ENABLE_SCHEDULER=0 python -m pytest tests/integration/test_discovery_routes.py -v
+```
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add backend/app/api/discovery_routes.py backend/tests/integration/test_discovery_routes.py
+git commit -m "Add crawl method management endpoints (list/detail/patch/delete)"
+```
+
+---
+
 ## Self-Review
 
 **1. Spec coverage**：
+
 - §1.2 设计方向 → Task 9-12（工具+图+worker）✓
 - §2 两条命 → Task 4-6（运行命）+ Task 10-12（生成命）✓
 - §3 图结构（State/supervisor/4 worker/PostgresSaver/token）→ Task 10-12 ✓
 - §4 DSL 规约（8 原语/变量/loop/校验）→ Task 2-6 ✓
-- §5 数据模型（3 表）+ 集成（纯增量新端点）→ Task 1, 13 ✓
+- §5 数据模型（3 表）+ 集成（纯增量新端点）→ Task 1, 13, 15, 16 ✓
+- 接口层（前置去重 force 覆盖 + /run 异步轮询 + methods/runs 查询管理）→ Task 13（force/duplicate/check_existing_method）+ Task 15（异步/runs 查询）+ Task 16（methods 管理）✓
 - §6 错误处理（MAX_ATTEMPTS/token 硬中止/单 worker 不拖垮）→ Task 10-12（try/except 在 worker 节点包，supervisor 路由）✓
 - §7 测试策略 → 每个 Task 都有单测 + Task 14 端到端 + 回归 ✓
 - §9 验证标准 → Task 14 覆盖 JSON API 端到端；OpenAnolis/openEuler 真站点验证标 `@pytest.mark.live`（手动）✓
 
-**2. Placeholder scan**：无 TBD/TODO；每个代码块是完整可运行代码（`run_discovery` 的 `engine_url` 复用 `get_settings().database_url`，已在 Task 12 Step 3 写明）。
+**2. Placeholder scan**：无 TBD/TODO；每个代码块是完整可运行代码。Task 12 的 `run_discovery` 在 Task 15 重构为 `start_discovery_run`（异步入口）+ `_execute_discovery`（执行核心）+ `run_discovery`（同步入口，测试用），三者职责清晰一致。
 
-**3. Type consistency**：`DiscoveryState` 字段在 Task 10 定义，Task 11-12 沿用；`DslRecipe`/`FetchAction` 等在 Task 2 定义，后续 task 引用一致；`compute_signature(recipe)` 签名一致。
+**3. Type consistency**：`DiscoveryState` 字段在 Task 10 定义（含 Task 10 加的 `force`），Task 11-12/15 沿用；`DslRecipe`/`FetchAction` 等在 Task 2 定义，后续 task 引用一致；`compute_signature(recipe)` 签名一致；`run_discovery(site_url, force)` / `start_discovery_run(site_url, force)` / `save_method_with_db(state)`（从 state 读 force）签名一致。
 
 **4. 已知缺口（留 live 测试）**：OpenAnolis/openEuler 真站点 + 真 DeepSeek 的端到端验证标 `@pytest.mark.live`，不进 CI，手动跑。Task 14 用 mock 验证链路通。
 
