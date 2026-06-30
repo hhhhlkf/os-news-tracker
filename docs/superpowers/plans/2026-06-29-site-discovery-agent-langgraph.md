@@ -76,6 +76,8 @@ class DiscoveryRunStatus(str, Enum):
     FAILED = "failed"
 ```
 
+另：现有 `app/enums.py` 的 `SourceType` 加 `DISCOVERY = "discovery"`（和 `AGENT_CRAWL` 并存，后者保留给 Handoff Chain 不删）。
+
 - [ ] **Step 3: 加 ORM 模型**
 
 `backend/app/models.py` 加：
@@ -87,6 +89,7 @@ class CrawlMethod(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     domain: Mapped[str] = mapped_column(String(255), nullable=False)
     entry_url: Mapped[str] = mapped_column(String(1000), nullable=False)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"), nullable=False)  # 关联 sources(type=discovery)
     dsl_recipe: Mapped[dict] = mapped_column(JSONB, nullable=False)
     signature: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
@@ -1503,13 +1506,14 @@ def supervisor_node(state: DiscoveryState) -> DiscoveryState:
     return state
 
 def save_method_with_db(state: DiscoveryState) -> DiscoveryState:
-    """确定性节点：去重签名 + 存 crawl_methods + crawl_method_domains 映射。
+    """确定性节点：去重签名 + 存 crawl_methods + crawl_method_domains + 建 sources 记录。
 
-    force=true 且同 domain 已有 → 覆盖更新（保留 method_id，历史连续）；
-    否则新建。state.force 由 run_discovery 初始化时塞入。
+    force=true 且同 domain 已有 → 覆盖更新（保留 method_id/source_id，历史连续）；
+    否则新建 crawl_method + 对应 sources(type=discovery) 记录。state.force 由 run_discovery 初始化时塞入。
     """
     from app.db import SessionLocal
-    from app.models import CrawlMethod, CrawlMethodDomain, SiteDiscoveryRun
+    from app.models import CrawlMethod, CrawlMethodDomain, SiteDiscoveryRun, Source
+    from app.enums import SourceType, Stream
     from app.discovery.dsl import DslRecipe
     from app.discovery.signature import compute_signature
     from urllib.parse import urlparse
@@ -1521,7 +1525,7 @@ def save_method_with_db(state: DiscoveryState) -> DiscoveryState:
         domain = urlparse(state["site_url"]).netloc
         existing = s.query(CrawlMethodDomain).filter_by(domain=domain).first()
         if existing is not None and state.get("force"):
-            # 覆盖：更新现有 method，保留 method_id，审计历史连续
+            # 覆盖：更新现有 method，保留 method_id/source_id，审计历史连续
             m = s.get(CrawlMethod, existing.method_id)
             m.dsl_recipe = recipe.model_dump()
             m.signature = sig
@@ -1531,8 +1535,12 @@ def save_method_with_db(state: DiscoveryState) -> DiscoveryState:
             # 同 domain 已有且未 force：保留旧（兜底，正常流程前置检查已拦截）
             m = s.get(CrawlMethod, existing.method_id)
         else:
-            # 新建
-            m = CrawlMethod(domain=domain, entry_url=state["site_url"],
+            # 新建：先建 sources(type=discovery) 记录，再建 crawl_method 关联它
+            # sources 记录让 items.source_id 有处可指，前端新闻流天然能看到 discovery 抓取的条目
+            src = Source(name=domain, type=SourceType.DISCOVERY.value, url=state["site_url"],
+                         main_category="OS跟踪来源", stream=Stream.NEWS, enabled=True)
+            s.add(src); s.flush()
+            m = CrawlMethod(domain=domain, entry_url=state["site_url"], source_id=src.id,
                             dsl_recipe=recipe.model_dump(), signature=sig)
             s.add(m); s.flush()
             s.add(CrawlMethodDomain(domain=domain, method_id=m.id))  # 去重映射
@@ -2107,6 +2115,110 @@ git commit -m "Add crawl method management endpoints (list/detail/patch/delete)"
 
 ---
 
+## Task 17: 运行命接入现有 pipeline 入 items
+
+**Files:**
+- Modify: `backend/app/discovery/ingester.py`（`to_raw_items` 加 extra）
+- Modify: `backend/app/api/discovery_routes.py`（`/methods/{id}/fetch` 入库）
+- Test: `backend/tests/integration/test_discovery_routes.py`
+
+**背景：** Task 13 的 `/methods/{id}/fetch` 只返回产出 JSON（`source_id=0` 占位，不入库）。本 task 接入现有 pipeline：用 `crawl_method.source_id` 对应的 `Source`，把 DSL 产出转 RawItem（agent 旁路 enricher，零 LLM）入 `items` 表，前端新闻流能看到 discovery 抓取的条目。
+
+- [ ] **Step 1: 改 CrawlOutputIngester.to_raw_items 加 extra**
+
+```python
+# app/discovery/ingester.py 改 to_raw_items
+class CrawlOutputIngester:
+    def to_raw_items(self, output: dict, *, source_id: int, extra: dict | None = None) -> list[RawItem]:
+        """DSL 产出 items → RawItem 列表。
+
+        extra 注入 agent 元数据（agent_item=True），走 pipeline agent 旁路
+        (_process_agent_item)，不再调 LLM enricher——DSL extract 已得字段。
+        """
+        raws: list[RawItem] = []
+        base_extra = {"agent_item": True, "main_category": "OS跟踪来源",
+                      "importance": "中", "info_type": "其他", "key_points": [], "sub_tags": []}
+        if extra: base_extra.update(extra)
+        for it in output.get("items", []):
+            url = it.get("url"); title = it.get("title")
+            if not url or not title: continue  # 缺关键字段，丢弃
+            pub = it.get("published_at")
+            published_at = datetime.fromisoformat(pub.replace("Z", "+00:00")) if pub else None
+            raws.append(RawItem(
+                source_id=source_id, title=str(title), url=str(url),
+                raw_content=it.get("content") or it.get("summary"),
+                published_at=published_at, extra=base_extra,
+            ))
+        return raws
+```
+
+- [ ] **Step 2: 改 /methods/{id}/fetch 入库**
+
+```python
+# discovery_routes.py 改 discovery_fetch
+@router.post("/methods/{method_id}/fetch")
+def discovery_fetch(method_id: int, db: Session = Depends(get_db)):
+    """运行命：按 DSL Recipe 抓取 + 接入现有 pipeline 入 items。零 LLM。"""
+    from app.models import Source
+    from app.pipeline import Pipeline
+    from app.processing.enricher import Enricher
+    from app.extract.scrapling_extractor import ScraplingExtractor
+    m = db.get(CrawlMethod, method_id)
+    if not m: raise HTTPException(404, "method not found")
+    recipe = DslRecipe(**m.dsl_recipe)
+    output = DslInterpreter().run(recipe)  # 纯确定性执行
+    # 转 RawItem（agent 旁路 enricher）+ 走现有 pipeline 入 items
+    raws = CrawlOutputIngester().to_raw_items(output, source_id=m.source_id)
+    source = db.get(Source, m.source_id)
+    pipeline = Pipeline(session=db, extractor=ScraplingExtractor(), enricher=Enricher())
+    for raw in raws:
+        pipeline.process_item(source, raw)  # extra.agent_item=True → _process_agent_item 旁路 enricher
+    m.last_run_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+    db.commit()
+    return output
+```
+
+- [ ] **Step 3: 写测试**
+
+```python
+# 追加到 test_discovery_routes.py
+def test_discovery_fetch_ingests_to_items(client, session, monkeypatch):
+    from app.models import CrawlMethod, Source, Item
+    from app.enums import SourceType, Stream
+    # 建对应的 source(type=discovery) + method
+    src = Source(name="x.com", type=SourceType.DISCOVERY.value, url="https://x.com",
+                 main_category="OS跟踪来源", stream=Stream.NEWS, enabled=True)
+    session.add(src); session.flush()
+    m = CrawlMethod(domain="x.com", entry_url="https://x.com", source_id=src.id,
+                    dsl_recipe={"recipe_type":"dsl","entry_url":"https://x.com","actions":[]}, signature="a")
+    session.add(m); session.commit()
+    # mock DslInterpreter 返回固定产出
+    def fake_fetch(action, ctx):
+        ctx["last_fetch"] = {"obj": {"records": [{"no": "1", "title": "A"}]}}
+    monkeypatch.setattr("app.discovery.interpreter.DslInterpreter.__init__",
+                        lambda self, **kw: (setattr(self, "_fetch_fn", fake_fetch),
+                                            setattr(self, "_browser_fn", None),
+                                            setattr(self, "_page", None)))
+    r = client.post(f"/discovery/methods/{m.id}/fetch")
+    assert r.status_code == 200
+    # 验证入库 items（source_id 指向 discovery source 记录）
+    items = session.query(Item).filter_by(source_id=src.id).all()
+    assert len(items) >= 1
+```
+
+- [ ] **Step 4: 跑测试 + Commit**
+
+```bash
+ENABLE_SCHEDULER=0 python -m pytest tests/integration/test_discovery_routes.py -v
+```
+Expected: PASS
+```bash
+git add backend/app/discovery/ingester.py backend/app/api/discovery_routes.py backend/tests/integration/test_discovery_routes.py
+git commit -m "Wire run-path fetch into existing pipeline to ingest items"
+```
+
+---
+
 ## Self-Review
 
 **1. Spec coverage**：
@@ -2115,15 +2227,16 @@ git commit -m "Add crawl method management endpoints (list/detail/patch/delete)"
 - §2 两条命 → Task 4-6（运行命）+ Task 10-12（生成命）✓
 - §3 图结构（State/supervisor/4 worker/PostgresSaver/token）→ Task 10-12 ✓
 - §4 DSL 规约（8 原语/变量/loop/校验）→ Task 2-6 ✓
-- §5 数据模型（3 表）+ 集成（纯增量新端点）→ Task 1, 13, 15, 16 ✓
+- §5 数据模型（3 表 + crawl_methods.source_id 关联 sources(type=discovery)）+ 集成（纯增量新端点 + 运行命入 items）→ Task 1, 12, 13, 15, 16, 17 ✓
 - 接口层（前置去重 force 覆盖 + /run 异步轮询 + methods/runs 查询管理）→ Task 13（force/duplicate/check_existing_method）+ Task 15（异步/runs 查询）+ Task 16（methods 管理）✓
+- 运行命入库 + source_id 关联（crawl_methods.source_id→sources(type=discovery)，items 复用现有 items.source_id 外键不动）→ Task 1（source_id 字段 + DISCOVERY enum）+ Task 12（save_method 建 sources 记录）+ Task 17（/fetch 接入 pipeline 入 items）✓
 - §6 错误处理（MAX_ATTEMPTS/token 硬中止/单 worker 不拖垮）→ Task 10-12（try/except 在 worker 节点包，supervisor 路由）✓
 - §7 测试策略 → 每个 Task 都有单测 + Task 14 端到端 + 回归 ✓
 - §9 验证标准 → Task 14 覆盖 JSON API 端到端；OpenAnolis/openEuler 真站点验证标 `@pytest.mark.live`（手动）✓
 
 **2. Placeholder scan**：无 TBD/TODO；每个代码块是完整可运行代码。Task 12 的 `run_discovery` 在 Task 15 重构为 `start_discovery_run`（异步入口）+ `_execute_discovery`（执行核心）+ `run_discovery`（同步入口，测试用），三者职责清晰一致。
 
-**3. Type consistency**：`DiscoveryState` 字段在 Task 10 定义（含 Task 10 加的 `force`），Task 11-12/15 沿用；`DslRecipe`/`FetchAction` 等在 Task 2 定义，后续 task 引用一致；`compute_signature(recipe)` 签名一致；`run_discovery(site_url, force)` / `start_discovery_run(site_url, force)` / `save_method_with_db(state)`（从 state 读 force）签名一致。
+**3. Type consistency**：`DiscoveryState` 字段在 Task 10 定义（含 `force`），Task 11-12/15 沿用；`DslRecipe`/`FetchAction` 等在 Task 2 定义，后续引用一致；`crawl_methods.source_id`（Task 1 加）+ `SourceType.DISCOVERY`（Task 1 加）在 Task 12（save_method 建 sources 记录）+ Task 17（/fetch 用 m.source_id 入库）一致；`to_raw_items(output, source_id, extra)` Task 8 定义、Task 17 加 `extra` 参数；`run_discovery(site_url, force)` / `start_discovery_run(site_url, force)` / `save_method_with_db(state)`（从 state 读 force）签名一致。
 
 **4. 已知缺口（留 live 测试）**：OpenAnolis/openEuler 真站点 + 真 DeepSeek 的端到端验证标 `@pytest.mark.live`，不进 CI，手动跑。Task 14 用 mock 验证链路通。
 

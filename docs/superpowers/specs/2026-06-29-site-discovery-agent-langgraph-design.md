@@ -324,11 +324,14 @@ RSS:       fetch(feed) → extract(标准字段)
 
 ```
 id, domain, entry_url,
+source_id FK→sources.id,            ★关联 sources（建方法时同建 type=discovery 的 source 记录）
 dsl_recipe JSONB,
 signature,
 status Enum("active"|"disabled"|"failed"),
 created_at, updated_at, last_run_at, last_run_status
 ```
+
+**`source_id` 关联现有 sources**：建 crawl_method 时同时在 `sources` 表建一条 `type=discovery` 记录，`crawl_methods.source_id` 指向它。运行命入库时 `items.source_id` 用这条 sources 记录的 id——复用现有 `items.source_id→sources.id` 外键（不动），前端新闻流天然能看到 discovery 抓取的条目。新增 `SourceType.DISCOVERY = "discovery"`（和现有 `agent_crawl` 并存，后者保留给 Handoff Chain，不删）。
 
 `**crawl_method_domains` — 去重映射**
 
