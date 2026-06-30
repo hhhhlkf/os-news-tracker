@@ -17,6 +17,8 @@ from app.config import get_settings
 
 TOKEN_BUDGET = 50000  # 生成命 token 硬上限，超即中止
 MAX_ATTEMPTS = 3      # 图级重试上限
+STALE_RUN_TIMEOUT_SECONDS = 1800       # running 超过 30 分钟判超时回收（定时巡检用）
+STALE_RUN_PATROL_INTERVAL_MINUTES = 5  # 定时巡检间隔
 
 
 class DiscoveryState(TypedDict, total=False):
@@ -403,30 +405,37 @@ def check_existing_method(site_url: str, db=None) -> dict | None:
             db.close()
 
 
-def reclaim_stale_runs(db=None) -> int:
-    """启动回收：把所有遗留的 status=running 的 site_discovery_runs 标 failed。
+def reclaim_stale_runs(older_than_seconds: int | None = None, db=None) -> int:
+    """回收遗留 running 的 site_discovery_runs。
 
-    上一进程崩了/被 kill，daemon 线程没了，留下一批 running 行没人收——永久卡 running。
-    启动时全标 failed（error_message 标注被回收），返回回收行数。
-    db=None 时自建 SessionLocal（启动用）；传入 db 时复用（测试用）。
+    older_than_seconds=None：回收所有 running（启动用——本进程无对应线程，全是孤儿）。
+    older_than_seconds=N：只回收 started_at 早于 now-N 的 running（定时巡检用——
+      活着的长 run 不会被误杀，只有卡了 N 秒以上的才判超时回收）。
+    已有 error_message 不覆盖。db=None 自建 SessionLocal；传入则复用（测试用）。
     """
     own_session = db is None
     if own_session:
         from app.db import SessionLocal
         db = SessionLocal()
     try:
-        from datetime import datetime, timezone
+        from datetime import datetime, timedelta, timezone
         from sqlalchemy import select
         from app.models import SiteDiscoveryRun
-        stale = db.scalars(
-            select(SiteDiscoveryRun).where(SiteDiscoveryRun.status == "running")
-        ).all()
+        query = select(SiteDiscoveryRun).where(SiteDiscoveryRun.status == "running")
+        if older_than_seconds is not None:
+            cutoff = datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)
+            query = query.where(SiteDiscoveryRun.started_at < cutoff)
+        stale = db.scalars(query).all()
         now = datetime.now(timezone.utc)
+        if older_than_seconds is None:
+            msg = "进程重启时回收：run 未正常结束（遗留 running）"
+        else:
+            msg = f"定时巡检回收：run 运行超过 {older_than_seconds}s 未完成，判超时"
         for run in stale:
             run.status = "failed"
             run.ended_at = now
             if not run.error_message:
-                run.error_message = "进程重启时回收：run 未正常结束（遗留 running）"
+                run.error_message = msg
         db.commit()
         return len(stale)
     finally:

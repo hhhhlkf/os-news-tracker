@@ -260,3 +260,36 @@ def test_reclaim_stale_runs_marks_leftover_running_as_failed():
     finally:
         s.close()
         engine.dispose()
+
+
+def test_reclaim_stale_runs_timeout_only_reclaims_old():
+    """定时巡检模式（older_than_seconds=N）：只回收 started_at 早于 cutoff 的 running，新 run 和 completed 不动。"""
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.models import Base, SiteDiscoveryRun
+    from app.discovery.graph import reclaim_stale_runs
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, expire_on_commit=False)
+    s = Session()
+    try:
+        old_started = datetime.now(timezone.utc) - timedelta(hours=1)
+        s.add(SiteDiscoveryRun(site_url="https://old.com", status="running", started_at=old_started))
+        s.add(SiteDiscoveryRun(site_url="https://fresh.com", status="running"))  # server_default=now
+        s.add(SiteDiscoveryRun(site_url="https://done.com", status="completed"))
+        s.commit()
+
+        n = reclaim_stale_runs(older_than_seconds=1800, db=s)  # 30 min cutoff
+
+        assert n == 1  # 只收老的 1 个
+        old = s.query(SiteDiscoveryRun).filter_by(site_url="https://old.com").first()
+        assert old.status == "failed"
+        assert "超时" in old.error_message
+        # 新 run 没到超时，不动
+        assert s.query(SiteDiscoveryRun).filter_by(site_url="https://fresh.com").first().status == "running"
+        # completed 不动
+        assert s.query(SiteDiscoveryRun).filter_by(site_url="https://done.com").first().status == "completed"
+    finally:
+        s.close()
+        engine.dispose()

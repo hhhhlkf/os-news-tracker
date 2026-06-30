@@ -2,9 +2,15 @@ import logging
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select
 
 from app.db import SessionLocal
+from app.discovery.graph import (
+    STALE_RUN_PATROL_INTERVAL_MINUTES,
+    STALE_RUN_TIMEOUT_SECONDS,
+    reclaim_stale_runs,
+)
 from app.enums import SourceType, Stream
 from app.extract.scrapling_extractor import ScraplingExtractor
 from app.fetchers.api_adapters import ApiAdapterFetcher
@@ -117,5 +123,14 @@ def start_scheduler() -> BackgroundScheduler:
             )
     finally:
         session.close()
+    # 定时巡检：回收卡在 running 超过 STALE_RUN_TIMEOUT_SECONDS 的 discovery run
+    # （进程活着但某条 run 的线程静默死掉时，启动回收够不到，靠这个兜底）
+    scheduler.add_job(
+        reclaim_stale_runs,
+        IntervalTrigger(minutes=STALE_RUN_PATROL_INTERVAL_MINUTES),
+        args=[STALE_RUN_TIMEOUT_SECONDS],
+        id="discovery-reclaim-stale-runs",
+        replace_existing=True,
+    )
     scheduler.start()
     return scheduler

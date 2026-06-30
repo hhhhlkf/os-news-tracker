@@ -122,3 +122,25 @@ def test_list_enabled_news_sources_filters_to_enabled_news_types():
     sources = list_enabled_news_sources(session)
 
     assert [source.id for source in sources] == [1, 2, 5]
+
+
+def test_start_scheduler_adds_reclaim_patrol_job(monkeypatch):
+    """start_scheduler 注册 discovery run 超时回收的定时巡检 job。"""
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestSession = sessionmaker(bind=engine)
+    from app.models import Base
+
+    Base.metadata.create_all(engine)
+    monkeypatch.setattr("app.scheduler.SessionLocal", TestSession)
+
+    from app.scheduler import start_scheduler
+    sched = start_scheduler()
+    try:
+        job_ids = [j.id for j in sched.get_jobs()]
+        assert "discovery-reclaim-stale-runs" in job_ids
+    finally:
+        sched.shutdown(wait=False)
