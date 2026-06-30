@@ -41,14 +41,45 @@ def client(session):
     app.dependency_overrides.clear()
 
 
-def test_discover_run_endpoint(client):
-    """force=false 无重复 → 调 run_discovery（mock）→ 返回 completed + verdict。"""
-    with patch("app.api.discovery_routes.run_discovery",
-               return_value={"verdict": "dsl", "method_id": 1}):
+def test_discover_run_async_returns_run_id(client):
+    """无重复 → 异步启动（mock start_discovery_run）→ 返回 started + run_id。"""
+    with patch("app.api.discovery_routes.start_discovery_run", return_value=42):
         r = client.post("/discovery/run", json={"url": "https://x.com"})
     assert r.status_code == 200
-    assert r.json()["verdict"] == "dsl"
-    assert r.json()["status"] == "completed"
+    assert r.json() == {"status": "started", "run_id": 42}
+
+
+def test_discover_run_duplicate_returns_existing(client, session):
+    """同 domain 已有 method → force=false 返回 duplicate + 已有范式摘要。"""
+    from app.enums import SourceType
+    from app.models import CrawlMethod, CrawlMethodDomain, Source
+    src = Source(name="x.com", type=SourceType.DISCOVERY.value, url="https://x.com")
+    session.add(src); session.flush()
+    m = CrawlMethod(domain="x.com", entry_url="https://x.com", source_id=src.id,
+                    dsl_recipe={"actions": []}, signature="abc")
+    session.add(m); session.flush()
+    session.add(CrawlMethodDomain(domain="x.com", method_id=m.id)); session.commit()
+    r = client.post("/discovery/run", json={"url": "https://x.com"})  # force 默认 false
+    assert r.json()["status"] == "duplicate"
+    assert r.json()["existing_method"]["method_id"] == m.id
+
+
+def test_list_discovery_runs(client, session):
+    from app.models import SiteDiscoveryRun
+    session.add(SiteDiscoveryRun(site_url="https://x.com", status="completed"))
+    session.commit()
+    r = client.get("/discovery/runs")
+    assert r.status_code == 200
+    assert len(r.json()) >= 1
+    assert r.json()[0]["status"] == "completed"
+
+
+def test_get_discovery_run(client, session):
+    from app.models import SiteDiscoveryRun
+    run = SiteDiscoveryRun(site_url="https://x.com", status="running")
+    session.add(run); session.commit()
+    r = client.get(f"/discovery/runs/{run.id}")
+    assert r.json()["status"] == "running"
 
 
 def test_discovery_fetch_endpoint(client, session):

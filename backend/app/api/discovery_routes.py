@@ -7,13 +7,14 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, HttpUrl
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.discovery.dsl import DslRecipe
-from app.discovery.graph import check_existing_method, run_discovery
+from app.discovery.graph import check_existing_method, start_discovery_run
 from app.discovery.interpreter import DslInterpreter
-from app.models import CrawlMethod
+from app.models import CrawlMethod, SiteDiscoveryRun
 
 router = APIRouter(prefix="/discovery", tags=["discovery"])
 
@@ -30,17 +31,41 @@ def run_method(recipe: DslRecipe) -> dict:
 
 @router.post("/run")
 def discover_run(body: DiscoverRequest, db: Session = Depends(get_db)):
-    """生成命：force=false 先查重，重复返回 duplicate 不跑；force=true 覆盖。
-
-    第一子项目同步调用 run_discovery（Task 15 改异步）。
-    """
+    """生成命：force=false 先查重，重复返回 duplicate 不跑；无重复/force=true 异步启动，返回 run_id 供轮询。"""
     site_url = str(body.url)
     if not body.force:
         existing = check_existing_method(site_url, db)
         if existing:
             return {"status": "duplicate", "existing_method": existing}
-    result = run_discovery(site_url, force=body.force)
-    return {"status": "completed", **result}
+    run_id = start_discovery_run(site_url, force=body.force)
+    return {"status": "started", "run_id": run_id}
+
+
+@router.get("/runs")
+def list_discovery_runs(limit: int = 20, db: Session = Depends(get_db)):
+    """列出生成命历史（最近 limit 条），按 started_at 倒序。"""
+    runs = db.scalars(
+        select(SiteDiscoveryRun).order_by(SiteDiscoveryRun.started_at.desc()).limit(limit)
+    ).all()
+    return [{"id": r.id, "site_url": r.site_url, "status": r.status,
+             "resulting_method_id": r.resulting_method_id, "llm_token_usage": r.llm_token_usage,
+             "started_at": r.started_at.isoformat() if r.started_at else None,
+             "ended_at": r.ended_at.isoformat() if r.ended_at else None,
+             "error_message": r.error_message} for r in runs]
+
+
+@router.get("/runs/{run_id}")
+def get_discovery_run(run_id: int, db: Session = Depends(get_db)):
+    """单 run 详情/轮询：含 node_trace 审计。前端轮询此端点看 status。"""
+    r = db.get(SiteDiscoveryRun, run_id)
+    if not r:
+        raise HTTPException(404, "run not found")
+    return {"id": r.id, "site_url": r.site_url, "status": r.status,
+            "resulting_method_id": r.resulting_method_id, "llm_token_usage": r.llm_token_usage,
+            "node_trace": r.node_trace, "retry_count": r.retry_count,
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+            "ended_at": r.ended_at.isoformat() if r.ended_at else None,
+            "error_message": r.error_message}
 
 
 @router.post("/methods/{method_id}/fetch")

@@ -6,6 +6,7 @@ attempt 用尽判 failed。worker 在 Task 11 实装，图组装在 Task 12。
 
 from __future__ import annotations
 
+import threading
 from typing import TypedDict
 from urllib.parse import urljoin
 
@@ -291,10 +292,31 @@ def _to_psycopg_conn_string(database_url: str) -> str:
     return url.set(drivername="postgresql").render_as_string(hide_password=False)
 
 
-def run_discovery(site_url: str, force: bool = False) -> dict:
-    """生成命入口：建图（PostgresSaver 跨进程续跑）+ 跑 + 落审计 site_discovery_runs。
+def start_discovery_run(site_url: str, force: bool = False) -> int:
+    """异步触发生成命：建 site_discovery_runs 记录 + 后台线程跑 _execute_discovery。
 
-    force 透传到初始 state，save_method 据此决定覆盖/新建。
+    复用现有 agent_crawl 的 _start_agent_source_run 后台线程模式。返回 run_id 供轮询。
+    """
+    from app.db import SessionLocal
+    from app.models import SiteDiscoveryRun
+    s = SessionLocal()
+    try:
+        run = SiteDiscoveryRun(site_url=site_url, status="running")
+        s.add(run); s.commit()
+        run_id = run.id
+    finally:
+        s.close()
+    threading.Thread(
+        target=_execute_discovery, args=(run_id, site_url, force),
+        daemon=True, name=f"discovery-run-{run_id}",
+    ).start()
+    return run_id
+
+
+def _execute_discovery(run_id: int, site_url: str, force: bool) -> None:
+    """后台线程执行核心：建图（PostgresSaver）+ 跑 + 更新 site_discovery_runs。
+
+    进程崩了可从 PostgresSaver checkpoint 跨进程续跑（thread_id 关联 run_id）。
     """
     from datetime import datetime, timezone
     from langgraph.checkpoint.postgres import PostgresSaver
@@ -306,13 +328,12 @@ def run_discovery(site_url: str, force: bool = False) -> dict:
         g = build_graph(checkpointer=checkpointer)
         db_sess = SessionLocal()
         try:
-            run = SiteDiscoveryRun(site_url=site_url, status="running")
-            db_sess.add(run); db_sess.commit()
             # thread_id 关联 run，崩了重启可从 checkpoint 续跑
             final = g.invoke(
                 {"site_url": site_url, "attempt": 0, "token_used": 0, "force": force},
-                config={"configurable": {"thread_id": f"discovery-{run.id}"}},
+                config={"configurable": {"thread_id": f"discovery-{run_id}"}},
             )
+            run = db_sess.get(SiteDiscoveryRun, run_id)
             run.status = "completed" if final.get("verdict") == "dsl" else "failed"
             run.resulting_method_id = final.get("method_id")
             run.llm_token_usage = final.get("token_used", 0)
@@ -321,9 +342,36 @@ def run_discovery(site_url: str, force: bool = False) -> dict:
             if final.get("error"):
                 run.error_message = final["error"]
             db_sess.commit()
-            return final
+        except Exception as e:
+            # 兜底：图级异常标 failed（节点级异常已在 supervisor 路由处理）
+            db_sess.rollback()
+            run = db_sess.get(SiteDiscoveryRun, run_id)
+            if run and run.status == "running":
+                run.status = "failed"; run.error_message = str(e)
+                run.ended_at = datetime.now(timezone.utc)
+                db_sess.commit()
         finally:
             db_sess.close()
+
+
+def run_discovery(site_url: str, force: bool = False) -> dict:
+    """同步入口（测试/同步场景用）：建记录 + 同步跑 _execute_discovery，返回最终结果摘要。"""
+    from app.db import SessionLocal
+    from app.models import SiteDiscoveryRun
+    s = SessionLocal()
+    try:
+        run = SiteDiscoveryRun(site_url=site_url, status="running")
+        s.add(run); s.commit(); run_id = run.id
+    finally:
+        s.close()
+    _execute_discovery(run_id, site_url, force)
+    s = SessionLocal()
+    try:
+        run = s.get(SiteDiscoveryRun, run_id)
+        return {"verdict": "dsl" if run.status == "completed" else "failed",
+                "method_id": run.resulting_method_id, "run_id": run_id}
+    finally:
+        s.close()
 
 
 def check_existing_method(site_url: str, db=None) -> dict | None:
