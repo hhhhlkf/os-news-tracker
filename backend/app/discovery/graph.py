@@ -401,3 +401,34 @@ def check_existing_method(site_url: str, db=None) -> dict | None:
     finally:
         if own_session:
             db.close()
+
+
+def reclaim_stale_runs(db=None) -> int:
+    """启动回收：把所有遗留的 status=running 的 site_discovery_runs 标 failed。
+
+    上一进程崩了/被 kill，daemon 线程没了，留下一批 running 行没人收——永久卡 running。
+    启动时全标 failed（error_message 标注被回收），返回回收行数。
+    db=None 时自建 SessionLocal（启动用）；传入 db 时复用（测试用）。
+    """
+    own_session = db is None
+    if own_session:
+        from app.db import SessionLocal
+        db = SessionLocal()
+    try:
+        from datetime import datetime, timezone
+        from sqlalchemy import select
+        from app.models import SiteDiscoveryRun
+        stale = db.scalars(
+            select(SiteDiscoveryRun).where(SiteDiscoveryRun.status == "running")
+        ).all()
+        now = datetime.now(timezone.utc)
+        for run in stale:
+            run.status = "failed"
+            run.ended_at = now
+            if not run.error_message:
+                run.error_message = "进程重启时回收：run 未正常结束（遗留 running）"
+        db.commit()
+        return len(stale)
+    finally:
+        if own_session:
+            db.close()

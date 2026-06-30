@@ -222,3 +222,41 @@ def test_save_method_writes_crawl_method():
     finally:
         s.close()
         engine.dispose()
+
+
+def test_reclaim_stale_runs_marks_leftover_running_as_failed():
+    """启动回收：所有遗留 running 标 failed（带 error_message + ended_at），completed/failed 不动。"""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.models import Base, SiteDiscoveryRun
+    from app.discovery.graph import reclaim_stale_runs
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, expire_on_commit=False)
+    s = Session()
+    try:
+        s.add(SiteDiscoveryRun(site_url="https://a.com", status="running"))
+        s.add(SiteDiscoveryRun(site_url="https://b.com", status="running"))
+        s.add(SiteDiscoveryRun(site_url="https://c.com", status="completed"))
+        s.add(SiteDiscoveryRun(site_url="https://d.com", status="failed", error_message="old err"))
+        s.commit()
+
+        n = reclaim_stale_runs(db=s)
+
+        assert n == 2  # 只回收 2 个 running
+        assert s.query(SiteDiscoveryRun).filter_by(status="running").count() == 0
+        failed = s.query(SiteDiscoveryRun).filter_by(status="failed").all()
+        assert len(failed) == 3  # 原 1 个 failed + 回收的 2 个
+        # 回收的 2 个有 error_message + ended_at
+        reclaimed = [r for r in failed if r.site_url in ("https://a.com", "https://b.com")]
+        assert len(reclaimed) == 2
+        for r in reclaimed:
+            assert r.error_message is not None
+            assert r.ended_at is not None
+        # completed / 原 failed 不动
+        assert s.query(SiteDiscoveryRun).filter_by(status="completed").count() == 1
+        old_failed = s.query(SiteDiscoveryRun).filter_by(site_url="https://d.com").first()
+        assert old_failed.error_message == "old err"  # 不被覆盖
+    finally:
+        s.close()
+        engine.dispose()
