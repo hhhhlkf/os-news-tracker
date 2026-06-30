@@ -324,3 +324,32 @@ def run_discovery(site_url: str, force: bool = False) -> dict:
             return final
         finally:
             db_sess.close()
+
+
+def check_existing_method(site_url: str, db=None) -> dict | None:
+    """按 domain 查 crawl_method_domains，命中返回已有范式摘要，否则 None。
+
+    去重粒度=domain（用户感知是"这个网站"），signature 同形去重留作 save_method 内部。
+    db=None 时自建 SessionLocal；传入 db 时复用（路由层注入请求 session）。
+    """
+    own_session = db is None
+    if own_session:
+        from app.db import SessionLocal
+        db = SessionLocal()
+    try:
+        from urllib.parse import urlparse
+        from app.models import CrawlMethod, CrawlMethodDomain
+        domain = urlparse(site_url).netloc
+        mapping = db.query(CrawlMethodDomain).filter_by(domain=domain).first()
+        if mapping is None:
+            return None
+        m = db.get(CrawlMethod, mapping.method_id)
+        return {
+            "method_id": m.id, "domain": m.domain, "signature": m.signature,
+            "dsl_recipe": m.dsl_recipe,
+            "last_run_at": m.last_run_at.isoformat() if m.last_run_at else None,
+            "last_run_status": m.last_run_status,
+        }
+    finally:
+        if own_session:
+            db.close()
