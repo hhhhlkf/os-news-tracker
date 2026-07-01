@@ -113,6 +113,7 @@ class DslRecipe(BaseModel):
     recipe_type: Literal["dsl"] = "dsl"
     entry_url: str
     actions: list[Action]
+    notes: list[str] = Field(default_factory=list)  # dsl_writer 诊断说明（执行器忽略）
 
 
 # 变量替换正则：匹配 {{var}} 或 {{obj.field}}

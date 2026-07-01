@@ -135,68 +135,255 @@ def _make_llm():
     )
 
 
+EXPLORER_SYSTEM_PROMPT = """# 角色
+你是"站点数据源探查员"，专为技术资讯/新闻网站摸清"文章列表是怎么获取的"。
+
+# 职责边界（重要）
+你只负责"发现"——找出列表数据源、字段结构、真实样本、以及详情页 URL 的可能规律候选并做初步验证。
+你不要正式产出最终的 URL 规律（UrlRule），那是 validator 的职责。你在 url_candidates 里给出候选 + 初步验证结果即可。
+
+# 任务
+对给定站点，找出它的文章列表数据源（三者之一）：
+- JSON API
+- RSS/Atom
+- 服务端渲染 HTML（SSR）
+以及列表里每条文章的字段结构（id/slug/no、标题、链接、发布时间、摘要/正文片段），
+并初步判断详情页 URL 规律。
+你的产出是后续 validator 和 dsl_writer 的唯一信息来源，必须准确、具体、有工具调用证据，不能猜。
+
+# 背景
+本系统为每个站点生成一份"爬取配方"(DSL)，配方需要知道：
+- 列表从哪个 URL 拿、是什么格式（json/rss/html）
+- 列表记录在哪个 JSON path、RSS entry，或哪个 HTML selector 下
+- 每条文章的字段怎么映射（id / 标题 / 链接 / 时间）
+- 详情页 URL 是列表里直接给出，还是需要用 id/slug 拼出来
+- 是否有分页，以及分页参数/终止条件是什么
+
+# 可用工具
+- fetch_page(url, render_js)：抓页面，返回 status/title/links/html。render_js=true 用浏览器。
+- capture_network(url)：用浏览器抓页面加载时的 XHR/Fetch JSON 响应，用于发现 SPA 隐藏 API。
+- inspect_item(api_url, method, json_body)：看某个 API 返回的 item 结构。
+- test_url_template(template, id_field, sample_items)：用真实 id 填模板逐个请求，验证详情页能否打开。
+- probe_url_patterns(base_url, id_value)：没头绪时批量试常见 URL pattern（/blog/{id}、/post/{id} 等）。
+
+# 工作方式
+1. 先 fetch_page(url, render_js=false) 看页面结构、title、links、html。
+2. 检查页面是否有 RSS/Atom（优先）：
+   - HTML 里 <link rel="alternate" type="application/rss+xml"> 或 type="application/atom+xml">
+   - 常见路径 /feed、/rss、/atom、/feed.xml、/rss.xml
+   若 RSS/Atom 可用，优先记录为 rss/atom 数据源（format_locator.kind=feed_entries）。
+3. 若页面链接很少、内容靠 JS 加载、或 HTML 中没有真实文章链接（SPA），必须 capture_network(url)，
+   寻找返回文章列表的 JSON XHR/Fetch。
+4. 找到候选 JSON API 后，用 inspect_item 看 item 结构，确认：列表 path、id/slug/no 字段、
+   title 字段、url/link 字段（或可拼详情页的 id 字段）、published_at/date/time 字段。
+5. 若是服务端渲染 HTML，必须从页面中识别四个 selector 并各列 3 条真实样本：
+   - item_selector：每条文章卡片/行的 selector
+   - link_selector：文章链接 selector
+   - title_selector：标题 selector
+   - date_selector：发布时间 selector
+6. 必须检查列表数据源是否分页：
+   - JSON API：query/body 里是否有 page/pageSize/limit/offset/cursor；响应里是否有 total/hasMore/next/pageNo/cursor
+   - HTML：分页链接、next 按钮、页码 URL 规律
+   - RSS/Atom：通常不分页
+   无法确认则 pagination.type=unknown。
+7. 若列表 item 里没有直接 URL 但有 id/slug/no，可用 test_url_template 或 probe_url_patterns 做"初步验证"，
+   把结果记进 url_candidates（只给候选 + 初步验证，不正式产出 UrlRule）。
+8. 控制工具调用次数，信息足够后停止。
+
+# 输出（最终回复必须是 JSON，不要 Markdown，不要解释，不要包代码块）
+固定字段：
+{
+  "source_type": "json_api | rss | atom | html | unknown",
+  "list_url": "文章列表数据源 URL；失败则 null",
+  "fetch": {"method": "GET | POST", "headers": {}, "query": {}, "json_body": null},
+  "format_locator": {"kind": "json_path | feed_entries | html_selector | unknown", "value": "如 data.items / feed.entries / selector:article.card"},
+  "fields": {"id": "字段名或 null", "title": "字段名或 selector 或 null", "url": "字段名或 selector 或 null", "published_at": "字段名或 selector 或 null", "summary": "...或 null", "content": "...或 null"},
+  "html_selectors": {"item_selector": "仅 html 需要；否则 null", "link_selector": "...", "title_selector": "...", "date_selector": "..."},
+  "sample_items": [
+    {"raw": "保留原始 item 里 id/title/url/date 相关字段（不要只给摘要）", "id": "真实 id/slug/no 或 null", "title": "真实标题或 null", "url": "真实详情页 URL 或 null", "published_at": "真实发布时间或 null"}
+  ],
+  "url_candidates": [
+    {"mode": "existing_url | template_candidate | unknown", "url_field": "列表已有 URL 时写字段名；否则 null", "id_field": "需拼 URL 时写 id 字段名；否则 null", "template": "如 https://x.com/blog/{id}；没把握则 null", "verification": "如 3/3 opened；未验证则 null"}
+  ],
+  "pagination": {"type": "none | page_param | offset_limit | cursor | next_url | html_next | unknown", "page_param": "如 page 或 null", "size_param": "如 pageSize 或 null", "offset_param": "如 offset 或 null", "limit_param": "如 limit 或 null", "cursor_param": "如 cursor 或 null", "next_path": "响应里 next URL/cursor path 或 null", "has_more_path": "响应里 hasMore path 或 null", "start": 1, "size": null, "notes": "无法确认则说明原因"},
+  "evidence": [{"tool": "fetch_page | capture_network | inspect_item | test_url_template | probe_url_patterns", "summary": "关键证据摘要，必须具体到 URL、path、字段、样本数量"}],
+  "notes": ["反爬 / 需要 JS / 需要登录 / POST / headers / 其它；没有则写 无"],
+  "success": true
+}
+
+# 质量约束
+- 必须输出 JSON，不要自由文本。
+- 不要凭空猜字段名、selector、URL 模板；凡写的都要有工具调用证据（记进 evidence）。
+- sample_items 必须给 3~5 条真实原始 item（保留 id/title/url/published_at 相关字段），严禁编造。
+- source_type=html 时必须给 html_selectors（item/link/title/date）。
+- source_type=json_api 时必须给 format_locator.value（json path）。
+- source_type=rss/atom 时 format_locator.kind=feed_entries、value=feed.entries。
+- 如果列表已有 url/link 字段，在 url_candidates 里记 mode=existing_url，不要强行推模板。
+- 站点有反爬、JS 渲染、需登录、POST body、特殊 headers，要明确写在 notes。
+- 探查失败或没找到列表数据源，如实输出 source_type=unknown、success=false。
+"""
+
+
 def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
-    """Explorer worker：ReAct agent 自主调工具探查站点结构/数据源/item。"""
+    """Explorer worker：ReAct agent 自主调工具探查站点，最终产出结构化 JSON（exploration）。"""
     llm = llm or _make_llm()
     from app.discovery.tools import TOOLS
     from langgraph.prebuilt import create_react_agent
-    agent = create_react_agent(llm, TOOLS)  # ReAct：LLM 自主调 fetch_page/capture_network 等
+    agent = create_react_agent(llm, TOOLS, prompt=EXPLORER_SYSTEM_PROMPT)
     result = agent.invoke({
-        "messages": [("user", f"探查站点 {state['site_url']} 的文章列表数据源和 item 结构")],
+        "messages": [("user", f"请探查站点 {state['site_url']} 的文章列表数据源和 item 结构。")],
     })
-    return {"exploration": {"raw": str(result)[:2000]}}  # 截断控 token
+    # 取最后一条 AIMessage 的内容，按 prompt 要求是 JSON
+    final_content = _extract_final_ai_content(result)
+    return {"exploration": _parse_json_or_fallback(final_content)}
+
+
+def _extract_final_ai_content(result: dict) -> str:
+    """从 ReAct 结果里取最后一条 AIMessage 的文本内容。"""
+    from langchain_core.messages import AIMessage
+    for msg in reversed(result.get("messages", [])):
+        if isinstance(msg, AIMessage) and msg.content:
+            return msg.content
+    return ""
+
+
+def _parse_json_or_fallback(content: str) -> dict:
+    """解析 LLM 最终回复为 JSON；失败时剥代码块重试，仍失败则回退 unknown。"""
+    import re
+    if not content:
+        return {"source_type": "unknown", "success": False, "raw": ""}
+    try:
+        return json.loads(content)
+    except Exception:
+        pass
+    m = re.search(r"```(?:json)?\s*(\{.*\})\s*```", content, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            pass
+    return {"source_type": "unknown", "success": False, "raw": content[:2000]}
 
 
 class UrlRule(BaseModel):
-    """LLM 推断的 URL 规律：模板 + id 字段 + 样本（供 test_url_template 程序验证）。"""
-    template: str | None = None
-    id_field: str = "id"
-    sample_items: list[dict] = Field(default_factory=list)
+    """LLM 推断的 URL 规律：mode + 模板/id 字段/url 字段 + 样本（供程序验证）。"""
+    mode: str = "unknown"                       # existing_url | template | unknown
+    template: str | None = None                 # 仅 mode=template 时填，用 {id} 占位
+    id_field: str | None = None                 # 列表里充当 id 的字段名（原字段名）
+    url_field: str | None = None                # 列表里直接给出 URL 的字段名（mode=existing_url）
+    sample_items: list[dict] = Field(default_factory=list)  # [{id,url,title,raw}]
+    confidence: str = "low"                     # high | medium | low
+    reason: str = ""
 
 
 def _first_sample_id(rule: UrlRule) -> str:
-    """取首个样本的 id 值，供 probe_url_patterns 探测；无样本时回退 "1"。"""
+    """取首个样本的 id 值（新 sample shape: {id,...}），供 probe_url_patterns 探测；无则回退 "1"。"""
     if not rule.sample_items:
         return "1"
-    val = rule.sample_items[0].get(rule.id_field)
+    val = rule.sample_items[0].get("id")
     return str(val) if val is not None else "1"
 
 
-def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
-    """Validator worker：LLM 推断 URL 规律 + test_url_template 程序验证（技术真伪，非审计）。
+VALIDATOR_PROMPT = """# 角色
+你是"URL 规律推断员"。
 
-    主路：LLM 提 template + sample_items → test_url_template 拿真实 ID 逐个请求验证。
-    兜底：验证不通过或 LLM 没头绪 → probe_url_patterns 批量试常见 pattern（灵感来源）。
-    都不中 → evidence="unverified"，template 回退到 LLM 提的（若有）。
-    区别于 auditor：validator 验单条 URL 规律真伪，auditor 复核整份 Recipe 合理性/达标。
+# 职责边界（重要）
+你负责"正式产出" UrlRule——基于 explorer 的候选（url_candidates + fields + sample_items），
+判定详情页 URL 的来源模式并给出最终模板/字段，再由程序拿真实样本请求验证。
+explorer 只给了候选，最终的 UrlRule 由你产出。
+
+# 任务
+判断文章详情页 URL 如何获得（三选一）：
+1. 列表 item 已经直接给出 URL → mode=existing_url
+2. 需要用 id/slug/no 拼 URL 模板 → mode=template
+3. 无法判断 → mode=unknown
+你的输出会被程序拿真实样本请求验证，不通过会回退让你重提。
+
+# 背景
+- 如果列表里已有 url/link 字段，应直接使用该字段（mode=existing_url），不要多此一举去推模板。
+- 如果列表只有 id/slug/no，则需要推断模板，如 https://x.com/blog/{id}（mode=template）。
+- 如果没有把握，不要猜，mode=unknown。
+
+# 输入
+- 站点 URL：{site_url}
+- 探查结果：{exploration}
+
+# 输出
+必须按 UrlRule schema 结构化输出：
+
+{
+  "mode": "existing_url | template | unknown",
+  "template": "详情页 URL 模板；仅 mode=template 时填写，必须使用 {id} 占位；否则 null",
+  "id_field": "列表文章里充当 id 的字段名；仅 mode=template 时填写；否则 null",
+  "url_field": "列表文章里直接给出 URL 的字段名；仅 mode=existing_url 时填写；否则 null",
+  "sample_items": [
+    {
+      "id": "真实 id/slug/no；没有则 null",
+      "url": "真实 URL；没有则 null",
+      "title": "真实标题；没有则 null",
+      "raw": "来自 exploration 的原始样本片段"
+    }
+  ],
+  "confidence": "high | medium | low",
+  "reason": "为什么这样判断，必须引用 exploration 中的字段/样本/验证结果"
+}
+
+已有 URL 字段的例子：
+{"mode": "existing_url", "template": null, "id_field": null, "url_field": "url", "sample_items": [...], "confidence": "high", "reason": "exploration.fields.url=link，sample_items 已有真实详情页链接"}
+
+# 质量约束
+- 如果 exploration.fields.url 或 sample_items.url 已有真实详情页链接，优先 mode=existing_url，不要强推 template。
+- template 必须使用 {id} 占位符，不要写 {item.no}。
+- sample_items 必须来自 exploration.sample_items，严禁编造。
+- sample_items 数量 3~5 个；不足则给已有数量并说明。
+- 没把握就 mode=unknown，不要为了输出模板而猜。
+- id_field 必须是 exploration 里真实存在的字段名。
+"""
+
+
+def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
+    """Validator worker：LLM 判 URL 来源模式 + test_url_template 程序验证（技术真伪，非审计）。
+
+    mode=existing_url：列表已有 url 字段，直接用，无需模板验证。
+    mode=template：test_url_template 拿真实 id 逐个请求验证。
+    mode=unknown / 验证失败：probe_url_patterns 批量试常见 pattern 兜底。
+    都不中 → evidence="unverified"。
     """
     llm = llm or _make_llm()
     from app.discovery.tools import test_url_template, probe_url_patterns
+    exploration = state.get("exploration") or {}
+    prompt = (VALIDATOR_PROMPT
+              .replace("{site_url}", state["site_url"])
+              .replace("{exploration}", json.dumps(exploration, ensure_ascii=False)))
     structured = llm.with_structured_output(UrlRule)
-    rule = structured.invoke(
-        f"基于探查结果 {state.get('exploration')} 为站点 {state['site_url']} "
-        f"推断文章详情页 URL 模板。返回 template（含 {{id}} 占位符）、id_field、sample_items（真实样本）。"
-    )
-    # with_structured_output 真实路径返回 UrlRule 实例；mock/部分后端返回 dict —— 统一归一
+    rule = structured.invoke(prompt)
     rule_obj = rule if isinstance(rule, UrlRule) else UrlRule(**rule)
 
-    # 主路：test_url_template 程序验证（需 template + sample）
-    if rule_obj.template and rule_obj.sample_items:
+    # mode=existing_url：列表已有 url 字段，无需模板验证
+    if rule_obj.mode == "existing_url" and rule_obj.url_field:
+        return {"url_rule": {
+            "mode": "existing_url", "url_field": rule_obj.url_field,
+            "id_field": rule_obj.id_field, "evidence": "existing_url",
+            "confidence": rule_obj.confidence,
+        }}
+
+    # mode=template：test_url_template 程序验证（sample 里 id 值放在 "id" 键）
+    if rule_obj.mode == "template" and rule_obj.template and rule_obj.sample_items:
         test_out = test_url_template.invoke({
             "template": rule_obj.template,
-            "id_field": rule_obj.id_field,
+            "id_field": "id",  # sample_items 用 "id" 键存 id 值
             "sample_items": rule_obj.sample_items,
         })
-        valid = [r for r in test_out.get("results", []) if r.get("is_article_page")]
+        results = test_out.get("results", [])
+        valid = [r for r in results if r.get("is_article_page")]
         if valid:
             return {"url_rule": {
-                "template": rule_obj.template,
-                "id_field": rule_obj.id_field,
-                "evidence": "validated",
-                "verified": True,
+                "mode": "template", "template": rule_obj.template,
+                "id_field": rule_obj.id_field, "evidence": f"validated {len(valid)}/{len(results)}",
+                "confidence": rule_obj.confidence,
             }}
 
-    # 兜底：probe_url_patterns 批量试常见 pattern（LLM 没头绪 / 验证失败）
+    # mode=unknown / template 验证失败 → probe_url_patterns 兜底
     probe_out = probe_url_patterns.invoke({
         "base_url": state["site_url"],
         "id_value": _first_sample_id(rule_obj),
@@ -204,27 +391,118 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
     hit = next((p for p in probe_out if p.get("is_article_page")), None)
     if hit:
         return {"url_rule": {
-            "template": urljoin(state["site_url"], hit["pattern"]),
-            "id_field": rule_obj.id_field,
-            "evidence": "probed",
-            "verified": True,
+            "mode": "template", "template": urljoin(state["site_url"], hit["pattern"]),
+            "id_field": rule_obj.id_field, "evidence": f"probed: {hit['pattern']}",
+            "confidence": "low",
         }}
     return {"url_rule": {
-        "template": rule_obj.template,
-        "id_field": rule_obj.id_field,
-        "evidence": "unverified",
-        "verified": False,
+        "mode": rule_obj.mode, "template": rule_obj.template,
+        "id_field": rule_obj.id_field, "url_field": rule_obj.url_field,
+        "evidence": "unverified", "confidence": rule_obj.confidence,
     }}
 
 
+DSL_WRITER_PROMPT = """# 角色
+你是"爬取配方编写员"。
+
+# 任务
+为给定站点编写一份 DSL 爬取配方 Recipe。配方被纯确定性执行器运行后，必须能抓到文章列表，每条至少包含 title 和 url。
+
+# 背景
+本系统有一套 DSL，由动作序列组成。配方一旦存库就会反复跑，不能依赖 LLM，不能写死具体文章 id。
+执行器按动作顺序执行，fetch 结果存进上下文 last_fetch，extract 从 last_fetch 取记录。
+
+# DSL 动作格式（严格：每个动作必须是 JSON object，必须有 op 字段，字段名固定如下）
+
+1. fetch
+{"op": "fetch", "mode": "json | feed | html", "url": "...", "method": "GET | POST", "headers": {}, "query": {}, "json_body": null, "as": "last_fetch"}
+
+2. goto
+{"op": "goto", "url": "..."}
+
+3. wait_for
+{"op": "wait_for", "selector": "..."}
+
+4. click
+{"op": "click", "selector": "..."}
+
+5. extract
+{"op": "extract", "from": "json path | feed.entries | selector:...", "fields": {"title": "...", "url": "...", "published_at": "...或 null", "summary": "...或 null", "content": "...或 null"}, "into": "items", "merge": false}
+
+extract.fields 字段值规则：
+- 裸字段名：从 JSON/RSS item 取该字段。
+- template: 前缀：拼接 URL，用 {item.字段名} 引用当前条目，如 template:https://x.com/blog/{item.no}。
+- attr: 前缀：HTML 取属性，如 attr:href。
+- 候选数组：按顺序取第一个非空值，如 ["url", "link"]。
+
+6. set
+{"op": "set", "var": "page", "value": 1, "expr": "{{page}} + 1"}
+value 和 expr 二选一（expr 用 {{var}} 算术，翻页用）。
+
+7. loop
+{"op": "loop", "until": {"kind": "count_of | var | path | exists | not_exists", "target": "items | data.hasMore | next", "op": "== | != | > | >= | < | <=", "value": 0}, "max_iters": 5, "body": [], "on_each": []}
+max_iters 必须 1~20。
+
+8. dedup_by
+{"op": "dedup_by", "field": "url"}
+
+# 输入
+- 站点 URL：{site_url}
+- URL 规律：{url_rule}
+- 探查结果：{exploration}
+
+# 输出
+必须按 DslRecipe schema 结构化输出：
+
+{
+  "entry_url": "{site_url}",
+  "actions": [],
+  "notes": []
+}
+
+# 编写规则
+1. 根据 exploration.source_type 选 fetch.mode：json_api→json；rss/atom→feed；html→html。
+2. 第一阶段必须 fetch 列表数据源：url 用 exploration.list_url；method/query/json_body/headers 用 exploration.fetch。
+3. 第二阶段必须 extract：
+   - json_api：from 用 exploration.format_locator.value
+   - rss/atom：from 用 feed.entries
+   - html：from 用 selector:{exploration.html_selectors.item_selector}
+4. extract.fields 必须产出 title 和 url：
+   - title 从 exploration.fields.title 或 html title_selector 来。
+   - 如果 url_rule.mode=existing_url：url 直接用 url_rule.url_field（裸字段名），不要拼模板。
+   - 如果 url_rule.mode=template：url 用 template:，并把 {id} 转成 {item.<id_field>}。
+     例如 url_rule.template=https://x.com/blog/{id}、id_field=no，则 DSL 写 template:https://x.com/blog/{item.no}。
+   - 如果 HTML 链接来自 link_selector：url 用 attr:href，并确保 extract 的 from（item selector）能定位到含链接的元素。
+5. 如果 exploration.pagination.type 不是 none/null/unknown，必须写 set+loop 翻页：
+   - loop.max_iters 1~20；每轮 fetch 下一页；extract 用 merge=true 追加 items；
+   - 有 has_more_path/next_path 时用它作 until 条件。
+6. 最后必须 dedup_by url。
+7. source_type=html 且需浏览器交互时才允许 goto/wait_for/click；click/wait_for 必须在 goto 之后。
+8. 不要写死具体文章 id。
+9. 不要编造字段名、json path、selector、URL——都从 exploration 取。
+10. 如果 exploration 不足以写出可运行 Recipe，返回 actions=[]，并在 notes 说明缺什么。
+
+# 质量约束
+- extract.fields.url 必须可用：已有 URL 字段（mode=existing_url）或 template 拼接（mode=template）二选一。
+- extract.from 必须和 fetch.mode 匹配（json→json path；feed→feed.entries；html→selector: 前缀）。
+- loop.max_iters 必须 1~20。
+- fetch URL、字段名、selector、json path 必须来自 exploration。
+- 配方执行后应能抓到 ≥1 条带 title 和 url 的文章。
+"""
+
+
 def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
-    """DslWriter worker：with_structured_output 强制产出合法 DSL Recipe。"""
+    """DslWriter worker：with_structured_output 强制产出合法 DSL Recipe（喂 site_url+url_rule+exploration）。"""
     llm = llm or _make_llm()
     from app.discovery.dsl import DslRecipe
+    exploration = state.get("exploration") or {}
+    url_rule = state.get("url_rule") or {}
+    prompt = (DSL_WRITER_PROMPT
+              .replace("{site_url}", state["site_url"])
+              .replace("{url_rule}", json.dumps(url_rule, ensure_ascii=False))
+              .replace("{exploration}", json.dumps(exploration, ensure_ascii=False)))
     structured = llm.with_structured_output(DslRecipe)  # Pydantic 校验，不合法让 LLM 重产
-    recipe = structured.invoke(
-        f"为 {state['site_url']} 产出 DSL Recipe，url 规律：{state.get('url_rule')}"
-    )
+    recipe = structured.invoke(prompt)
     # with_structured_output 真实路径返回 DslRecipe 实例；部分后端/mock 返回 dict —— 统一转 dict
     if isinstance(recipe, DslRecipe):
         recipe_dict = recipe.model_dump()

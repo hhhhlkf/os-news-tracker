@@ -166,6 +166,45 @@ def test_auditor_flags_antibot_content():
     assert out["audit_result"]["llm_verdict"]["is_real_content"] is False
 
 
+# --- explorer worker ---
+
+def test_explorer_parses_structured_json_output(monkeypatch):
+    """explorer 把 ReAct 最终消息内容解析成结构化 exploration dict。"""
+    from langchain_core.messages import AIMessage
+    from app.discovery import graph as graph_mod
+
+    class _FakeAgent:
+        def invoke(self, args):
+            return {"messages": [AIMessage(
+                content='{"source_type":"json_api","list_url":"https://x.com/api","success":true}')]}
+
+    def fake_create_react_agent(llm, tools, prompt=None, **kw):
+        assert prompt == graph_mod.EXPLORER_SYSTEM_PROMPT  # 确认系统 prompt 传进去了
+        return _FakeAgent()
+
+    monkeypatch.setattr("langgraph.prebuilt.create_react_agent", fake_create_react_agent)
+    out = graph_mod.explorer(_state(site_url="https://x.com"), llm=_MockChat())
+    assert out["exploration"]["source_type"] == "json_api"
+    assert out["exploration"]["list_url"] == "https://x.com/api"
+    assert out["exploration"]["success"] is True
+
+
+def test_explorer_falls_back_when_output_not_json(monkeypatch):
+    """explorer 最终消息不是 JSON → 回退 source_type=unknown/success=false。"""
+    from langchain_core.messages import AIMessage
+    from app.discovery import graph as graph_mod
+
+    class _FakeAgent:
+        def invoke(self, args):
+            return {"messages": [AIMessage(content="抱歉，我无法探查该站点。")]}
+
+    monkeypatch.setattr("langgraph.prebuilt.create_react_agent",
+                        lambda llm, tools, prompt=None, **kw: _FakeAgent())
+    out = graph_mod.explorer(_state(site_url="https://x.com"), llm=_MockChat())
+    assert out["exploration"]["source_type"] == "unknown"
+    assert out["exploration"]["success"] is False
+
+
 # --- validator worker ---
 
 def _fake_tool(ret):
@@ -187,11 +226,46 @@ def _mock_chat(guess):
     return _C()
 
 
-_GUESS = {
+_GUESS_TEMPLATE = {
+    "mode": "template",
     "template": "https://x.com/blog/{id}",
     "id_field": "no",
-    "sample_items": [{"no": "1"}, {"no": "2"}],
+    "url_field": None,
+    "sample_items": [{"id": "1", "url": None, "title": "A", "raw": {}},
+                     {"id": "2", "url": None, "title": "B", "raw": {}}],
+    "confidence": "high",
+    "reason": "exploration 有 id 字段 no",
 }
+_GUESS_EXISTING_URL = {
+    "mode": "existing_url",
+    "template": None,
+    "id_field": None,
+    "url_field": "link",
+    "sample_items": [{"id": "1", "url": "https://x.com/a", "title": "A", "raw": {}}],
+    "confidence": "high",
+    "reason": "列表已有 link 字段",
+}
+_GUESS_UNKNOWN = {
+    "mode": "unknown",
+    "template": None,
+    "id_field": None,
+    "url_field": None,
+    "sample_items": [{"id": "1", "url": None, "title": "A", "raw": {}}],
+    "confidence": "low",
+    "reason": "无头绪",
+}
+
+
+def test_validator_existing_url_mode_skips_template_test(monkeypatch):
+    """mode=existing_url：列表已有 url 字段，直接用，不调 test_url_template。"""
+    monkeypatch.setattr("app.discovery.tools.test_url_template", _fake_tool({"results": []}))
+    monkeypatch.setattr("app.discovery.tools.probe_url_patterns", _fake_tool([]))
+    from app.discovery.graph import validator
+    state = _state(site_url="https://x.com", exploration={"fields": {"url": "link"}})
+    out = validator(state, llm=_mock_chat(_GUESS_EXISTING_URL))
+    assert out["url_rule"]["evidence"] == "existing_url"
+    assert out["url_rule"]["mode"] == "existing_url"
+    assert out["url_rule"]["url_field"] == "link"
 
 
 def test_validator_validates_when_test_url_template_succeeds(monkeypatch):
@@ -200,10 +274,11 @@ def test_validator_validates_when_test_url_template_succeeds(monkeypatch):
     monkeypatch.setattr("app.discovery.tools.probe_url_patterns", _fake_tool([]))
     from app.discovery.graph import validator
     state = _state(site_url="https://x.com", exploration={"candidate_api": "https://x.com/api"})
-    out = validator(state, llm=_mock_chat(_GUESS))
-    assert out["url_rule"]["evidence"] == "validated"
+    out = validator(state, llm=_mock_chat(_GUESS_TEMPLATE))
+    assert out["url_rule"]["evidence"].startswith("validated")
     assert out["url_rule"]["template"] == "https://x.com/blog/{id}"
     assert out["url_rule"]["id_field"] == "no"
+    assert out["url_rule"]["mode"] == "template"
 
 
 def test_validator_falls_back_to_probe_when_test_fails(monkeypatch):
@@ -214,8 +289,8 @@ def test_validator_falls_back_to_probe_when_test_fails(monkeypatch):
                                      "status": 200, "is_article_page": True}]))
     from app.discovery.graph import validator
     state = _state(site_url="https://x.com")
-    out = validator(state, llm=_mock_chat(_GUESS))
-    assert out["url_rule"]["evidence"] == "probed"
+    out = validator(state, llm=_mock_chat(_GUESS_TEMPLATE))
+    assert out["url_rule"]["evidence"].startswith("probed")
     assert out["url_rule"]["template"] == "https://x.com/post/{id}"
 
 
@@ -227,20 +302,20 @@ def test_validator_returns_unverified_when_both_fail(monkeypatch):
                                      "status": 404, "is_article_page": False}]))
     from app.discovery.graph import validator
     state = _state(site_url="https://x.com")
-    out = validator(state, llm=_mock_chat(_GUESS))
+    out = validator(state, llm=_mock_chat(_GUESS_TEMPLATE))
     assert out["url_rule"]["evidence"] == "unverified"
     assert out["url_rule"]["template"] == "https://x.com/blog/{id}"  # 回退到 LLM 模板
 
 
-def test_validator_probes_when_llm_gives_no_template(monkeypatch):
+def test_validator_probes_when_llm_gives_unknown(monkeypatch):
     monkeypatch.setattr("app.discovery.tools.test_url_template", _fake_tool({"results": []}))
     monkeypatch.setattr("app.discovery.tools.probe_url_patterns",
                         _fake_tool([{"pattern": "/p/{id}", "generated_url": "https://x.com/p/1",
                                      "status": 200, "is_article_page": True}]))
     from app.discovery.graph import validator
     state = _state(site_url="https://x.com")
-    out = validator(state, llm=_mock_chat({"template": None, "id_field": "no", "sample_items": [{"no": "1"}]}))
-    assert out["url_rule"]["evidence"] == "probed"
+    out = validator(state, llm=_mock_chat(_GUESS_UNKNOWN))
+    assert out["url_rule"]["evidence"].startswith("probed")
     assert out["url_rule"]["template"] == "https://x.com/p/{id}"
 
 
