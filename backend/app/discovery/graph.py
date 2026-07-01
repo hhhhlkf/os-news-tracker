@@ -6,6 +6,7 @@ attempt 用尽判 failed。worker 在 Task 11 实装，图组装在 Task 12。
 
 from __future__ import annotations
 
+import json
 import threading
 from typing import TypedDict
 from urllib.parse import urljoin
@@ -232,20 +233,130 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
     return {"dsl_recipe": recipe_dict, "token_used": state.get("token_used", 0) + 1000}
 
 
-def auditor(state: DiscoveryState, llm=None, test_fn=None) -> DiscoveryState:
-    """Auditor worker：独立审计复核 DSL Recipe（结构校验 + 实跑测试达标判定）。
+class AuditVerdict(BaseModel):
+    """LLM 对实跑抓取结果的质量评判。"""
+    passed: bool                          # 综合：这份配方值得存吗
+    is_real_content: bool                 # 抓到的是真文章，不是反爬/错误/占位/无关页
+    has_pagination: bool                  # 实现了翻页抓多页，不是只抓单页
+    not_blocked: bool                     # 没被页面限制/反爬挡住
+    value_assessment: str = ""            # 一句话价值评估
+    issues: list[str] = Field(default_factory=list)  # 发现的问题
+    suggested_fix: str | None = None      # 给 dsl_writer 的修改建议（不通过时）
 
-    区别于 validator：validator 验单条 URL 规律真伪，auditor 复核整份 Recipe 合理性/达标。
+
+_AUDIT_PROMPT = """# 角色
+你是"爬取配方审计员"，负责评判一份配方的**实跑抓取结果**有没有价值、是否全面、是否被反爬/页面限制挡住。
+
+# 任务
+看程序按这份配方真实抓到的条目，判断以下四件事，综合给出"是否值得把这份配方存下来"：
+1. 抓到的是不是真文章——不是反爬验证页、错误页(403/404)、登录页、占位内容、JS 未渲染的空壳、或与该站无关的页面。
+2. 抓取是否全面——有没有实现翻页抓多页，还是只抓了单页就停了（看配方里有没有 loop 动作，以及抓到的条数是否像多页累加）。
+3. 有没有被页面限制/反爬挡住——条目很少、内容为空、标题异常、或明显被截断/被挡的迹象。
+4. 整体有没有抓取价值——值得存进新闻流吗。
+
+# 背景
+这份配方会被反复执行来抓这个站点的文章。如果配方只抓单页、抓到反爬页、或抓到一堆无用页面，
+存进来的"新闻"就是垃圾。所以审计要看**真实抓到的内容**，不能只看条数够不够。
+静态校验（结构合法性）已由程序完成，你专注看实跑结果的质量。
+
+# 输入
+- 站点 URL：{site_url}
+- 配方摘要（动作序列 + 是否有翻页 loop）：{recipe_summary}
+- 静态校验错误（若有）：{errors}
+- 实跑统计：抓到 {discovered_count} 条
+- 实跑抓到的条目样本（最多 {n} 条，含 title/url/正文片段）：{items_sample}
+
+# 输出（结构化 AuditVerdict）
+- passed：综合判断，true=这份配方值得存，false=不通过。
+- is_real_content：抓到的是真文章吗（false=反爬页/错误页/占位/无关页面）。
+- has_pagination：实现了翻页抓多页吗（false=只抓单页）。依据：配方有 loop 动作且条数像多页累加→true；配方无 loop 或条数明显只够一页→false。
+- not_blocked：没被反爬/页面限制挡住吗（false=有被挡迹象）。
+- value_assessment：一句话价值评估。
+- issues：发现的问题列表（如"只抓到单页，未实现翻页"、"标题疑似反爬验证页"、"正文为空，疑似 JS 未渲染"）。
+- suggested_fix：不通过时给配方编写员的修改建议（如"加 loop 翻页直到抓满"、"extract 的 from 选错了"、"换 render_js=true / 加反爬绕过"）。
+
+# 质量约束
+- 只看真实抓到的条目判断，不要凭配方结构猜结果。
+- 条目标题含"验证/403/access denied/请验证/robot"或正文为空/全是 JS 占位 → is_real_content=false。
+- 配方里没有 loop 动作，且条数像单页量（如 ≤20 且无明显分页截断）→ has_pagination=false。
+- 条数很少（如 <3）且不像正常分页截断 → 怀疑被限制，not_blocked=false。
+- 不通过必须给具体 issues + suggested_fix；通过时 issues 可为空。
+- 不要吹毛求疵：抓到多条真文章、有翻页、没被挡 → 通过。
+"""
+
+
+def _run_recipe_for_audit(recipe: DslRecipe) -> dict:
+    """实跑配方拿真实产出（生产 auditor 用）；失败返回空产出 + error。"""
+    from app.discovery.interpreter import DslInterpreter
+    try:
+        return DslInterpreter().run(recipe)
+    except Exception as e:
+        return {"items": [], "stats": {"discovered_count": 0}, "error": str(e)}
+
+
+def _recipe_summary(recipe: DslRecipe) -> dict:
+    """配方结构摘要给 LLM 看（控 token）：动作序列 + 是否有翻页 loop。"""
+    ops = []
+    has_loop = False
+    for a in recipe.actions:
+        if a.op == "loop":
+            has_loop = True
+            ops.append({"op": "loop", "max_iters": a.max_iters})
+        elif a.op == "fetch":
+            ops.append({"op": "fetch", "mode": a.mode, "url": a.url})
+        elif a.op == "extract":
+            ops.append({"op": "extract", "from": a.from_, "fields": a.fields})
+        else:
+            ops.append({"op": a.op})
+    return {"has_loop": has_loop, "actions": ops}
+
+
+def _llm_audit_quality(llm, site_url: str, recipe: DslRecipe, items: list, errors: list) -> dict:
+    """调 LLM 评判实跑抓取结果的价值/全面性/反爬/翻页，返回 AuditVerdict dict。"""
+    sample = []
+    for it in items[:8]:
+        s = {"title": it.get("title"), "url": it.get("url")}
+        content = it.get("content") or it.get("summary") or ""
+        if content:
+            s["content_snippet"] = str(content)[:200]
+        sample.append(s)
+    prompt = _AUDIT_PROMPT.format(
+        site_url=site_url,
+        recipe_summary=json.dumps(_recipe_summary(recipe), ensure_ascii=False),
+        errors=json.dumps(errors, ensure_ascii=False),
+        items_sample=json.dumps(sample, ensure_ascii=False),
+        n=len(sample),
+        discovered_count=len(items),
+    )
+    structured = llm.with_structured_output(AuditVerdict)
+    verdict = structured.invoke(prompt)
+    if isinstance(verdict, AuditVerdict):
+        return verdict.model_dump()
+    return AuditVerdict(**verdict).model_dump()
+
+
+def auditor(state: DiscoveryState, llm=None, test_fn=None) -> DiscoveryState:
+    """Auditor worker：实跑配方 → LLM 评判抓取价值/全面性/反爬/翻页 → 结合静态校验判通过。
+
+    区别于 validator：validator 验单条 URL 规律真伪，auditor 复核整份 Recipe 的实跑结果质量。
+    test_fn: 注入"跑配方返回产出"的函数（测试 mock）；None → 真跑 DslInterpreter（生产）。
     """
     llm = llm or _make_llm()
     from app.discovery.dsl import DslRecipe, validate_semantics
     recipe = DslRecipe(**state["dsl_recipe"])
     errors = validate_semantics(recipe)  # 静态审：结构合理性
-    test_result = (test_fn or (lambda r: {"discovered_count": 0}))(recipe)  # 动态审：实跑
-    passed = not errors and test_result.get("discovered_count", 0) >= 10  # 达标判定
+    # 动态审：实跑配方拿真实产出（测试可注入 mock，生产真跑）
+    test_result = test_fn(recipe) if test_fn is not None else _run_recipe_for_audit(recipe)
+    items = test_result.get("items", [])
+    discovered_count = test_result.get("stats", {}).get("discovered_count", len(items))
+    # LLM 审：看真实抓到的条目，判价值/全面性/反爬/翻页
+    llm_verdict = _llm_audit_quality(llm, state["site_url"], recipe, items, errors)
+    # 通过 = 无静态错误 + 抓到至少 1 条 + LLM 判值得存
+    passed = (not errors) and discovered_count >= 1 and llm_verdict.get("passed", False)
     return {
         "audit_result": {
             "passed": passed, "errors": errors, "test": test_result,
+            "llm_verdict": llm_verdict,
             "suggested_next": "dsl_writer" if not passed else None,
         },
         "attempt": state.get("attempt", 0) + (0 if passed else 1),  # 不通过则 attempt+1

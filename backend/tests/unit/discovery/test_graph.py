@@ -43,8 +43,24 @@ def test_route_token_exceeded_goes_to_end():
     assert supervisor_route(state) == "__end__"
 
 
+_DSL_RECIPE_MOCK = {
+    "entry_url": "https://x.com",
+    "actions": [
+        {"op": "fetch", "mode": "json", "url": "https://x.com/api"},
+        {"op": "extract", "from": "obj.records",
+         "fields": {"title": "title", "url": "template:https://x/{item.no}"}},
+    ],
+}
+
+
 class _MockChat:
-    """Mock LangChain ChatModel：bind_tools/with_structured_output 返回 self，invoke 返回固定产出。"""
+    """Mock LangChain ChatModel：bind_tools/with_structured_output 返回 self，invoke 返回固定产出。
+
+    传 returns= 可定制（auditor 用 AuditVerdict dict，dsl_writer 用默认 recipe dict）。
+    """
+
+    def __init__(self, returns=None):
+        self._returns = returns if returns is not None else _DSL_RECIPE_MOCK
 
     def bind_tools(self, tools):
         return self
@@ -53,14 +69,7 @@ class _MockChat:
         return self
 
     def invoke(self, msgs):
-        return {
-            "entry_url": "https://x.com",
-            "actions": [
-                {"op": "fetch", "mode": "json", "url": "https://x.com/api"},
-                {"op": "extract", "from": "obj.records",
-                 "fields": {"title": "title", "url": "template:https://x/{item.no}"}},
-            ],
-        }
+        return self._returns
 
 
 def test_dsl_writer_produces_recipe_with_mock_llm():
@@ -81,15 +90,26 @@ def test_dsl_writer_increments_token_usage():
     assert out["token_used"] == 1500  # +1000 per dsl_writer call
 
 
-def test_auditor_rejects_when_test_fails():
+_AUDIT_PASS = {"passed": True, "is_real_content": True, "has_pagination": True,
+               "not_blocked": True, "value_assessment": "真文章+有翻页", "issues": [], "suggested_fix": None}
+_AUDIT_FAIL_SINGLE_PAGE = {"passed": False, "is_real_content": True, "has_pagination": False,
+                           "not_blocked": True, "value_assessment": "只抓单页",
+                           "issues": ["只抓到单页，未实现翻页"], "suggested_fix": "加 loop 翻页"}
+_AUDIT_FAIL_ANTIBOT = {"passed": False, "is_real_content": False, "has_pagination": False,
+                       "not_blocked": False, "value_assessment": "反爬验证页",
+                       "issues": ["抓到反爬验证页，正文为空"], "suggested_fix": "换 render_js / 加反爬绕过"}
+
+
+def test_auditor_rejects_when_no_items_crawled():
     from app.discovery.graph import auditor
     state = _state(dsl_recipe={"entry_url": "https://x.com", "actions": []}, attempt=0)
-    out = auditor(state, llm=_MockChat(), test_fn=lambda recipe: {"discovered_count": 0})
+    out = auditor(state, llm=_MockChat(returns=_AUDIT_FAIL_ANTIBOT),
+                  test_fn=lambda recipe: {"items": [], "stats": {"discovered_count": 0}})
     assert out["audit_result"]["passed"] is False
     assert out["attempt"] == 1  # 不通过则 attempt+1
 
 
-def test_auditor_passes_when_test_meets_threshold():
+def test_auditor_passes_when_llm_approves_real_items():
     from app.discovery.graph import auditor
     recipe_dict = {
         "entry_url": "https://x.com",
@@ -97,12 +117,53 @@ def test_auditor_passes_when_test_meets_threshold():
             {"op": "fetch", "mode": "json", "url": "https://x.com/api"},
             {"op": "extract", "from": "obj.records",
              "fields": {"title": "title", "url": "template:https://x/{item.no}"}},
+            {"op": "loop", "until": {"count_of": "items", "op": ">=", "value": 20},
+             "max_iters": 5, "body": []},
         ],
     }
+    items = [{"title": f"文章{i}", "url": f"https://x.com/{i}"} for i in range(12)]
     state = _state(dsl_recipe=recipe_dict, attempt=0)
-    out = auditor(state, llm=_MockChat(), test_fn=lambda recipe: {"discovered_count": 10})
+    out = auditor(state, llm=_MockChat(returns=_AUDIT_PASS),
+                  test_fn=lambda recipe: {"items": items, "stats": {"discovered_count": 12}})
     assert out["audit_result"]["passed"] is True
     assert out["attempt"] == 0  # 通过则 attempt 不增
+    assert out["audit_result"]["llm_verdict"]["has_pagination"] is True
+
+
+def test_auditor_flags_single_page_no_pagination():
+    from app.discovery.graph import auditor
+    recipe_dict = {  # 无 loop → 单页
+        "entry_url": "https://x.com",
+        "actions": [
+            {"op": "fetch", "mode": "json", "url": "https://x.com/api"},
+            {"op": "extract", "from": "obj.records",
+             "fields": {"title": "title", "url": "template:https://x/{item.no}"}},
+        ],
+    }
+    items = [{"title": "A", "url": "https://x.com/1"}]
+    state = _state(dsl_recipe=recipe_dict, attempt=0)
+    out = auditor(state, llm=_MockChat(returns=_AUDIT_FAIL_SINGLE_PAGE),
+                  test_fn=lambda recipe: {"items": items, "stats": {"discovered_count": 1}})
+    assert out["audit_result"]["passed"] is False
+    assert out["audit_result"]["llm_verdict"]["has_pagination"] is False
+    assert out["attempt"] == 1
+
+
+def test_auditor_flags_antibot_content():
+    from app.discovery.graph import auditor
+    recipe_dict = {
+        "entry_url": "https://x.com",
+        "actions": [
+            {"op": "fetch", "mode": "html", "url": "https://x.com"},
+            {"op": "extract", "from": "selector:div", "fields": {"title": "h1", "url": "attr:href"}},
+        ],
+    }
+    items = [{"title": "Access Denied", "url": "https://x.com/denied", "content": ""}]
+    state = _state(dsl_recipe=recipe_dict, attempt=0)
+    out = auditor(state, llm=_MockChat(returns=_AUDIT_FAIL_ANTIBOT),
+                  test_fn=lambda recipe: {"items": items, "stats": {"discovered_count": 1}})
+    assert out["audit_result"]["passed"] is False
+    assert out["audit_result"]["llm_verdict"]["is_real_content"] is False
 
 
 # --- validator worker ---
