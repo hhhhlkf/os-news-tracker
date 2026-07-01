@@ -37,6 +37,7 @@ class DiscoveryState(TypedDict, total=False):
     token_used: int         # 累计 token（硬中止用）
     force: bool             # true=覆盖同 domain 旧范式（去重覆盖用，Task 15）
     error: str | None
+    name: str | None        # 站点别名（前端选填，不填自动用域名）
 
 
 def supervisor_route(state: DiscoveryState) -> str:
@@ -111,7 +112,7 @@ def save_method(state: DiscoveryState, db=None) -> DiscoveryState:
             m = db.get(CrawlMethod, existing.method_id)
         else:
             # 新建：先建 sources(type=discovery) 记录，再建 crawl_method 关联它
-            src = Source(name=domain, type=SourceType.DISCOVERY.value, url=state["site_url"],
+            src = Source(name=state.get("name") or domain, type=SourceType.DISCOVERY.value, url=state["site_url"],
                          main_category="OS跟踪来源", stream=Stream.NEWS.value, enabled=True)
             db.add(src); db.flush()
             m = CrawlMethod(domain=domain, entry_url=state["site_url"], source_id=src.id,
@@ -683,7 +684,7 @@ def _to_psycopg_conn_string(database_url: str) -> str:
     return url.set(drivername="postgresql").render_as_string(hide_password=False)
 
 
-def start_discovery_run(site_url: str, force: bool = False) -> int:
+def start_discovery_run(site_url: str, force: bool = False, name: str | None = None) -> int:
     """异步触发生成命：建 site_discovery_runs 记录 + 后台线程跑 _execute_discovery。
 
     复用现有 agent_crawl 的 _start_agent_source_run 后台线程模式。返回 run_id 供轮询。
@@ -698,13 +699,13 @@ def start_discovery_run(site_url: str, force: bool = False) -> int:
     finally:
         s.close()
     threading.Thread(
-        target=_execute_discovery, args=(run_id, site_url, force),
+        target=_execute_discovery, args=(run_id, site_url, force, name),
         daemon=True, name=f"discovery-run-{run_id}",
     ).start()
     return run_id
 
 
-def _execute_discovery(run_id: int, site_url: str, force: bool) -> None:
+def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None = None) -> None:
     """后台线程执行核心：建图（PostgresSaver）+ 跑 + 更新 site_discovery_runs。
 
     进程崩了可从 PostgresSaver checkpoint 跨进程续跑（thread_id 关联 run_id）。
@@ -721,7 +722,7 @@ def _execute_discovery(run_id: int, site_url: str, force: bool) -> None:
         try:
             # thread_id 关联 run，崩了重启可从 checkpoint 续跑
             final = g.invoke(
-                {"site_url": site_url, "attempt": 0, "token_used": 0, "force": force},
+                {"site_url": site_url, "attempt": 0, "token_used": 0, "force": force, "name": name},
                 config={"configurable": {"thread_id": f"discovery-{run_id}"}},
             )
             run = db_sess.get(SiteDiscoveryRun, run_id)
@@ -745,7 +746,7 @@ def _execute_discovery(run_id: int, site_url: str, force: bool) -> None:
             db_sess.close()
 
 
-def run_discovery(site_url: str, force: bool = False) -> dict:
+def run_discovery(site_url: str, force: bool = False, name: str | None = None) -> dict:
     """同步入口（测试/同步场景用）：建记录 + 同步跑 _execute_discovery，返回最终结果摘要。"""
     from app.db import SessionLocal
     from app.models import SiteDiscoveryRun
@@ -755,7 +756,7 @@ def run_discovery(site_url: str, force: bool = False) -> dict:
         s.add(run); s.commit(); run_id = run.id
     finally:
         s.close()
-    _execute_discovery(run_id, site_url, force)
+    _execute_discovery(run_id, site_url, force, name)
     s = SessionLocal()
     try:
         run = s.get(SiteDiscoveryRun, run_id)

@@ -46,7 +46,7 @@ def test_discover_run_async_returns_run_id(client):
     with patch("app.api.discovery_routes.start_discovery_run", return_value=42):
         r = client.post("/discovery/run", json={"url": "https://x.com"})
     assert r.status_code == 200
-    assert r.json() == {"status": "started", "run_id": 42}
+    assert r.json() == {"status": "started", "run_id": 42, "name": "x.com"}
 
 
 def test_discover_run_duplicate_returns_existing(client, session):
@@ -96,7 +96,9 @@ def test_discovery_fetch_endpoint(client, session):
                return_value={"items": [], "stats": {}}):
         r = client.post(f"/discovery/methods/{m.id}/fetch")
     assert r.status_code == 200
-    assert r.json() == {"items": [], "stats": {}}
+    assert r.json()["items"] == []
+    assert r.json()["stored_count"] == 0
+    assert r.json()["discovered_count"] == 0
     # last_run_at 被更新
     session.refresh(m)
     assert m.last_run_at is not None
@@ -210,3 +212,12 @@ def test_discovery_fetch_ingests_to_items(client, session, monkeypatch):
     assert items[0].importance == "高"              # mock enricher 给的，非旧默认"中"
     assert items[0].main_category == "OS性能发展"    # mock enricher 给的，非旧默认"OS跟踪来源"
     assert items[0].summary == "LLM富化摘要"
+
+
+def test_discover_run_with_custom_name(client):
+    """前端传 name 别名 → /run 透传 + 返回里带 name。"""
+    with patch("app.api.discovery_routes.start_discovery_run", return_value=7):
+        r = client.post("/discovery/run", json={"url": "https://openanolis.cn", "name": "OpenAnolis 博客"})
+    assert r.status_code == 200
+    assert r.json()["name"] == "OpenAnolis 博客"
+    assert r.json()["run_id"] == 7

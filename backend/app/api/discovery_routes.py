@@ -23,6 +23,7 @@ router = APIRouter(prefix="/discovery", tags=["discovery"])
 class DiscoverRequest(BaseModel):
     url: HttpUrl
     force: bool = False  # true=跳过去重检查/覆盖同 domain 旧范式
+    name: str | None = None  # 站点别名（选填，不填自动用域名）
 
 
 def run_method(recipe: DslRecipe) -> dict:
@@ -32,14 +33,17 @@ def run_method(recipe: DslRecipe) -> dict:
 
 @router.post("/run")
 def discover_run(body: DiscoverRequest, db: Session = Depends(get_db)):
-    """生成命：force=false 先查重，重复返回 duplicate 不跑；无重复/force=true 异步启动，返回 run_id 供轮询。"""
+    """生成命：force=false 先查重，重复返回 duplicate；无重复/force=true 异步启动，返回 run_id 供轮询。"""
+    from urllib.parse import urlparse
     site_url = str(body.url)
     if not body.force:
         existing = check_existing_method(site_url, db)
         if existing:
             return {"status": "duplicate", "existing_method": existing}
-    run_id = start_discovery_run(site_url, force=body.force)
-    return {"status": "started", "run_id": run_id}
+    # 别名：前端选填，不填自动用域名（复用 _domain_name 同款逻辑）
+    name = body.name or urlparse(site_url).netloc.removeprefix("www.")
+    run_id = start_discovery_run(site_url, force=body.force, name=name)
+    return {"status": "started", "run_id": run_id, "name": name}
 
 
 @router.get("/runs")
@@ -130,8 +134,18 @@ def discovery_fetch(method_id: int, db: Session = Depends(get_db)):
     raws = CrawlOutputIngester().to_raw_items(output, source_id=m.source_id)
     source = db.get(Source, m.source_id)
     pipeline = Pipeline(session=db, extractor=None, enricher=Enricher())
+    stored = 0
     for raw in raws:
-        pipeline.process_item(source, raw)
+        if pipeline.process_item(source, raw):
+            stored += 1
     m.last_run_at = datetime.now(timezone.utc)
+    m.last_run_status = "ok" if stored > 0 else "empty"
     db.commit()
-    return output
+    return {
+        "discovered_count": len(raws),
+        "stored_count": stored,
+        "items": output.get("items", []),
+        "stats": output.get("stats", {}),
+        "message": f"抓取 {len(raws)} 条，入库 {stored} 条" if stored > 0
+                   else f"抓取 {len(raws)} 条，未入库（可能重复或被富化拒绝）",
+    }

@@ -75,7 +75,7 @@ def test_e2e_json_api_site(client, session, monkeypatch):
     with patch("app.api.discovery_routes.start_discovery_run", return_value=99):
         r_run = client.post("/discovery/run", json={"url": "https://mockx.com"})
     assert r_run.status_code == 200
-    assert r_run.json() == {"status": "started", "run_id": 99}
+    assert r_run.json() == {"status": "started", "run_id": 99, "name": "mockx.com"}
 
     # 2. 直接造一条 method（含合法 DSL Recipe）跑运行命，绕过 LLM
     src = Source(name="mockx.com", type=SourceType.DISCOVERY.value, url="https://mockx.com")
