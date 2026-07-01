@@ -437,6 +437,38 @@ class TestAgentCrawlFetcherFetch:
         fetcher._plan_agent.plan.assert_not_called()
         api_fetcher.fetch.assert_called_once()
 
+    def test_api_seed_prefetched_pages_preserve_published_at(self):
+        """API seed mode must carry RawItem.published_at into prefetched RawPage."""
+        published_at = datetime(2026, 6, 29, tzinfo=timezone.utc)
+        raw_item = RawItem(
+            source_id=1,
+            title="openEuler article",
+            url="https://www.openeuler.org/zh/blog/20260629/a.html",
+            raw_content="article body",
+            published_at=published_at,
+        )
+        api_fetcher = MagicMock(fetch=MagicMock(return_value=[raw_item]))
+        db = MagicMock()
+        fetcher = AgentCrawlFetcher(
+            db=db,
+            time_window={
+                "time_mode": "absolute",
+                "start_at": datetime(2026, 6, 1, tzinfo=timezone.utc),
+                "end_at": datetime(2026, 7, 1, 23, 59, 59, tzinfo=timezone.utc),
+            },
+        )
+        source = MagicMock()
+        source.id = 1
+        source.name = "openeuler.org"
+        source.url = "https://www.openeuler.org/api-search/search/sort/blog"
+
+        with patch("app.fetchers.api_adapters.ApiAdapterFetcher", return_value=api_fetcher):
+            plan = fetcher._build_plan_from_api(source, _make_config_model())
+
+        assert [url.url for url in plan.urls] == [raw_item.url]
+        assert fetcher._prefetched_pages is not None
+        assert fetcher._prefetched_pages[0].published_at == published_at
+
     def test_runtime_discovery_failure_falls_back_to_llm(self):
         """When runtime discovery finds nothing, fall back to PlanAgent."""
         from app.sources.api_discovery import ApiDiscoveryResult

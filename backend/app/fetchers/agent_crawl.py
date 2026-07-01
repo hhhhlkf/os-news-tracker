@@ -388,6 +388,7 @@ class AgentCrawlFetcher:
                 guessed_topic=guessed,
                 title=item.title or "",
                 content=item.raw_content or "",
+                published_at=item.published_at,
             ))
             if len(urls) >= config.max_urls_per_run:
                 break
