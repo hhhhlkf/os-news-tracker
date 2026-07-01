@@ -57,7 +57,7 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
     }
   }, [completed, runQuery.data?.resulting_method_id, onMethodAdded]);
 
-  const selectedEntry = runQuery.data?.node_trace.find((e) => e.step === selectedNode);
+  const selectedEntry = runQuery.data?.node_trace.findLast((e) => e.step === selectedNode);
 
   return (
     <section style={{ background: "#fff", border: "1px solid #d0d5dd", borderRadius: 10, padding: 16 }}>
