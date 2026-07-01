@@ -8,6 +8,8 @@ export function useDiscoveryLogs(runId: number | null, enabled: boolean) {
   const lastId = useRef(0);
   useEffect(() => {
     if (!enabled || runId == null) return;
+    setLogs([]);
+    lastId.current = 0;
     let stop = false;
     async function poll() {
       try {
