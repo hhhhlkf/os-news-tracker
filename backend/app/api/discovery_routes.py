@@ -15,9 +15,11 @@ from app.discovery.dsl import DslRecipe
 from app.discovery.graph import check_existing_method, start_discovery_run
 from app.discovery.ingester import CrawlOutputIngester
 from app.discovery.interpreter import DslInterpreter
+from app.llm.client import LlmClient
 from app.models import CrawlMethod, CrawlMethodDomain, SiteDiscoveryRun
 
 router = APIRouter(prefix="/discovery", tags=["discovery"])
+MAX_SUGGEST_NAME_LENGTH = 20
 
 
 class DiscoverRequest(BaseModel):
@@ -167,20 +169,57 @@ def _extract_title(html: str) -> str | None:
     return title or None
 
 
+def _normalize_site_name(value: str | None) -> str | None:
+    import re
+
+    if not value:
+        return None
+    cleaned = value.strip().strip("'\"“”‘’`")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = re.sub(r"[。！？!?,，；;：:]+$", "", cleaned).strip()
+    cleaned = cleaned[:MAX_SUGGEST_NAME_LENGTH].strip()
+    return cleaned or None
+
+
+def _suggest_name_with_llm(site_url: str, domain: str, title: str | None) -> str | None:
+    prompt = (
+        "你是一个网站命名助手。"
+        "请根据给定的网站信息，生成一个适合作为站点名称的短标题。"
+        "要求：\n"
+        f"1. 最终结果不超过{MAX_SUGGEST_NAME_LENGTH}个字符；\n"
+        "2. 可以是中文、英文或中英文混合短语；\n"
+        "3. 像站点名，不要写解释；\n"
+        "4. 只输出名称本身。\n\n"
+        f"URL: {site_url}\n"
+        f"域名: {domain}\n"
+        f"页面标题: {title or '(无标题)'}\n"
+    )
+    result = LlmClient().complete(prompt, temperature=0.1)
+    return _normalize_site_name(result)
+
+
 @router.post("/suggest-name")
 def suggest_name(body: SuggestNameRequest):
-    """抓首页 <title> 作站点名；失败回退域名。不调 LLM（YAGNI）。"""
+    """优先用 LLM 生成站点短名；失败时回退<title>，再回退域名。"""
     from urllib.parse import urlparse
     import httpx
     site_url = str(body.url)
     domain = urlparse(site_url).netloc.removeprefix("www.")
+    title = None
     try:
         resp = httpx.get(site_url, timeout=8.0, follow_redirects=True,
                          headers={"User-Agent": "os-news-tracker/discovery"})
         if resp.status_code < 400:
             title = _extract_title(resp.text)
-            if title:
-                return {"name": title}
     except Exception:
         pass
-    return {"name": domain}
+
+    try:
+        llm_name = _suggest_name_with_llm(site_url, domain, title)
+        if llm_name:
+            return {"name": llm_name}
+    except Exception:
+        pass
+
+    fallback = _normalize_site_name(title) or _normalize_site_name(domain) or domain[:MAX_SUGGEST_NAME_LENGTH]
+    return {"name": fallback}

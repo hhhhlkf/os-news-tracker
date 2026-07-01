@@ -1,6 +1,6 @@
 // frontend/src/components/DiscoveryFlowChart.tsx
 import { useMemo } from "react";
-import { ReactFlow, Background, BackgroundVariant, MarkerType, type Node, type Edge } from "@xyflow/react";
+import { ReactFlow, Background, BackgroundVariant, Handle, MarkerType, Position, type Node, type Edge } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { FLOW_NODES, computeNodeStates, attemptCount, type FlowNodeId, type NodeState } from "../discovery/flowState";
 import type { DiscoveryRun } from "../types";
@@ -8,12 +8,12 @@ import type { DiscoveryRun } from "../types";
 // 固定坐标：预处理竖排居中入环，4 agent 环形，存库底部居中
 const POS: Record<FlowNodeId, { x: number; y: number }> = {
   fetch_homepage: { x: 96, y: 0 },
-  capture_network: { x: 96, y: 80 },
-  explorer: { x: 176, y: 170 },
-  validator: { x: 290, y: 250 },
-  dsl_writer: { x: 176, y: 330 },
-  auditor: { x: 62, y: 250 },
-  save_method: { x: 176, y: 410 },
+  capture_network: { x: 96, y: 92 },
+  explorer: { x: 96, y: 196 },
+  validator: { x: 292, y: 196 },
+  dsl_writer: { x: 292, y: 314 },
+  auditor: { x: 96, y: 314 },
+  save_method: { x: 292, y: 438 },
 };
 
 const STATE_STYLE: Record<NodeState, { fill: string; stroke: string; color: string; dash?: string }> = {
@@ -28,20 +28,31 @@ function NodeBox({ data }: { data: { label: string; id: string; kind: "det" | "a
   const isAgent = data.kind === "agent";
   const radius = isAgent ? "50%" : "12px";
   return (
-    <div style={{
-      width: 132, padding: "8px 10px", textAlign: "center",
-      background: s.fill, border: `2px solid ${s.stroke}`, borderRadius: radius,
-      color: s.color, fontSize: 13, fontWeight: 700,
-      boxShadow: data.state === "running" ? "0 0 0 4px rgba(23,92,211,0.15)" : undefined,
-      borderStyle: s.dash ? "dashed" : "solid",
-    }}>
-      <div>{data.label}</div>
-      <div style={{ fontSize: 9, fontFamily: "JetBrains Mono, monospace", opacity: 0.7 }}>{data.id}</div>
+    <div style={{ position: "relative" }}>
+      <Handle id="top-in" type="target" position={Position.Top} style={handleStyle} />
+      <Handle id="top-out" type="source" position={Position.Top} style={handleStyle} />
+      <Handle id="right-in" type="target" position={Position.Right} style={handleStyle} />
+      <Handle id="right-out" type="source" position={Position.Right} style={handleStyle} />
+      <Handle id="bottom-in" type="target" position={Position.Bottom} style={handleStyle} />
+      <Handle id="bottom-out" type="source" position={Position.Bottom} style={handleStyle} />
+      <Handle id="left-in" type="target" position={Position.Left} style={handleStyle} />
+      <Handle id="left-out" type="source" position={Position.Left} style={handleStyle} />
+      <div style={{
+        width: 132, padding: "8px 10px", textAlign: "center",
+        background: s.fill, border: `2px solid ${s.stroke}`, borderRadius: radius,
+        color: s.color, fontSize: 13, fontWeight: 700,
+        boxShadow: data.state === "running" ? "0 0 0 4px rgba(23,92,211,0.15)" : undefined,
+        borderStyle: s.dash ? "dashed" : "solid",
+      }}>
+        <div>{data.label}</div>
+        <div style={{ fontSize: 9, fontFamily: "JetBrains Mono, monospace", opacity: 0.7 }}>{data.id}</div>
+      </div>
     </div>
   );
 }
 
 const nodeTypes = { flow: NodeBox };
+const handleStyle = { width: 8, height: 8, background: "transparent", border: "none", opacity: 0 } as const;
 
 export function DiscoveryFlowChart({ run, onSelectNode, selectedNode }: {
   run: DiscoveryRun;
@@ -58,9 +69,18 @@ export function DiscoveryFlowChart({ run, onSelectNode, selectedNode }: {
   })), [states, selectedNode]);
 
   const edges: Edge[] = useMemo(() => {
-    const e = (id: string, s: FlowNodeId, t: FlowNodeId, opts?: Partial<Edge>): Edge => ({
+    const e = (
+      id: string,
+      s: FlowNodeId,
+      t: FlowNodeId,
+      sourceHandle: string,
+      targetHandle: string,
+      opts?: Partial<Edge>,
+    ): Edge => ({
       id, source: s, target: t,
+      sourceHandle, targetHandle,
       markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
+      style: { stroke: "#98a2b3", strokeWidth: 1.8 },
       ...opts,
     });
     const lastEntry = run.node_trace[run.node_trace.length - 1];
@@ -68,15 +88,20 @@ export function DiscoveryFlowChart({ run, onSelectNode, selectedNode }: {
       (lastEntry.step === "dsl_writer" || lastEntry.step === "validator") &&
       run.node_trace.filter((e) => e.step === lastEntry.step).length >= 2;
     return [
-      e("e1", "fetch_homepage", "capture_network"),
-      e("e2", "capture_network", "explorer"),
-      e("e3", "explorer", "validator"),
-      e("e4", "validator", "dsl_writer"),
-      e("e5", "dsl_writer", "auditor"),
-      e("e6", "auditor", "save_method", { label: "通过", style: { stroke: "#059669" } }),
-      e("e7", "auditor", "dsl_writer", {
+      e("e1", "fetch_homepage", "capture_network", "bottom-out", "top-in", { type: "step" }),
+      e("e2", "capture_network", "explorer", "bottom-out", "top-in", { type: "step" }),
+      e("e3", "explorer", "validator", "right-out", "left-in", { type: "step" }),
+      e("e4", "validator", "dsl_writer", "bottom-out", "top-in", { type: "step" }),
+      e("e5", "dsl_writer", "auditor", "left-out", "right-in", { type: "step" }),
+      e("e6", "auditor", "save_method", "bottom-out", "left-in", {
+        type: "step",
+        label: "通过",
+        style: { stroke: "#059669", strokeWidth: 1.8 },
+      }),
+      e("e7", "auditor", "explorer", "top-out", "bottom-in", {
+        type: "step",
         label: `不通过·重试(${attempt}/3)`, animated: isRetryTarget && run.status === "running",
-        style: { stroke: "#d97706", strokeDasharray: "6 4" },
+        style: { stroke: "#d97706", strokeWidth: 1.8, strokeDasharray: "6 4" },
       }),
     ];
   }, [run, attempt]);
