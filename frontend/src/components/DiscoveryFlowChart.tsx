@@ -63,9 +63,10 @@ export function DiscoveryFlowChart({ run, onSelectNode, selectedNode }: {
       markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
       ...opts,
     });
+    const lastEntry = run.node_trace[run.node_trace.length - 1];
     const isRetryTarget = run.node_trace.length > 0 &&
-      (run.node_trace[run.node_trace.length - 1].step === "dsl_writer" ||
-       run.node_trace[run.node_trace.length - 1].step === "validator");
+      (lastEntry.step === "dsl_writer" || lastEntry.step === "validator") &&
+      run.node_trace.filter((e) => e.step === lastEntry.step).length >= 2;
     return [
       e("e1", "fetch_homepage", "capture_network"),
       e("e2", "capture_network", "explorer"),
