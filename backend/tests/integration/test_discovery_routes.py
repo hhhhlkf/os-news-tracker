@@ -155,6 +155,7 @@ def test_get_method_detail(client, session):
     r = client.get(f"/discovery/methods/{m.id}")
     assert r.status_code == 200
     assert r.json()["dsl_recipe"]["recipe_type"] == "dsl"
+    assert r.json()["last_run_status"] is None
 
 
 def test_patch_method_disable(client, session):

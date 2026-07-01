@@ -96,7 +96,8 @@ def get_method(method_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "method not found")
     return {"id": m.id, "domain": m.domain, "entry_url": m.entry_url, "status": m.status,
             "dsl_recipe": m.dsl_recipe, "signature": m.signature,
-            "last_run_at": m.last_run_at.isoformat() if m.last_run_at else None}
+            "last_run_at": m.last_run_at.isoformat() if m.last_run_at else None,
+            "last_run_status": m.last_run_status}
 
 
 @router.patch("/methods/{method_id}")
