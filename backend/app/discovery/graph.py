@@ -732,6 +732,27 @@ def start_discovery_run(site_url: str, force: bool = False, name: str | None = N
     return run_id
 
 
+def _step_summary(node_name: str, update: dict) -> dict:
+    """从节点的 state update 提取该步产出摘要，供前端节点详情卡展示。"""
+    if node_name == "explorer":
+        e = update.get("exploration") or {}
+        return {"source_type": e.get("source_type"), "list_url": e.get("list_url"),
+                "success": e.get("success")}
+    if node_name == "validator":
+        u = update.get("url_rule") or {}
+        return {"mode": u.get("mode"), "template": u.get("template"),
+                "evidence": u.get("evidence")}
+    if node_name == "dsl_writer":
+        r = update.get("dsl_recipe") or {}
+        actions = r.get("actions") or []
+        return {"actions": len(actions), "has_loop": any(a.get("op") == "loop" for a in actions)}
+    if node_name == "auditor":
+        a = update.get("audit_result") or {}
+        return {"passed": a.get("passed"), "issues": a.get("issues"),
+                "attempt": update.get("attempt")}
+    return {}
+
+
 def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None = None) -> None:
     """后台线程执行核心：建图（PostgresSaver）+ stream 逐节点跑 + 实时更新 node_trace。
 
@@ -758,9 +779,10 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
                            run_id=run_id, url=site_url, force=force)
             # 逐节点 stream → 实时更新 node_trace 供前端轮询 + log 输出
             for chunk in g.stream(initial, config=config, stream_mode="updates"):
-                for node_name in chunk:
+                for node_name, update in chunk.items():
                     entry = {"step": node_name, "status": "done",
-                             "ts": datetime.now(timezone.utc).isoformat()}
+                             "ts": datetime.now(timezone.utc).isoformat(),
+                             "summary": _step_summary(node_name, update or {})}
                     node_trace.append(entry)
                     stage = _STAGE_LABELS.get(node_name, node_name)
                     msg = _STEP_MESSAGES.get(node_name, f"步骤 {node_name} 完成")
