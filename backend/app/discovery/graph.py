@@ -24,6 +24,30 @@ MAX_ATTEMPTS = 3      # 图级重试上限
 STALE_RUN_TIMEOUT_SECONDS = 1800       # running 超过 30 分钟判超时回收（定时巡检用）
 STALE_RUN_PATROL_INTERVAL_MINUTES = 5  # 定时巡检间隔
 
+# node_name → 日志 stage 标签（前端渲染 [stage] source message · key=value）
+_STAGE_LABELS = {
+    "fetch_homepage": "探查",
+    "capture_network": "探查",
+    "supervisor": "路由",
+    "explorer": "探查",
+    "validator": "验证",
+    "dsl_writer": "配方",
+    "auditor": "审计",
+    "save_method": "存储",
+}
+
+# node_name → 日志描述
+_STEP_MESSAGES = {
+    "fetch_homepage": "抓取首页完成",
+    "capture_network": "抓取网络请求完成",
+    "supervisor": "路由决策完成",
+    "explorer": "站点探查完成",
+    "validator": "URL 规律验证完成",
+    "dsl_writer": "DSL 配方编写完成",
+    "auditor": "配方审计完成",
+    "save_method": "配方存储完成",
+}
+
 
 class DiscoveryState(TypedDict, total=False):
     """图状态：跨节点流转，total=False 允许字段可选（节点只返回变更的字段）。"""
@@ -713,12 +737,15 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
 
     进程崩了可从 PostgresSaver checkpoint 跨进程续跑（thread_id 关联 run_id）。
     用 g.stream(stream_mode="updates") 逐节点产出 → 实时写 node_trace 到 DB 供前端轮询 + log。
+    日志复用 append_run_log（与 agent_crawl 同套格式：[stage] source message · key=value）。
     """
     from datetime import datetime, timezone
     from langgraph.checkpoint.postgres import PostgresSaver
     from app.db import SessionLocal
     from app.models import SiteDiscoveryRun
+    from app.run_logs import append_run_log
     s = get_settings()
+    source_label = name or site_url
     with PostgresSaver.from_conn_string(_to_psycopg_conn_string(s.database_url)) as checkpointer:
         checkpointer.setup()  # 自动建 checkpoint 表
         g = build_graph(checkpointer=checkpointer)
@@ -727,12 +754,18 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
             config = {"configurable": {"thread_id": f"discovery-{run_id}"}}
             initial = {"site_url": site_url, "attempt": 0, "token_used": 0, "force": force, "name": name}
             node_trace: list = []
+            append_run_log("任务", "Discovery 探查开始", source=source_label,
+                           run_id=run_id, url=site_url, force=force)
             # 逐节点 stream → 实时更新 node_trace 供前端轮询 + log 输出
             for chunk in g.stream(initial, config=config, stream_mode="updates"):
                 for node_name in chunk:
                     entry = {"step": node_name, "status": "done",
                              "ts": datetime.now(timezone.utc).isoformat()}
                     node_trace.append(entry)
+                    stage = _STAGE_LABELS.get(node_name, node_name)
+                    msg = _STEP_MESSAGES.get(node_name, f"步骤 {node_name} 完成")
+                    append_run_log(stage, msg, source=source_label,
+                                   step=node_name, trace_count=len(node_trace))
                     logger.info("discovery run %s: step=%s done (%d steps so far)",
                                 run_id, node_name, len(node_trace))
                     # 实时写 DB 供前端轮询 GET /discovery/runs/{id}
@@ -751,6 +784,10 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
             if final.get("error"):
                 run.error_message = final["error"]
             db_sess.commit()
+            append_run_log("任务", f"Discovery 探查结束 · verdict={final.get('verdict')}",
+                           source=source_label, run_id=run_id,
+                           status=run.status, steps=len(node_trace),
+                           token_used=final.get("token_used", 0))
             logger.info("discovery run %s: finished, verdict=%s, %d steps traced",
                         run_id, final.get("verdict"), len(node_trace))
         except Exception as e:
@@ -761,6 +798,8 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
                 run.status = "failed"; run.error_message = str(e)
                 run.ended_at = datetime.now(timezone.utc)
                 db_sess.commit()
+            append_run_log("任务", f"Discovery 探查失败 · {e}", source=source_label,
+                           run_id=run_id, level="error")
             logger.exception("discovery run %s: failed with exception", run_id)
         finally:
             db_sess.close()
