@@ -80,6 +80,25 @@ def test_get_discovery_run(client, session):
     session.add(run); session.commit()
     r = client.get(f"/discovery/runs/{run.id}")
     assert r.json()["status"] == "running"
+    assert r.json()["current_step"] is None  # 空 node_trace → None
+
+
+def test_get_discovery_run_with_trace(client, session):
+    """node_trace 逐步轨迹 + current_step（前端动画用）。"""
+    from app.models import SiteDiscoveryRun
+    run = SiteDiscoveryRun(site_url="https://x.com", status="running", node_trace=[
+        {"step": "fetch_homepage", "status": "done", "ts": "2026-07-01T10:00:00+00:00"},
+        {"step": "capture_network", "status": "done", "ts": "2026-07-01T10:00:05+00:00"},
+        {"step": "supervisor", "status": "done", "ts": "2026-07-01T10:00:06+00:00"},
+        {"step": "explorer", "status": "done", "ts": "2026-07-01T10:00:30+00:00"},
+    ])
+    session.add(run); session.commit()
+    r = client.get(f"/discovery/runs/{run.id}")
+    body = r.json()
+    assert len(body["node_trace"]) == 4
+    assert body["node_trace"][0]["step"] == "fetch_homepage"
+    assert body["node_trace"][-1]["step"] == "explorer"
+    assert body["current_step"] == "explorer"  # 最后一步 = 当前步骤
 
 
 def test_discovery_fetch_endpoint(client, session):

@@ -7,6 +7,7 @@ attempt 用尽判 failed。worker 在 Task 11 实装，图组装在 Task 12。
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from typing import TypedDict
 from urllib.parse import urljoin
@@ -15,6 +16,8 @@ from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, END
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 TOKEN_BUDGET = 50000  # 生成命 token 硬上限，超即中止
 MAX_ATTEMPTS = 3      # 图级重试上限
@@ -706,9 +709,10 @@ def start_discovery_run(site_url: str, force: bool = False, name: str | None = N
 
 
 def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None = None) -> None:
-    """后台线程执行核心：建图（PostgresSaver）+ 跑 + 更新 site_discovery_runs。
+    """后台线程执行核心：建图（PostgresSaver）+ stream 逐节点跑 + 实时更新 node_trace。
 
     进程崩了可从 PostgresSaver checkpoint 跨进程续跑（thread_id 关联 run_id）。
+    用 g.stream(stream_mode="updates") 逐节点产出 → 实时写 node_trace 到 DB 供前端轮询 + log。
     """
     from datetime import datetime, timezone
     from langgraph.checkpoint.postgres import PostgresSaver
@@ -720,20 +724,35 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
         g = build_graph(checkpointer=checkpointer)
         db_sess = SessionLocal()
         try:
-            # thread_id 关联 run，崩了重启可从 checkpoint 续跑
-            final = g.invoke(
-                {"site_url": site_url, "attempt": 0, "token_used": 0, "force": force, "name": name},
-                config={"configurable": {"thread_id": f"discovery-{run_id}"}},
-            )
+            config = {"configurable": {"thread_id": f"discovery-{run_id}"}}
+            initial = {"site_url": site_url, "attempt": 0, "token_used": 0, "force": force, "name": name}
+            node_trace: list = []
+            # 逐节点 stream → 实时更新 node_trace 供前端轮询 + log 输出
+            for chunk in g.stream(initial, config=config, stream_mode="updates"):
+                for node_name in chunk:
+                    entry = {"step": node_name, "status": "done",
+                             "ts": datetime.now(timezone.utc).isoformat()}
+                    node_trace.append(entry)
+                    logger.info("discovery run %s: step=%s done (%d steps so far)",
+                                run_id, node_name, len(node_trace))
+                    # 实时写 DB 供前端轮询 GET /discovery/runs/{id}
+                    r = db_sess.get(SiteDiscoveryRun, run_id)
+                    r.node_trace = list(node_trace)
+                    db_sess.commit()
+            # 取最终状态
+            state_snapshot = g.get_state(config)
+            final = state_snapshot.values if state_snapshot else {}
             run = db_sess.get(SiteDiscoveryRun, run_id)
             run.status = "completed" if final.get("verdict") == "dsl" else "failed"
             run.resulting_method_id = final.get("method_id")
             run.llm_token_usage = final.get("token_used", 0)
-            run.node_trace = [{"verdict": final.get("verdict")}]
+            run.node_trace = node_trace  # 最终完整 trace
             run.ended_at = datetime.now(timezone.utc)
             if final.get("error"):
                 run.error_message = final["error"]
             db_sess.commit()
+            logger.info("discovery run %s: finished, verdict=%s, %d steps traced",
+                        run_id, final.get("verdict"), len(node_trace))
         except Exception as e:
             # 兜底：图级异常标 failed（节点级异常已在 supervisor 路由处理）
             db_sess.rollback()
@@ -742,6 +761,7 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
                 run.status = "failed"; run.error_message = str(e)
                 run.ended_at = datetime.now(timezone.utc)
                 db_sess.commit()
+            logger.exception("discovery run %s: failed with exception", run_id)
         finally:
             db_sess.close()
 

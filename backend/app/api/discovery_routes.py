@@ -61,13 +61,15 @@ def list_discovery_runs(limit: int = 20, db: Session = Depends(get_db)):
 
 @router.get("/runs/{run_id}")
 def get_discovery_run(run_id: int, db: Session = Depends(get_db)):
-    """单 run 详情/轮询：含 node_trace 审计。前端轮询此端点看 status。"""
+    """单 run 详情/轮询：含 node_trace 逐步轨迹 + current_step（前端高亮"进行到哪一步了"）。"""
     r = db.get(SiteDiscoveryRun, run_id)
     if not r:
         raise HTTPException(404, "run not found")
+    current_step = r.node_trace[-1]["step"] if r.node_trace else None
     return {"id": r.id, "site_url": r.site_url, "status": r.status,
             "resulting_method_id": r.resulting_method_id, "llm_token_usage": r.llm_token_usage,
             "node_trace": r.node_trace, "retry_count": r.retry_count,
+            "current_step": current_step,
             "started_at": r.started_at.isoformat() if r.started_at else None,
             "ended_at": r.ended_at.isoformat() if r.ended_at else None,
             "error_message": r.error_message}
