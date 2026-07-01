@@ -17,8 +17,10 @@ export function useDiscoveryLogs(runId: number | null, enabled: boolean) {
         const r = await fetch(`${base}/news-run/logs?after_id=${lastId.current}`, { headers: authHeaders() });
         if (!r.ok) return;
         const data = (await r.json()) as { logs: NewsRunLogEntry[] };
+        if (data.logs.length) {
+          lastId.current = Math.max(lastId.current, ...data.logs.map((l) => l.id));
+        }
         const mine = data.logs.filter((l) => Number((l as Record<string, unknown>).run_id) === runId);
-        if (mine.length) lastId.current = Math.max(lastId.current, ...mine.map((l) => l.id));
         if (!stop) setLogs((prev) => [...prev, ...mine]);
       } catch { /* ignore */ }
     }

@@ -8,7 +8,10 @@ export function CrawlMethodDetail({ methodId, onClose }: { methodId: number; onC
   const q = useQuery({ queryKey: ["discovery-method", methodId], queryFn: () => getDiscoveryMethod(methodId) });
   const patchMut = useMutation({
     mutationFn: (status: "active" | "disabled") => patchDiscoveryMethod(methodId, status),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["discovery-methods"] }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["discovery-methods"] });
+      await qc.invalidateQueries({ queryKey: ["discovery-method", methodId] });
+    },
   });
   const delMut = useMutation({
     mutationFn: () => deleteDiscoveryMethod(methodId),
@@ -24,6 +27,16 @@ export function CrawlMethodDetail({ methodId, onClose }: { methodId: number; onC
           <a style={{ cursor: "pointer", color: "#667085" }} onClick={onClose}>关闭</a>
         </div>
         <div style={{ fontSize: 12, color: "#667085", wordBreak: "break-all", marginBottom: 12 }}>{q.data?.entry_url}</div>
+        {q.isLoading && (
+          <div style={infoBox}>
+            加载爬取方式详情中...
+          </div>
+        )}
+        {q.isError && (
+          <div style={{ ...infoBox, border: "1px solid #fecdca", background: "#fef3f2", color: "#b42318" }}>
+            加载爬取方式详情失败，请稍后重试。
+          </div>
+        )}
         {q.data && (
           <>
             <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
@@ -47,3 +60,4 @@ export function CrawlMethodDetail({ methodId, onClose }: { methodId: number; onC
 
 const btnPrimary: CSSProperties = { border: "none", borderRadius: 999, padding: "8px 16px", background: "#175cd3", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" };
 const btnDanger: CSSProperties = { border: "1px solid #fecdca", borderRadius: 999, padding: "8px 16px", background: "#fff", color: "#b42318", fontSize: 13, fontWeight: 700, cursor: "pointer" };
+const infoBox: CSSProperties = { border: "1px dashed #d0d5dd", borderRadius: 8, padding: 16, color: "#667085", fontSize: 13 };

@@ -15,6 +15,8 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
   const [dup, setDup] = useState<{ method_id: number; domain: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<FlowNodeId | null>(null);
+  const [startLocked, setStartLocked] = useState(false);
+  const startLockRef = useRef(false);
 
   const runQuery = useQuery({
     queryKey: ["discovery-run", runId],
@@ -28,13 +30,19 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
     mutationFn: (vars: { url: string; name?: string; force: boolean }) =>
       startDiscoveryRun(vars.url, vars.name, vars.force),
     onSuccess: (res) => {
+      startLockRef.current = false;
+      setStartLocked(false);
       setError(null);
       if (res.status === "started" && res.run_id != null) { setDup(null); setRunId(res.run_id); }
       else if (res.status === "duplicate" && res.existing_method) {
         setDup({ method_id: res.existing_method.method_id, domain: res.existing_method.domain });
       }
     },
-    onError: (e) => setError(e instanceof ApiError ? e.message : "启动探查失败"),
+    onError: (e) => {
+      startLockRef.current = false;
+      setStartLocked(false);
+      setError(e instanceof ApiError ? e.message : "启动探查失败");
+    },
   });
 
   const nameMut = useMutation({
@@ -46,6 +54,17 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
   const running = runQuery.data?.status === "running";
   const completed = runQuery.data?.status === "completed";
   const failed = runQuery.data?.status === "failed";
+  const startPending = startMut.isPending;
+  const startBusy = running || startPending || startLocked || startLockRef.current;
+  const startDisabled = !url || startBusy;
+
+  function startRun(force: boolean) {
+    if (!url || running || startMut.isPending || startLockRef.current) return;
+    startLockRef.current = true;
+    setStartLocked(true);
+    if (force) setDup(null);
+    startMut.mutate({ url, name: name || undefined, force });
+  }
 
   // 完成后通知新方式（useEffect + ref 守卫，避免渲染期副作用）
   const notifiedRef = useRef<number | null>(null);
@@ -85,15 +104,15 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
             disabled={!url || nameMut.isPending}
             style={btnGhost}>✨ 自动</button>
         </div>
-        <button type="button" disabled={!url || running} onClick={() => startMut.mutate({ url, name: name || undefined, force: false })}
-          style={running ? btnDisabled : btnPrimary}>{running ? "探查中…" : "开始探查"}</button>
+        <button type="button" disabled={startDisabled} onClick={() => startRun(false)}
+          style={startDisabled ? btnDisabled : btnPrimary}>{running ? "探查中…" : startBusy ? "启动中…" : "开始探查"}</button>
       </div>
 
       {dup && (
         <div style={{ border: "1px solid #fec84b", background: "#fffaeb", color: "#b54708", borderRadius: 8, padding: "10px 12px", marginBottom: 12, fontSize: 13 }}>
           该域名已有爬取方式（{dup.domain}）。是否覆盖重新探查？
-          <button type="button" style={{ ...btnPrimary, marginLeft: 12 }}
-            onClick={() => { startMut.mutate({ url, name: name || undefined, force: true }); setDup(null); }}>覆盖重探</button>
+          <button type="button" disabled={startDisabled} style={{ ...(startDisabled ? btnDisabled : btnPrimary), marginLeft: 12 }}
+            onClick={() => startRun(true)}>{startBusy ? "启动中…" : "覆盖重探"}</button>
           <button type="button" style={{ ...btnGhost, marginLeft: 8 }} onClick={() => setDup(null)}>取消</button>
         </div>
       )}
@@ -113,7 +132,9 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
             {failed && (
               <div style={{ border: "1px solid #fca5a5", background: "#fef2f2", color: "#b42318", borderRadius: 8, padding: "10px 12px", fontSize: 13 }}>
                 探查失败：{runQuery.data.error_message ?? "未知错误"}
-                <button type="button" style={{ ...btnPrimary, marginLeft: 12 }} onClick={() => startMut.mutate({ url, name: name || undefined, force: false })}>重新探查</button>
+                <button type="button" disabled={startDisabled} style={{ ...(startDisabled ? btnDisabled : btnPrimary), marginLeft: 12 }} onClick={() => startRun(false)}>
+                  {startBusy ? "启动中…" : "重新探查"}
+                </button>
               </div>
             )}
           </div>

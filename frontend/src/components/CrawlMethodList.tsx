@@ -58,6 +58,16 @@ export function CrawlMethodList({ onOpenMethod, highlightId }: {
       {summary && <div style={{ fontSize: 13, color: "#059669", marginBottom: 10 }}>{summary} · <a style={{ color: "#175cd3", cursor: "pointer" }} onClick={() => (window.location.href = "/")}>查看入库条目 →</a></div>}
 
       <div style={{ display: "grid", gap: 8 }}>
+        {list.isLoading && (
+          <div style={infoBox}>
+            加载爬取方式中...
+          </div>
+        )}
+        {list.isError && (
+          <div style={{ ...infoBox, border: "1px solid #fecdca", background: "#fef3f2", color: "#b42318" }}>
+            加载爬取方式失败，请稍后重试。
+          </div>
+        )}
         {(list.data ?? []).map((m) => (
           <MethodRow key={m.id} m={m} selected={selected.has(m.id)} state={rowStates[m.id]}
             onToggle={(en) => toggle(m.id, en)} onOpen={() => onOpenMethod?.(m.id)} highlight={highlightId === m.id} />
@@ -105,3 +115,4 @@ function badge(status: string): CSSProperties {
 }
 
 const btnPrimary: CSSProperties = { border: "none", borderRadius: 999, padding: "8px 16px", background: "#175cd3", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" };
+const infoBox: CSSProperties = { border: "1px dashed #d0d5dd", borderRadius: 8, padding: 16, color: "#667085", fontSize: 13 };
