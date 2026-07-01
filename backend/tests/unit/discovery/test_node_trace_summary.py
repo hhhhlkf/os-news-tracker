@@ -19,12 +19,20 @@ def test_summary_dsl_writer():
     assert s["actions"] == 3
     assert s["has_loop"] is False
 
+def test_summary_dsl_writer_with_loop():
+    upd = {"dsl_recipe": {"actions": [{"op": "fetch"}, {"op": "loop"}, {"op": "extract"}]}}
+    s = _step_summary("dsl_writer", upd)
+    assert s["actions"] == 3
+    assert s["has_loop"] is True
+
 def test_summary_auditor():
-    upd = {"audit_result": {"passed": False, "issues": ["只抓单页"]},
+    upd = {"audit_result": {"passed": False, "errors": [],
+                            "llm_verdict": {"issues": ["只抓单页"], "suggested_fix": "加 loop"}},
            "attempt": 1}
     s = _step_summary("auditor", upd)
     assert s["passed"] is False
     assert s["attempt"] == 1
+    assert s["issues"] == ["只抓单页"]
 
 def test_summary_unknown_node():
     s = _step_summary("fetch_homepage", {"homepage": {"status": 200}})

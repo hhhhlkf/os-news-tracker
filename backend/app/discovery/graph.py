@@ -748,7 +748,8 @@ def _step_summary(node_name: str, update: dict) -> dict:
         return {"actions": len(actions), "has_loop": any(a.get("op") == "loop" for a in actions)}
     if node_name == "auditor":
         a = update.get("audit_result") or {}
-        return {"passed": a.get("passed"), "issues": a.get("issues"),
+        lv = a.get("llm_verdict") or {}
+        return {"passed": a.get("passed"), "issues": lv.get("issues"),
                 "attempt": update.get("attempt")}
     return {}
 
