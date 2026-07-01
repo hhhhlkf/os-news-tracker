@@ -282,3 +282,72 @@ export interface AgentCandidateRunResponse {
   agent_source_id: number;
   message: string;
 }
+
+// ---- Discovery ----
+export interface DiscoveryNodeTraceEntry {
+  step: string;
+  status: string;
+  ts: string;
+  summary?: Record<string, unknown>;
+}
+
+export interface DiscoveryRun {
+  id: number;
+  site_url: string;
+  status: "running" | "completed" | "failed";
+  resulting_method_id: number | null;
+  llm_token_usage: number;
+  node_trace: DiscoveryNodeTraceEntry[];
+  retry_count: number;
+  current_step: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  error_message: string | null;
+}
+
+export interface DiscoveryRunSummary {
+  id: number;
+  site_url: string;
+  status: string;
+  resulting_method_id: number | null;
+  llm_token_usage: number;
+  started_at: string | null;
+  ended_at: string | null;
+  error_message: string | null;
+}
+
+export type CrawlMethodStatus = "active" | "disabled" | "failed";
+
+export interface CrawlMethod {
+  id: number;
+  domain: string;
+  entry_url: string;
+  status: CrawlMethodStatus;
+  signature: string;
+  last_run_at: string | null;
+  last_run_status: string | null;
+}
+
+export interface CrawlMethodDetail extends CrawlMethod {
+  dsl_recipe: Record<string, unknown>;
+}
+
+export interface DiscoveryFetchResult {
+  discovered_count: number;
+  stored_count: number;
+  items: Record<string, unknown>[];
+  stats: Record<string, unknown>;
+  message: string;
+}
+
+export interface SuggestNameResponse { name: string; }
+
+export interface DiscoverRunResponse {
+  status: "started" | "duplicate";
+  run_id?: number;
+  name?: string;
+  existing_method?: {
+    method_id: number; domain: string; signature: string;
+    dsl_recipe: Record<string, unknown>; last_run_at: string | null; last_run_status: string | null;
+  };
+}
