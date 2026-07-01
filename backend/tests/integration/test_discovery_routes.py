@@ -158,8 +158,20 @@ def test_delete_method_cascades_domain(client, session):
     assert session.query(CrawlMethodDomain).filter_by(method_id=mid).count() == 0
 
 
+class _MockEnricher:
+    """假 Enricher：enrich() 返回固定 EnrichedFields，避免测试真调 LLM。"""
+    def enrich(self, item, *, existing_tags=None):
+        from app.schemas import EnrichedFields
+        return EnrichedFields(
+            title_zh=item.title, summary="LLM富化摘要", tech_highlights=[],
+            info_type="发布", importance="高", main_category="OS性能发展",
+            sub_tags=["kernel"], keywords=["test"], merge_suggestions=[],
+            confidence=0.9, should_store=True, reject_reason=None,
+        )
+
+
 def test_discovery_fetch_ingests_to_items(client, session, monkeypatch):
-    """运行命 /fetch 把 DSL 产出经 pipeline（agent 旁路 enricher）入 items 表。"""
+    """运行命 /fetch 把 DSL 产出经 pipeline + LLM Enricher 富化后入 items 表。"""
     from app.enums import SourceType, Stream
     from app.models import CrawlMethod, Item, Source
     src = Source(name="x.com", type=SourceType.DISCOVERY.value, url="https://x.com",
@@ -175,7 +187,7 @@ def test_discovery_fetch_ingests_to_items(client, session, monkeypatch):
                         ],
                     }, signature="a")
     session.add(m); session.commit()
-    # mock DslInterpreter 的 fetch：注入固定 JSON 产出（不真发 HTTP）
+    # mock DslInterpreter 的 fetch + Enricher 的 LLM 富化
     def fake_fetch(action, ctx):
         ctx["last_fetch"] = {"obj": {"records": [{"no": "1", "title": "A"}]}}
 
@@ -185,6 +197,7 @@ def test_discovery_fetch_ingests_to_items(client, session, monkeypatch):
                           or setattr(self, "_browser_fn", None)
                           or setattr(self, "_page", None),
     )
+    monkeypatch.setattr("app.processing.enricher.Enricher", _MockEnricher)
 
     r = client.post(f"/discovery/methods/{m.id}/fetch")
     assert r.status_code == 200
@@ -193,3 +206,7 @@ def test_discovery_fetch_ingests_to_items(client, session, monkeypatch):
     assert len(items) >= 1
     assert items[0].url == "https://x.com/1"
     assert items[0].title == "A"
+    # 验证走了 LLM 富化（不是 agent 旁路的静态默认值）
+    assert items[0].importance == "高"              # mock enricher 给的，非旧默认"中"
+    assert items[0].main_category == "OS性能发展"    # mock enricher 给的，非旧默认"OS跟踪来源"
+    assert items[0].summary == "LLM富化摘要"

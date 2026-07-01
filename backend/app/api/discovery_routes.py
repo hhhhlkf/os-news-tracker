@@ -117,19 +117,19 @@ def delete_method(method_id: int, db: Session = Depends(get_db)):
 
 @router.post("/methods/{method_id}/fetch")
 def discovery_fetch(method_id: int, db: Session = Depends(get_db)):
-    """运行命：按 DSL Recipe 抓取 + 接入现有 pipeline 入 items。零 LLM（agent 旁路 enricher）。"""
+    """运行命：按 DSL Recipe 抓取 + 接现有 pipeline 入 items（走 LLM Enricher 富化+打分）。"""
     from app.models import Source
     from app.pipeline import Pipeline
+    from app.processing.enricher import Enricher
     m = db.get(CrawlMethod, method_id)
     if not m:
         raise HTTPException(404, "method not found")
     recipe = DslRecipe(**m.dsl_recipe)
     output = run_method(recipe)  # 纯确定性执行（可被测试 mock）
-    # 转 RawItem（extra.agent_item=True → pipeline 走 _process_agent_item 旁路 enricher）
+    # 转 RawItem → 走正常 pipeline 路径（调 Enricher LLM 富化：category/tags/summary/importance）
     raws = CrawlOutputIngester().to_raw_items(output, source_id=m.source_id)
     source = db.get(Source, m.source_id)
-    # agent 条目旁路 extractor/enricher，传 None 避免无谓构造（LlmClient/httpx fetcher）
-    pipeline = Pipeline(session=db, extractor=None, enricher=None)
+    pipeline = Pipeline(session=db, extractor=None, enricher=Enricher())
     for raw in raws:
         pipeline.process_item(source, raw)
     m.last_run_at = datetime.now(timezone.utc)

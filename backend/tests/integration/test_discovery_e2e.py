@@ -57,6 +57,18 @@ _FIXED_RECIPE = {
 }
 
 
+class _MockEnricher:
+    """假 Enricher：enrich() 返回固定 EnrichedFields，避免测试真调 LLM。"""
+    def enrich(self, item, *, existing_tags=None):
+        from app.schemas import EnrichedFields
+        return EnrichedFields(
+            title_zh=item.title, summary="LLM富化摘要", tech_highlights=[],
+            info_type="发布", importance="高", main_category="OS性能发展",
+            sub_tags=["kernel"], keywords=["test"], merge_suggestions=[],
+            confidence=0.9, should_store=True, reject_reason=None,
+        )
+
+
 def test_e2e_json_api_site(client, session, monkeypatch):
     """mock JSON API 站：生成命（mock）→ 存 method → 运行命（mock fetch）→ 产出 2 条。"""
     # 1. 生成命：mock start_discovery_run（不真起后台线程），仅验 /run 异步端点通
@@ -82,6 +94,7 @@ def test_e2e_json_api_site(client, session, monkeypatch):
                           or setattr(self, "_browser_fn", None)
                           or setattr(self, "_page", None),
     )
+    monkeypatch.setattr("app.processing.enricher.Enricher", _MockEnricher)
 
     # 4. 运行命：真 DslInterpreter 跑 _FIXED_RECIPE（fetch mock + 真 extract/dedup）
     r = client.post(f"/discovery/methods/{m.id}/fetch")
