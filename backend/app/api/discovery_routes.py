@@ -151,3 +151,35 @@ def discovery_fetch(method_id: int, db: Session = Depends(get_db)):
         "message": f"抓取 {len(raws)} 条，入库 {stored} 条" if stored > 0
                    else f"抓取 {len(raws)} 条，未入库（可能重复或被富化拒绝）",
     }
+
+
+class SuggestNameRequest(BaseModel):
+    url: HttpUrl
+
+
+def _extract_title(html: str) -> str | None:
+    import re
+    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+    if not m:
+        return None
+    title = re.sub(r"\s+", " ", m.group(1)).strip()
+    return title or None
+
+
+@router.post("/suggest-name")
+def suggest_name(body: SuggestNameRequest):
+    """抓首页 <title> 作站点名；失败回退域名。不调 LLM（YAGNI）。"""
+    from urllib.parse import urlparse
+    import httpx
+    site_url = str(body.url)
+    domain = urlparse(site_url).netloc.removeprefix("www.")
+    try:
+        resp = httpx.get(site_url, timeout=8.0, follow_redirects=True,
+                         headers={"User-Agent": "os-news-tracker/discovery"})
+        if resp.status_code < 400:
+            title = _extract_title(resp.text)
+            if title:
+                return {"name": title}
+    except Exception:
+        pass
+    return {"name": domain}
