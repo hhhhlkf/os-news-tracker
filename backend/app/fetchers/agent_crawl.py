@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 def _looks_like_feed_url(url: str) -> bool:
     path = urlparse(url).path.lower().rstrip("/")
     return (
-        path.endswith((".rss", ".xml", ".atom"))
+        path.endswith((".rss", ".xml", ".atom", "rss.php", "feed.php"))
         or path.endswith("/feed")
         or path.endswith("/rss")
         or "/rss/" in path
@@ -427,18 +427,31 @@ class AgentCrawlFetcher:
         filtered_items = [item for item in raw_items if self._matches_time_window(item)]
         seen: set[str] = set()
         urls: list[PlanUrl] = []
+        prefetched: list[RawPage] = []
         for item in filtered_items:
             if not item.url or item.url in seen:
                 continue
             seen.add(item.url)
+            guessed = item.title or (config.topic_groups[0] if config.topic_groups else "")
             urls.append(
                 PlanUrl(
                     url=item.url,
-                    guessed_topic=item.title or (config.topic_groups[0] if config.topic_groups else ""),
+                    guessed_topic=guessed,
                 )
             )
+            if item.raw_content:
+                prefetched.append(RawPage(
+                    url=item.url,
+                    guessed_topic=guessed,
+                    title=item.title or "",
+                    content=item.raw_content,
+                    published_at=item.published_at,
+                ))
             if len(urls) >= config.max_urls_per_run:
                 break
+
+        if prefetched and len(prefetched) == len(urls):
+            self._prefetched_pages = prefetched
 
         append_run_log(
             "plan",
@@ -557,7 +570,7 @@ class AgentCrawlFetcher:
                 pages = self._prefetched_pages
                 append_run_log(
                     "fetch",
-                    "API 种子预取内容已就绪，跳过页面抓取",
+                    "种子预取内容已就绪，跳过页面抓取",
                     source=source_name,
                     pages=len(pages),
                 )

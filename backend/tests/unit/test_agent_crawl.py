@@ -351,6 +351,48 @@ class TestAgentCrawlFetcherFetch:
         plan = crawl_dag.execute.call_args.args[0]
         assert [url.url for url in plan.urls] == ["https://example.com/inside"]
 
+    def test_rss_seed_with_content_skips_detail_page_fetch(self):
+        """RSS-backed agent sources should use feed content when details are bot-blocked."""
+        db = MagicMock()
+        db.get.return_value = _make_config_model(max_urls_per_run=1)
+        crawl_dag = MagicMock(execute=AsyncMock(return_value=[]))
+        quality_pool = MagicMock(assess_all=AsyncMock(return_value=[]))
+        rss_fetcher = MagicMock(fetch=MagicMock(return_value=[
+            RawItem(
+                source_id=1,
+                title="Kernel news",
+                url="https://www.phoronix.com/news/Linux-Example",
+                raw_content="RSS summary with enough Linux technical detail.",
+                published_at=datetime(2026, 6, 20, tzinfo=timezone.utc),
+            ),
+        ]))
+
+        fetcher = AgentCrawlFetcher(
+            db=db,
+            crawl_dag=crawl_dag,
+            quality_pool=quality_pool,
+            summary_pool=MagicMock(summarize_all=AsyncMock(return_value=[])),
+            rss_fetcher=rss_fetcher,
+            time_window={
+                "time_mode": "absolute",
+                "start_at": datetime(2026, 6, 1, tzinfo=timezone.utc),
+                "end_at": datetime(2026, 6, 30, tzinfo=timezone.utc),
+            },
+        )
+        source = MagicMock()
+        source.id = 1
+        source.name = "Phoronix"
+        source.url = "https://www.phoronix.com/rss.php"
+        source.api_config = None
+
+        fetcher.fetch(source)
+
+        crawl_dag.execute.assert_not_called()
+        pages = quality_pool.assess_all.call_args.args[0]
+        assert pages[0].url == "https://www.phoronix.com/news/Linux-Example"
+        assert pages[0].content == "RSS summary with enough Linux technical detail."
+        assert pages[0].published_at == datetime(2026, 6, 20, tzinfo=timezone.utc)
+
     def test_pipeline_failure_returns_empty(self):
         """Pipeline 中任何阶段抛出异常时应返回空列表并记录失败。"""
         db = MagicMock()
