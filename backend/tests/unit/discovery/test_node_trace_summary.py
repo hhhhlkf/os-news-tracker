@@ -34,6 +34,31 @@ def test_summary_auditor():
     assert s["attempt"] == 1
     assert s["issues"] == ["只抓单页"]
 
+def test_summary_fetch_homepage():
+    s = _step_summary("fetch_homepage", {"homepage": {"status": 200, "title": "Example Blog", "links": ["/a", "/b", "/c"]}})
+    assert s["status"] == 200
+    assert s["title"] == "Example Blog"
+    assert s["links"] == 3
+
+def test_summary_fetch_homepage_empty():
+    s = _step_summary("fetch_homepage", {})
+    assert s["status"] is None
+    assert s["title"] == ""
+    assert s["links"] == 0
+
+def test_summary_capture_network():
+    s = _step_summary("capture_network", {"network_captures": [
+        {"api_url": "https://example.com/api/posts", "method": "GET", "status": 200},
+        {"api_url": "https://example.com/api/tags", "method": "GET", "status": 200},
+    ]})
+    assert s["json_apis"] == 2
+    assert "api/posts" in s["sample_urls"]
+
+def test_summary_capture_network_empty():
+    s = _step_summary("capture_network", {})
+    assert s["json_apis"] == 0
+    assert s["sample_urls"] == "无"
+
 def test_summary_unknown_node():
-    s = _step_summary("fetch_homepage", {"homepage": {"status": 200}})
+    s = _step_summary("supervisor", {"some": "data"})
     assert s == {}

@@ -734,6 +734,16 @@ def start_discovery_run(site_url: str, force: bool = False, name: str | None = N
 
 def _step_summary(node_name: str, update: dict) -> dict:
     """从节点的 state update 提取该步产出摘要，供前端节点详情卡展示。"""
+    if node_name == "fetch_homepage":
+        h = update.get("homepage") or {}
+        title = (h.get("title") or "")[:80]
+        return {"status": h.get("status"), "title": title,
+                "links": len(h.get("links") or [])}
+    if node_name == "capture_network":
+        caps = update.get("network_captures") or []
+        api_urls = [c.get("api_url", "") for c in caps[:5]]
+        return {"json_apis": len(caps),
+                "sample_urls": ", ".join(api_urls) if api_urls else "无"}
     if node_name == "explorer":
         e = update.get("exploration") or {}
         return {"source_type": e.get("source_type"), "list_url": e.get("list_url"),
@@ -752,6 +762,36 @@ def _step_summary(node_name: str, update: dict) -> dict:
         return {"passed": a.get("passed"), "issues": lv.get("issues"),
                 "attempt": update.get("attempt")}
     return {}
+
+
+def _step_log_detail(node_name: str, update: dict) -> str:
+    """从节点产出提取关键信息，拼成日志尾部详情（· key=value 格式）。"""
+    if node_name == "fetch_homepage":
+        h = update.get("homepage") or {}
+        status = h.get("status", "?")
+        title = (h.get("title") or "")[:60]
+        n_links = len(h.get("links") or [])
+        return f" · status={status} · title={title} · links={n_links}"
+    if node_name == "capture_network":
+        caps = update.get("network_captures") or []
+        return f" · 捕获 {len(caps)} 个 JSON API"
+    if node_name == "explorer":
+        e = update.get("exploration") or {}
+        st = e.get("source_type", "?")
+        return f" · source_type={st}"
+    if node_name == "validator":
+        u = update.get("url_rule") or {}
+        return f" · mode={u.get('mode', '?')} · evidence={u.get('evidence', '?')}"
+    if node_name == "dsl_writer":
+        r = update.get("dsl_recipe") or {}
+        actions = r.get("actions") or []
+        has_loop = any(a.get("op") == "loop" for a in actions)
+        return f" · actions={len(actions)} · has_loop={has_loop}"
+    if node_name == "auditor":
+        a = update.get("audit_result") or {}
+        passed = a.get("passed")
+        return f" · passed={passed} · attempt={update.get('attempt')}"
+    return ""
 
 
 def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None = None) -> None:
@@ -786,8 +826,9 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
                              "summary": _step_summary(node_name, update or {})}
                     node_trace.append(entry)
                     stage = _STAGE_LABELS.get(node_name, node_name)
-                    msg = _STEP_MESSAGES.get(node_name, f"步骤 {node_name} 完成")
-                    append_run_log(stage, msg, source=source_label,
+                    base_msg = _STEP_MESSAGES.get(node_name, f"步骤 {node_name} 完成")
+                    detail = _step_log_detail(node_name, update or {})
+                    append_run_log(stage, base_msg + detail, source=source_label,
                                    run_id=run_id, step=node_name, trace_count=len(node_trace))
                     logger.info("discovery run %s: step=%s done (%d steps so far)",
                                 run_id, node_name, len(node_trace))
