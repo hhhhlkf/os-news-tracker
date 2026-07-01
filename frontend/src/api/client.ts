@@ -6,6 +6,9 @@ import type {
   AgentSourceCandidatesResponse,
   AgentSource,
   AgentSourceCandidate,
+  CrawlMethod,
+  CrawlMethodDetail,
+  CrawlMethodStatus,
   CrawlSource,
   ItemListResponse,
   ItemDetail,
@@ -17,13 +20,19 @@ import type {
   SourceDetectResponse,
   DiscoverRequest,
   DiscoverResponse,
+  DiscoverRunResponse,
+  DiscoveryFetchResult,
+  DiscoveryRun,
+  DiscoveryRunSummary,
   CreateFromProbeRequest,
+  SuggestNameResponse,
 } from "../types";
 import { authHeaders } from "../auth";
 
 const BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 const CRAWL_BASE = `${BASE}/crawl-sources`;
 const LEGACY_CRAWL_BASE = `${BASE}/sources/agent`;
+const DISCOVERY_BASE = `${BASE}/discovery`;
 
 export class ApiError extends Error {
   status: number;
@@ -352,4 +361,71 @@ export async function triggerAgentRunFromCandidate(
     },
     "failed to trigger agent run from candidate",
   );
+}
+
+export async function startDiscoveryRun(
+  url: string, name?: string, force = false,
+): Promise<DiscoverRunResponse> {
+  const r = await fetch(`${DISCOVERY_BASE}/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ url, name: name ?? null, force }),
+  });
+  return expectOk<DiscoverRunResponse>(r, "failed to start discovery run");
+}
+
+export async function getDiscoveryRun(runId: number): Promise<DiscoveryRun> {
+  const r = await fetch(`${DISCOVERY_BASE}/runs/${runId}`, { headers: authHeaders() });
+  return expectOk<DiscoveryRun>(r, "failed to load discovery run");
+}
+
+export async function listDiscoveryRuns(limit = 20): Promise<DiscoveryRunSummary[]> {
+  const r = await fetch(`${DISCOVERY_BASE}/runs?limit=${limit}`, { headers: authHeaders() });
+  return expectOk<DiscoveryRunSummary[]>(r, "failed to load discovery runs");
+}
+
+export async function suggestDiscoveryName(url: string): Promise<SuggestNameResponse> {
+  const r = await fetch(`${DISCOVERY_BASE}/suggest-name`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ url }),
+  });
+  return expectOk<SuggestNameResponse>(r, "failed to suggest name");
+}
+
+export async function listDiscoveryMethods(): Promise<CrawlMethod[]> {
+  const r = await fetch(`${DISCOVERY_BASE}/methods`, { headers: authHeaders() });
+  return expectOk<CrawlMethod[]>(r, "failed to load crawl methods");
+}
+
+export async function getDiscoveryMethod(methodId: number): Promise<CrawlMethodDetail> {
+  const r = await fetch(`${DISCOVERY_BASE}/methods/${methodId}`, { headers: authHeaders() });
+  return expectOk<CrawlMethodDetail>(r, "failed to load crawl method");
+}
+
+export async function patchDiscoveryMethod(
+  methodId: number, status: CrawlMethodStatus,
+): Promise<{ id: number; status: string }> {
+  const r = await fetch(`${DISCOVERY_BASE}/methods/${methodId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ status }),
+  });
+  return expectOk<{ id: number; status: string }>(r, "failed to patch method");
+}
+
+export async function deleteDiscoveryMethod(methodId: number): Promise<void> {
+  const r = await fetch(`${DISCOVERY_BASE}/methods/${methodId}`, {
+    method: "DELETE", headers: authHeaders(),
+  });
+  if (r.status === 204 || r.ok) return;
+  const body = await parseErrorBody(r);
+  throw new ApiError(r.status, `failed to delete method (HTTP ${r.status})`, body);
+}
+
+export async function fetchDiscoveryMethod(methodId: number): Promise<DiscoveryFetchResult> {
+  const r = await fetch(`${DISCOVERY_BASE}/methods/${methodId}/fetch`, {
+    method: "POST", headers: authHeaders(),
+  });
+  return expectOk<DiscoveryFetchResult>(r, "failed to fetch method");
 }
