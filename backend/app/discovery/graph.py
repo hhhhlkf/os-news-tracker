@@ -788,7 +788,7 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
                     stage = _STAGE_LABELS.get(node_name, node_name)
                     msg = _STEP_MESSAGES.get(node_name, f"步骤 {node_name} 完成")
                     append_run_log(stage, msg, source=source_label,
-                                   step=node_name, trace_count=len(node_trace))
+                                   run_id=run_id, step=node_name, trace_count=len(node_trace))
                     logger.info("discovery run %s: step=%s done (%d steps so far)",
                                 run_id, node_name, len(node_trace))
                     # 实时写 DB 供前端轮询 GET /discovery/runs/{id}
