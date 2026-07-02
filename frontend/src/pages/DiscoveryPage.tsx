@@ -2,12 +2,16 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CrawlMethodDetail } from "../components/CrawlMethodDetail";
 import { CrawlMethodList } from "../components/CrawlMethodList";
+import { DiscoverNewsControlSection } from "../components/DiscoverNewsControlSection";
 import { DiscoveryPanel } from "../components/DiscoveryPanel";
+import { buildNewsRunFormState } from "../components/NewsRunControl";
+import { RunLimitCard } from "../components/RunLimitCard";
 
 export function DiscoveryPage() {
   const queryClient = useQueryClient();
   const [highlightId, setHighlightId] = useState<number | null>(null);
   const [openMethod, setOpenMethod] = useState<number | null>(null);
+  const [runLimitState, setRunLimitState] = useState(() => buildNewsRunFormState(undefined));
 
   useEffect(() => {
     if (highlightId == null) return;
@@ -29,8 +33,17 @@ export function DiscoveryPage() {
           <p style={heroCopy}>输入网站，AI 探查员摸清爬取门道，沉淀为可复用的爬取方式。</p>
         </header>
 
+        <div style={runLimitSection}>
+          <RunLimitCard
+            formState={runLimitState}
+            onChange={setRunLimitState}
+            description="统一限制当前页的抓取时间范围与总条目数，方式库批量抓取、标准抓取、Agent Crawl 共用。"
+          />
+        </div>
         <DiscoveryPanel onMethodAdded={handleMethodAdded} />
-        <CrawlMethodList onOpenMethod={setOpenMethod} highlightId={highlightId} />
+        <CrawlMethodList onOpenMethod={setOpenMethod} highlightId={highlightId} runLimitState={runLimitState} />
+        <div data-testid="discover-methods-divider" style={methodsDivider} />
+        <DiscoverNewsControlSection runLimitState={runLimitState} onRunLimitStateChange={setRunLimitState} />
 
         {openMethod != null && (
           <CrawlMethodDetail methodId={openMethod} onClose={() => setOpenMethod(null)} />
@@ -77,4 +90,13 @@ const heroCopy: CSSProperties = {
   marginTop: 10,
   marginBottom: 0,
   color: "#d0d5dd",
+};
+
+const methodsDivider: CSSProperties = {
+  borderTop: "1px solid #d0d5dd",
+  margin: "22px 0 20px",
+};
+
+const runLimitSection: CSSProperties = {
+  marginBottom: 18,
 };

@@ -1,47 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, cancelAgentRun, deleteAgentSource, fetchAgentRuns, fetchAgentSourceCandidates, fetchAgentSources, fetchFacets, fetchItems, fetchNewsRunLogs, fetchNewsRunStatus, startNewsRun, stopNewsRun, triggerAgentRun, triggerAgentRunFromCandidate } from "../api/client";
-import { AgentRunControl } from "../components/AgentRunControl";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { fetchFacets, fetchItems } from "../api/client";
 import { FacetSidebar } from "../components/FacetSidebar";
 import { ItemList } from "../components/ItemList";
 import { ItemDetail } from "../components/ItemDetail";
-import { buildNewsRunFormState, NewsRunControl, toAbsoluteDateTime } from "../components/NewsRunControl";
-import { NewsRunLogPanel } from "../components/NewsRunLogPanel";
-import { SourceManager } from "../components/SourceManager";
 import { demoItems } from "../demoData";
-import { agentCandidateRunRefreshKeys, buildAgentWarmupRun, buildDemoFacets, filterDemoItems, isAgentSourceRunning, isAgentWarmupResolved, isManualNewsRunActive, makeListResponse, resolveHomeDataMode } from "./homeData";
-import type { AgentCrawlRunRequest, ManualNewsRunRequest, ManualNewsRunState } from "../types";
+import { buildDemoFacets, filterDemoItems, makeListResponse, resolveHomeDataMode } from "./homeData";
 
 const PAGE_SIZE = 10;
-const AGENT_CANDIDATE_PAGE_SIZE = 5;
-
-function formatUnknownAgentError(prefix: string, error: unknown) {
-  if (error instanceof Error && error.message) {
-    return `${prefix}: ${error.message}`;
-  }
-  return prefix;
-}
 
 export function HomePage() {
   const [filters, setFilters] = useState<Record<string, string>>({ q: "", sort_by: "published_at", sort_dir: "desc" });
   const [page, setPage] = useState(1);
   const [openId, setOpenId] = useState<number | null>(null);
-  const [controlMode, setControlMode] = useState<"standard" | "agent">("standard");
-  const [runActionError, setRunActionError] = useState<string | null>(null);
-  const [runActionPending, setRunActionPending] = useState(false);
-  const [agentCandidatePage, setAgentCandidatePage] = useState(1);
-  const [agentTriggerPendingSourceId, setAgentTriggerPendingSourceId] = useState<number | null>(null);
-  const [agentCancelPendingSourceId, setAgentCancelPendingSourceId] = useState<number | null>(null);
-  const [agentDeletePendingSourceId, setAgentDeletePendingSourceId] = useState<number | null>(null);
-  const [agentTriggerErrors, setAgentTriggerErrors] = useState<Record<number, string | null>>({});
-  const [candidateTriggerPendingSourceId, setCandidateTriggerPendingSourceId] = useState<number | null>(null);
-  const [candidateTriggerErrors, setCandidateTriggerErrors] = useState<Record<number, string | null>>({});
-  const [agentPollingEnabled, setAgentPollingEnabled] = useState(false);
-  const [agentWarmupSourceId, setAgentWarmupSourceId] = useState<number | null>(null);
-  const [agentRunFormState, setAgentRunFormState] = useState(() => buildNewsRunFormState(undefined));
-  const queryClient = useQueryClient();
-  const previousRunState = useRef<ManualNewsRunState | null>(null);
-  const previousActiveAgentSourceIds = useRef<number[]>([]);
 
   const setFilter = (key: string, value: string) => {
     setPage(1);
@@ -56,67 +27,20 @@ export function HomePage() {
     }),
     [filters, page],
   );
-  const agentFeatureEnabled = true;
-
-  const newsRunQuery = useQuery({
-    queryKey: ["news-run"],
-    queryFn: fetchNewsRunStatus,
-    retry: false,
-    refetchInterval: (query) => {
-      return isManualNewsRunActive(query.state.data?.state) ? 2000 : false;
-    },
-  });
-  const runIsActive = isManualNewsRunActive(newsRunQuery.data?.state);
   const itemsQuery = useQuery({
     queryKey: ["items", params],
     queryFn: () => fetchItems(params),
     retry: false,
-    refetchInterval: () => runIsActive ? 2000 : false,
   });
   const facetsQuery = useQuery({
     queryKey: ["facets"],
     queryFn: fetchFacets,
     retry: false,
-    refetchInterval: () => runIsActive ? 2000 : false,
-  });
-  const agentRunActive = agentPollingEnabled || agentWarmupSourceId !== null;
-  const newsRunLogsQuery = useQuery({
-    queryKey: ["news-run-logs"],
-    queryFn: fetchNewsRunLogs,
-    retry: false,
-    refetchInterval: () => {
-      return runIsActive || agentRunActive ? 2000 : false;
-    },
   });
 
   const mode = resolveHomeDataMode({
     itemsFailed: itemsQuery.isError,
     facetsFailed: facetsQuery.isError,
-  });
-
-  const agentSourcesQuery = useQuery({
-    queryKey: ["agent-sources"],
-    queryFn: fetchAgentSources,
-    enabled: agentFeatureEnabled && mode === "live" && controlMode === "agent",
-    retry: false,
-    refetchInterval: () => (agentPollingEnabled || agentWarmupSourceId !== null) ? 2000 : false,
-  });
-
-  const agentCandidatesQuery = useQuery({
-    queryKey: ["agent-source-candidates", agentCandidatePage, AGENT_CANDIDATE_PAGE_SIZE],
-    queryFn: () => fetchAgentSourceCandidates(agentCandidatePage, AGENT_CANDIDATE_PAGE_SIZE),
-    enabled: agentFeatureEnabled && mode === "live" && controlMode === "agent",
-    retry: false,
-  });
-
-  const agentRunsQueries = useQueries({
-    queries: (agentSourcesQuery.data ?? []).map((source) => ({
-      queryKey: ["agent-runs", source.id],
-      queryFn: () => fetchAgentRuns(source.id),
-      enabled: agentFeatureEnabled && mode === "live" && controlMode === "agent",
-      retry: false,
-      refetchInterval: () => (agentPollingEnabled || agentWarmupSourceId !== null) ? 2000 : false,
-    })),
   });
 
   const demoFilteredItems = useMemo(() => filterDemoItems(demoItems, filters), [filters]);
@@ -133,245 +57,6 @@ export function HomePage() {
 
   const hasLiveEmptyState = mode === "live" && listData?.total === 0;
   const activeFilterCount = Object.entries(filters).filter(([key, value]) => value && key !== "sort_by" && key !== "sort_dir").length;
-  const agentRunsBySourceId = useMemo(
-    () =>
-      Object.fromEntries(
-        (agentSourcesQuery.data ?? []).map((source, index) => {
-          const runs = agentRunsQueries[index]?.data;
-          if ((!runs || runs.length === 0) && source.id === agentWarmupSourceId) {
-            return [source.id, [buildAgentWarmupRun()]];
-          }
-          return [source.id, runs];
-        }),
-      ) as Record<number, typeof agentRunsQueries[number]["data"]>,
-    [agentRunsQueries, agentSourcesQuery.data, agentWarmupSourceId],
-  );
-  const activeAgentSourceIds = useMemo(
-    () =>
-      (agentSourcesQuery.data ?? [])
-        .filter((source) => isAgentSourceRunning(agentRunsBySourceId[source.id]?.[0]))
-        .map((source) => source.id),
-    [agentRunsBySourceId, agentSourcesQuery.data],
-  );
-
-  useEffect(() => {
-    const nextState = newsRunQuery.data?.state ?? null;
-    const previousState = previousRunState.current;
-    if (
-      previousState &&
-      isManualNewsRunActive(previousState) &&
-      nextState &&
-      !isManualNewsRunActive(nextState)
-    ) {
-      void queryClient.invalidateQueries({ queryKey: ["items"] });
-      void queryClient.invalidateQueries({ queryKey: ["facets"] });
-    }
-    previousRunState.current = nextState;
-  }, [newsRunQuery.data?.state, queryClient]);
-
-  useEffect(() => {
-    const totalPages = agentCandidatesQuery.data?.total_pages;
-    if (totalPages && agentCandidatePage > totalPages) {
-      setAgentCandidatePage(totalPages);
-    }
-  }, [agentCandidatePage, agentCandidatesQuery.data?.total_pages]);
-
-  useEffect(() => {
-    const previous = previousActiveAgentSourceIds.current;
-    const finishedSources = previous.filter((sourceId) => !activeAgentSourceIds.includes(sourceId));
-    if (finishedSources.length > 0) {
-      void queryClient.invalidateQueries({ queryKey: ["items"] });
-      void queryClient.invalidateQueries({ queryKey: ["agent-sources"] });
-    }
-    previousActiveAgentSourceIds.current = activeAgentSourceIds;
-    setAgentPollingEnabled(activeAgentSourceIds.length > 0);
-  }, [activeAgentSourceIds, queryClient]);
-
-  useEffect(() => {
-    if (agentWarmupSourceId == null) return;
-    if (isAgentWarmupResolved(agentRunsBySourceId[agentWarmupSourceId]?.[0])) {
-      setAgentWarmupSourceId(null);
-    }
-  }, [agentRunsBySourceId, agentWarmupSourceId]);
-
-  useEffect(() => {
-    if (agentWarmupSourceId == null) return;
-    const timer = window.setTimeout(() => setAgentWarmupSourceId(null), 10000);
-    return () => window.clearTimeout(timer);
-  }, [agentWarmupSourceId]);
-
-  async function handleStartNewsRun(request: ManualNewsRunRequest) {
-    setRunActionPending(true);
-    setRunActionError(null);
-    try {
-      await startNewsRun(request);
-      await newsRunQuery.refetch();
-      await newsRunLogsQuery.refetch();
-    } catch (error) {
-      setRunActionError(
-        error instanceof ApiError ? error.message : "启动新闻处理任务失败",
-      );
-    } finally {
-      setRunActionPending(false);
-    }
-  }
-
-  async function handleStopNewsRun() {
-    setRunActionPending(true);
-    setRunActionError(null);
-    try {
-      await stopNewsRun();
-      await newsRunQuery.refetch();
-    } catch (error) {
-      setRunActionError(
-        error instanceof ApiError ? error.message : "停止新闻处理任务失败",
-      );
-    } finally {
-      setRunActionPending(false);
-    }
-  }
-
-  async function handleTriggerAgentRun(sourceId: number) {
-    setAgentTriggerPendingSourceId(sourceId);
-    setAgentTriggerErrors((state) => ({ ...state, [sourceId]: null }));
-    try {
-      const request = buildAgentCrawlRunRequest();
-      if (!request) {
-        setAgentTriggerErrors((state) => ({ ...state, [sourceId]: "抓取限制需要有效的时间范围和数量上限" }));
-        return;
-      }
-      // 立即显示 warmup 占位 + 开轮询，避免点击后到后端建好 run 记录之间的
-      // “尚未运行”空白窗口（这段 await 可能要 1-2 秒），让用户误以为没在抓。
-      setAgentPollingEnabled(true);
-      setAgentWarmupSourceId(sourceId);
-      await triggerAgentRun(sourceId, request);
-      await queryClient.invalidateQueries({ queryKey: ["agent-runs", sourceId] });
-      await queryClient.invalidateQueries({ queryKey: ["agent-sources"] });
-    } catch (error) {
-      setAgentTriggerErrors((state) => ({
-        ...state,
-        [sourceId]: error instanceof ApiError ? error.message : "触发 Agent Crawl 失败",
-      }));
-      setAgentWarmupSourceId(null);
-    } finally {
-      setAgentTriggerPendingSourceId(null);
-    }
-  }
-
-  async function handleDeleteAgentSource(sourceId: number) {
-    setAgentDeletePendingSourceId(sourceId);
-    try {
-      await deleteAgentSource(sourceId);
-      await queryClient.invalidateQueries({ queryKey: ["agent-sources"] });
-      await queryClient.invalidateQueries({ queryKey: ["agent-source-candidates"] });
-    } catch (error) {
-      setAgentTriggerErrors((state) => ({
-        ...state,
-        [sourceId]: error instanceof ApiError ? error.message : "删除失败",
-      }));
-    } finally {
-      setAgentDeletePendingSourceId(null);
-    }
-  }
-
-  async function handleCancelAgentRun(sourceId: number, runId: number) {
-    setAgentCancelPendingSourceId(sourceId);
-    try {
-      await cancelAgentRun(sourceId, runId);
-      await queryClient.invalidateQueries({ queryKey: ["agent-runs", sourceId] });
-    } catch (error) {
-      setAgentTriggerErrors((state) => ({
-        ...state,
-        [sourceId]: error instanceof ApiError ? error.message : "取消失败",
-      }));
-    } finally {
-      setAgentCancelPendingSourceId(null);
-    }
-  }
-
-  async function handleTriggerAgentRunFromCandidate(sourceId: number) {
-    setCandidateTriggerPendingSourceId(sourceId);
-    setCandidateTriggerErrors((state) => ({ ...state, [sourceId]: null }));
-    try {
-      const request = buildAgentCrawlRunRequest();
-      if (!request) {
-        setCandidateTriggerErrors((state) => ({ ...state, [sourceId]: "抓取限制需要有效的时间范围和数量上限" }));
-        return;
-      }
-      const response = await triggerAgentRunFromCandidate(sourceId, request);
-      setAgentPollingEnabled(true);
-      setAgentWarmupSourceId(response.agent_source_id);
-      if ((agentCandidatesQuery.data?.items.length ?? 0) === 1 && agentCandidatePage > 1) {
-        setAgentCandidatePage((page) => Math.max(1, page - 1));
-      }
-      for (const queryKey of agentCandidateRunRefreshKeys(response.agent_source_id)) {
-        await queryClient.invalidateQueries({ queryKey });
-      }
-      await queryClient.fetchQuery({
-        queryKey: ["agent-runs", response.agent_source_id],
-        queryFn: () => fetchAgentRuns(response.agent_source_id),
-      });
-    } catch (error) {
-      setCandidateTriggerErrors((state) => ({
-        ...state,
-        [sourceId]: error instanceof ApiError ? error.message : "一键 Agent 运行失败",
-      }));
-      setAgentWarmupSourceId(null);
-    } finally {
-      setCandidateTriggerPendingSourceId(null);
-    }
-  }
-
-  async function handleSourcesChanged() {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["agent-sources"] }),
-      queryClient.invalidateQueries({ queryKey: ["agent-source-candidates"] }),
-      queryClient.invalidateQueries({ queryKey: ["items"] }),
-      queryClient.invalidateQueries({ queryKey: ["facets"] }),
-    ]);
-  }
-
-  const handleRunLimitsChange = useCallback((state: ReturnType<typeof buildNewsRunFormState>) => {
-    setAgentRunFormState(state);
-  }, []);
-
-  function buildAgentCrawlRunRequest(): AgentCrawlRunRequest | null {
-    if (agentRunFormState.timeMode === "absolute" && (!agentRunFormState.startDate || !agentRunFormState.endDate)) {
-      return null;
-    }
-    const targetCount = Number(agentRunFormState.targetCount);
-    if (!Number.isFinite(targetCount) || targetCount <= 0) {
-      return null;
-    }
-    return {
-      time_mode: agentRunFormState.timeMode,
-      relative_range: agentRunFormState.timeMode === "relative" ? agentRunFormState.relativeRange : null,
-      start_at: agentRunFormState.timeMode === "absolute" ? toAbsoluteDateTime(agentRunFormState.startDate, false) : null,
-      end_at: agentRunFormState.timeMode === "absolute" ? toAbsoluteDateTime(agentRunFormState.endDate, true) : null,
-      target_count: targetCount,
-    };
-  }
-
-  const agentRunError = useMemo(() => {
-    if (agentSourcesQuery.error instanceof ApiError) {
-      return agentSourcesQuery.error.message;
-    }
-    if (agentSourcesQuery.error) {
-      return formatUnknownAgentError("Agent source 列表加载失败", agentSourcesQuery.error);
-    }
-    if (agentCandidatesQuery.error instanceof ApiError) {
-      return agentCandidatesQuery.error.message;
-    }
-    if (agentCandidatesQuery.error) {
-      return formatUnknownAgentError("标准抓取来源加载失败", agentCandidatesQuery.error);
-    }
-    const firstError = agentRunsQueries.find((query) => query.error)?.error;
-    if (firstError instanceof ApiError) {
-      return firstError.message;
-    }
-    return firstError ? formatUnknownAgentError("Agent 运行记录加载失败", firstError) : null;
-  }, [agentCandidatesQuery.error, agentRunsQueries, agentSourcesQuery.error]);
-
   return (
     <div style={{ minHeight: "100vh", background: "#f5f7fb" }}>
       <div style={{ maxWidth: 1280, margin: "0 auto", padding: 24 }}>
@@ -431,65 +116,6 @@ export function HomePage() {
             当前未连接到后端 API，页面自动切换为演示数据，方便先检查交互和布局。
           </div>
         )}
-
-        <NewsRunControl
-          mode={controlMode}
-          onModeChange={setControlMode}
-          sourceManagerContent={
-            mode === "demo" ? (
-              <div style={{ fontSize: 13, color: "#667085" }}>演示模式下不连接抓取来源接口。</div>
-            ) : (
-              <SourceManager onSourcesChanged={handleSourcesChanged} />
-            )
-          }
-          agentContent={
-            mode === "demo" ? (
-              <div style={{ fontSize: 13, color: "#667085" }}>演示模式下不连接 Agent Crawl 接口。</div>
-            ) : (
-              <AgentRunControl
-                sources={agentSourcesQuery.data ?? []}
-                candidatePage={agentCandidatesQuery.data ?? null}
-                runsBySourceId={agentRunsBySourceId}
-                isLoading={
-                  agentSourcesQuery.isLoading ||
-                  agentCandidatesQuery.isLoading ||
-                  agentRunsQueries.some((query) => query.isLoading)
-                }
-                errorMessage={agentRunError}
-                triggerPendingSourceId={agentTriggerPendingSourceId}
-                triggerErrors={agentTriggerErrors}
-                cancelPendingSourceId={agentCancelPendingSourceId}
-                deletePendingSourceId={agentDeletePendingSourceId}
-                candidateTriggerPendingSourceId={candidateTriggerPendingSourceId}
-                candidateTriggerErrors={candidateTriggerErrors}
-                onTrigger={handleTriggerAgentRun}
-                onCancel={handleCancelAgentRun}
-                onDelete={handleDeleteAgentSource}
-                onTriggerCandidate={handleTriggerAgentRunFromCandidate}
-                onCandidatePageChange={setAgentCandidatePage}
-              />
-            )
-          }
-          status={newsRunQuery.data}
-          isLoading={newsRunQuery.isLoading}
-          errorMessage={
-            controlMode === "agent"
-              ? agentRunError
-              : (
-                runActionError ??
-                (newsRunQuery.error instanceof ApiError ? newsRunQuery.error.message : null)
-              )
-          }
-          isSubmitting={runActionPending}
-          onLimitsChange={handleRunLimitsChange}
-          onStart={handleStartNewsRun}
-          onStop={handleStopNewsRun}
-        />
-
-        <NewsRunLogPanel
-          logs={newsRunLogsQuery.data?.logs ?? []}
-          isLoading={newsRunLogsQuery.isLoading}
-        />
 
         <section
           style={{

@@ -3,11 +3,11 @@
 纯增量：不替换旧 /sources/discover，不接入 agent_crawl 主流程。
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, HttpUrl
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -20,11 +20,17 @@ from app.discovery.ingester import CrawlOutputIngester
 from app.discovery.interpreter import DslInterpreter
 from app.llm.client import LlmClient
 from app.models import CrawlMethod, CrawlMethodDomain, SiteDiscoveryRun
+from app.schemas import ManualNewsRunRequest
 
 router = APIRouter(prefix="/discovery", tags=["discovery"])
 logger = logging.getLogger(__name__)
 SUGGEST_NAME_LLM_TIMEOUT_SECONDS = 5.0
 MAX_SUGGEST_NAME_LENGTH = 20
+_RELATIVE_RANGE_TO_DELTA = {
+    "24h": timedelta(days=1),
+    "7d": timedelta(days=7),
+    "30d": timedelta(days=30),
+}
 
 
 class DiscoverRequest(BaseModel):
@@ -36,6 +42,42 @@ class DiscoverRequest(BaseModel):
 def run_method(recipe: DslRecipe) -> dict:
     """运行命执行核心：按 DSL Recipe 纯确定性抓取。供 discovery_fetch 调用 + 测试 mock。"""
     return DslInterpreter().run(recipe)
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _apply_fetch_limits(items: list[dict], request: ManualNewsRunRequest | None) -> list[dict]:
+    if request is None:
+        return items
+
+    now = datetime.now(timezone.utc)
+    filtered: list[tuple[datetime, dict]] = []
+    for item in items:
+        published_at_raw = item.get("published_at")
+        if not isinstance(published_at_raw, str):
+            continue
+        try:
+            published_at = datetime.fromisoformat(published_at_raw.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        published_at = _as_utc(published_at)
+        if request.time_mode == "relative":
+            lower_bound = now - _RELATIVE_RANGE_TO_DELTA[request.relative_range]
+            if published_at < lower_bound:
+                continue
+        else:
+            start_at = _as_utc(request.start_at)
+            end_at = _as_utc(request.end_at)
+            if published_at < start_at or published_at > end_at:
+                continue
+        filtered.append((published_at, item))
+
+    filtered.sort(key=lambda entry: entry[0], reverse=True)
+    return [item for _, item in filtered[:request.target_count]]
 
 
 @router.post("/run")
@@ -160,7 +202,11 @@ def delete_method(method_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/methods/{method_id}/fetch")
-def discovery_fetch(method_id: int, db: Session = Depends(get_db)):
+def discovery_fetch(
+    method_id: int,
+    request: ManualNewsRunRequest | None = Body(default=None),
+    db: Session = Depends(get_db),
+):
     """运行命：按 DSL Recipe 抓取 + 接现有 pipeline 入 items（走 LLM Enricher 富化+打分）。"""
     from app.models import Source
     from app.pipeline import Pipeline
@@ -170,6 +216,7 @@ def discovery_fetch(method_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "method not found")
     recipe = DslRecipe(**m.dsl_recipe)
     output = run_method(recipe)  # 纯确定性执行（可被测试 mock）
+    output["items"] = _apply_fetch_limits(list(output.get("items", [])), request)
     # 转 RawItem → 走正常 pipeline 路径（调 Enricher LLM 富化：category/tags/summary/importance）
     raws = CrawlOutputIngester().to_raw_items(output, source_id=m.source_id)
     source = db.get(Source, m.source_id)

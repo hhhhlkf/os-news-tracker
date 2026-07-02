@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ApiError, cancelDiscoveryRun, getDiscoveryRun, startDiscoveryRun, suggestDiscoveryName } from "../api/client";
+import type { DiscoveryRun } from "../types";
 import { DiscoveryFlowChart } from "./DiscoveryFlowChart";
 import { DiscoveryNodeDetail } from "./DiscoveryNodeDetail";
 import { DiscoveryLogPanel } from "./DiscoveryLogPanel";
@@ -16,6 +17,7 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
   const [dup, setDup] = useState<{ method_id: number; domain: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<FlowNodeId | null>(null);
+  const [expanded, setExpanded] = useState(true);
   const [startLocked, setStartLocked] = useState(false);
   const startLockRef = useRef(false);
 
@@ -25,7 +27,7 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
     enabled: runId != null,
     refetchInterval: (q) => (q.state.data?.status === "running" ? 1500 : false),
   });
-  const logs = useDiscoveryLogs(runId, runId != null && runQuery.data?.status === "running");
+  const logs = useDiscoveryLogs(runId, true, true);
   const cancelMut = useMutation({
     mutationFn: (id: number) => cancelDiscoveryRun(id),
     onSuccess: () => {
@@ -98,56 +100,80 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
     }
   }, [completed, runQuery.data?.resulting_method_id, onMethodAdded]);
 
-  const selectedEntry = runQuery.data?.node_trace.findLast((e) => e.step === selectedNode);
+  const displayRun: DiscoveryRun = runQuery.data ?? {
+    id: 0,
+    site_url: url || "",
+    status: "cancelled",
+    resulting_method_id: null,
+    llm_token_usage: 0,
+    node_trace: [],
+    retry_count: 0,
+    current_step: null,
+    started_at: null,
+    ended_at: null,
+    error_message: null,
+  };
+  const selectedEntry = displayRun.node_trace.findLast((e) => e.step === selectedNode);
 
   return (
     <section style={{ background: "#fff", border: "1px solid #d0d5dd", borderRadius: 10, padding: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: "#101828" }}>智能探查</div>
-        {runQuery.data && (
-          <div style={{
-            fontSize: 12, fontWeight: 700, borderRadius: 999, padding: "3px 11px",
-            color: running ? "#175cd3" : completed ? "#059669" : cancelled ? "#b54708" : "#dc2626",
-            background: running ? "#eff6ff" : completed ? "#ecfdf3" : cancelled ? "#fffaeb" : "#fef2f2",
-            border: `1px solid ${running ? "#b9d4ff" : completed ? "#a3e0c4" : cancelled ? "#fedf89" : "#fca5a5"}`,
-          }}>
-            {running ? `探查中 · 第 ${attemptCount(runQuery.data.node_trace)} / 3 轮` : completed ? "探查完成" : cancelled ? "已取消" : "探查失败"}
-          </div>
-        )}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#101828" }}>智能探查</div>
+          {runQuery.data && (
+            <div style={{
+              fontSize: 12, fontWeight: 700, borderRadius: 999, padding: "3px 11px",
+              color: running ? "#175cd3" : completed ? "#059669" : cancelled ? "#b54708" : "#dc2626",
+              background: running ? "#eff6ff" : completed ? "#ecfdf3" : cancelled ? "#fffaeb" : "#fef2f2",
+              border: `1px solid ${running ? "#b9d4ff" : completed ? "#a3e0c4" : cancelled ? "#fedf89" : "#fca5a5"}`,
+            }}>
+              {running ? `探查中 · 第 ${attemptCount(runQuery.data.node_trace)} / 3 轮` : completed ? "探查完成" : cancelled ? "已取消" : "探查失败"}
+            </div>
+          )}
+        </div>
+        <button type="button" onClick={() => setExpanded((value) => !value)} style={toggleBtn}>
+          {expanded ? "收起" : "展开"}
+        </button>
       </div>
 
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
-        <input placeholder="站点 URL，如 openanolis.cn/blog" value={url}
-          onChange={(e) => {
-            setUrl(e.target.value);
-            setNameError(null);
-          }} style={{ ...inputBase, flex: "1 1 260px", minWidth: 200 }} />
-        <div style={{ display: "flex", gap: 6, flex: "1 1 210px", minWidth: 190 }}>
-          <input placeholder="名称（选填）" value={name}
+      <div style={controlGrid}>
+        <div style={{ display: "grid", gap: 10, minWidth: 0 }}>
+          <input placeholder="站点 URL，如 openanolis.cn/blog" value={url}
             onChange={(e) => {
-              setName(e.target.value);
+              setUrl(e.target.value);
               setNameError(null);
-            }} style={{ ...inputBase, flex: 1 }} />
-          <button type="button" onClick={() => {
-            if (!url) return;
-            setNameError(null);
-            nameMut.mutate(url);
-          }}
-            disabled={!url || nameMut.isPending}
-            style={btnGhost}>{nameMut.isPending ? "命名中…" : "✨ 自动"}</button>
+            }} style={{ ...inputBase, width: "100%", minWidth: 0, boxSizing: "border-box" }} />
         </div>
-        <button type="button" disabled={startDisabled} onClick={() => startRun(false)}
-          style={startDisabled ? btnDisabled : btnPrimary}>{running ? "探查中…" : startBusy ? "启动中…" : "开始探查"}</button>
-        {running && runId != null && (
-          <button
-            type="button"
-            disabled={cancelBusy}
-            onClick={() => cancelMut.mutate(runId)}
-            style={cancelBusy ? btnDisabled : btnDanger}
-          >
-            {cancelBusy ? "取消中…" : "取消探查"}
-          </button>
-        )}
+        <div style={{ display: "grid", gap: 10, minWidth: 0 }}>
+          <div style={{ display: "flex", gap: 6, minWidth: 0, alignItems: "center", flexWrap: "nowrap" }}>
+            <input placeholder="名称（选填）" value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+                setNameError(null);
+              }} style={{ ...inputBase, flex: "1 1 auto", minWidth: 0, width: "100%" }} />
+            <button type="button" onClick={() => {
+              if (!url) return;
+              setNameError(null);
+              nameMut.mutate(url);
+            }}
+              disabled={!url || nameMut.isPending}
+              style={{ ...btnGhost, flexShrink: 0 }}>{nameMut.isPending ? "命名中…" : "✨ 自动"}</button>
+            <button type="button" disabled={startDisabled} onClick={() => startRun(false)}
+              style={{ ...(startDisabled ? btnDisabled : btnPrimary), flexShrink: 0 }}>{running ? "探查中…" : startBusy ? "启动中…" : "开始探查"}</button>
+          </div>
+          {running && runId != null && (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-start", justifyContent: "flex-start" }}>
+              <button
+                type="button"
+                disabled={cancelBusy}
+                onClick={() => cancelMut.mutate(runId)}
+                style={cancelBusy ? btnDisabled : btnDanger}
+              >
+                {cancelBusy ? "取消中…" : "取消探查"}
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {dup && (
@@ -159,14 +185,14 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
         </div>
       )}
 
-      {runQuery.data && (
+      {expanded && (
         <div
           data-testid="discovery-layout-grid"
           style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 14, alignItems: "stretch" }}
         >
           <div style={{ display: "flex", flexDirection: "column", gap: 10, minHeight: WORKSPACE_HEIGHT, height: WORKSPACE_HEIGHT }}>
             <div style={{ border: "1px solid #eaecf0", borderRadius: 10, background: "#f8fafc", padding: 10, flex: 1, minHeight: 0 }}>
-              <DiscoveryFlowChart run={runQuery.data} onSelectNode={setSelectedNode} selectedNode={selectedNode} />
+              <DiscoveryFlowChart run={displayRun} onSelectNode={setSelectedNode} selectedNode={selectedNode} />
             </div>
             <div style={{ minHeight: 0, height: 210, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
               {selectedNode ? (
@@ -178,12 +204,12 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
               )}
               {completed && (
                 <div style={{ border: "1px solid #a3e0c4", background: "#ecfdf3", color: "#059669", borderRadius: 8, padding: "10px 12px", fontSize: 13 }}>
-                  探查完成 · 已存入爬取方式库 <a style={{ color: "#175cd3", cursor: "pointer", marginLeft: 8 }} onClick={() => runQuery.data?.resulting_method_id && onMethodAdded?.(runQuery.data.resulting_method_id)}>查看新方式 →</a>
+                  探查完成 · 已存入爬取方式库 <a style={{ color: "#175cd3", cursor: "pointer", marginLeft: 8 }} onClick={() => displayRun.resulting_method_id && onMethodAdded?.(displayRun.resulting_method_id)}>查看新方式 →</a>
                 </div>
               )}
               {failed && (
                 <div style={{ border: "1px solid #fca5a5", background: "#fef2f2", color: "#b42318", borderRadius: 8, padding: "10px 12px", fontSize: 13 }}>
-                  探查失败：{runQuery.data.error_message ?? "未知错误"}
+                  探查失败：{displayRun.error_message ?? "未知错误"}
                   <button type="button" disabled={startDisabled} style={{ ...(startDisabled ? btnDisabled : btnPrimary), marginLeft: 12 }} onClick={() => startRun(false)}>
                     {startBusy ? "启动中…" : "重新探查"}
                   </button>
@@ -191,7 +217,7 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
               )}
               {cancelled && (
                 <div style={{ border: "1px solid #fedf89", background: "#fffaeb", color: "#b54708", borderRadius: 8, padding: "10px 12px", fontSize: 13 }}>
-                  探查已取消：{runQuery.data.error_message ?? "已停止后续调用"}
+                  探查已取消：{displayRun.error_message ?? "已停止后续调用"}
                   <button type="button" disabled={startDisabled} style={{ ...(startDisabled ? btnDisabled : btnPrimary), marginLeft: 12 }} onClick={() => startRun(false)}>
                     {startBusy ? "启动中…" : "重新探查"}
                   </button>
@@ -218,4 +244,12 @@ const btnPrimary: CSSProperties = { border: "none", borderRadius: 999, padding: 
 const btnDisabled: CSSProperties = { ...btnPrimary, background: "#98a2b3", cursor: "not-allowed" };
 const btnDanger: CSSProperties = { ...btnPrimary, background: "#dc2626" };
 const btnGhost: CSSProperties = { border: "1px solid #d0d5dd", background: "#fff", borderRadius: 8, padding: "9px 11px", fontSize: 12, color: "#475467", cursor: "pointer" };
+const toggleBtn: CSSProperties = { border: "1px solid #d0d5dd", background: "#fff", borderRadius: 999, padding: "8px 14px", fontSize: 12, color: "#344054", fontWeight: 700, cursor: "pointer" };
 const WORKSPACE_HEIGHT = 760;
+const controlGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+  gap: 14,
+  alignItems: "start",
+  marginBottom: 14,
+};

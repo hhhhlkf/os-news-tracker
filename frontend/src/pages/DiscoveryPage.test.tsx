@@ -1,0 +1,67 @@
+// @vitest-environment jsdom
+
+import { act } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DiscoveryPage } from "./DiscoveryPage";
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+vi.mock("../components/DiscoveryPanel", () => ({
+  DiscoveryPanel: () => <div>智能探查模块</div>,
+}));
+
+vi.mock("../components/RunLimitCard", () => ({
+  RunLimitCard: () => <div>抓取限制</div>,
+}));
+
+vi.mock("../components/CrawlMethodList", () => ({
+  CrawlMethodList: () => <div>抓取模块 · 爬取方式库</div>,
+}));
+
+vi.mock("../components/CrawlMethodDetail", () => ({
+  CrawlMethodDetail: () => <div>方法详情</div>,
+}));
+
+vi.mock("../components/DiscoverNewsControlSection", () => ({
+  DiscoverNewsControlSection: () => <div>新闻流控制区</div>,
+}));
+
+describe("DiscoveryPage", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+  });
+
+  afterEach(() => {
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+    queryClient.clear();
+  });
+
+  it("renders the standalone run limit card above discovery and keeps the news flow control below crawl method library", async () => {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <DiscoveryPage />
+        </QueryClientProvider>,
+      );
+    });
+
+    const text = container.textContent ?? "";
+    expect(text.indexOf("抓取限制")).toBeLessThan(text.indexOf("智能探查模块"));
+    expect(text.indexOf("抓取模块 · 爬取方式库")).toBeLessThan(text.indexOf("新闻流控制区"));
+    expect(container.querySelector("[data-testid='discover-methods-divider']")).toBeTruthy();
+  });
+});

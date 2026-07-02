@@ -1,7 +1,7 @@
-import type { CSSProperties, Dispatch, ReactElement, ReactNode, SetStateAction } from "react";
+import type { Dispatch, ReactElement, ReactNode, SetStateAction } from "react";
 import { isValidElement, cloneElement } from "react";
-import { useEffect, useMemo, useState } from "react";
-import { TimeRangePicker } from "./TimeRangePicker";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { RunLimitCard } from "./RunLimitCard";
 import type {
   ManualNewsRelativeRange,
   ManualNewsRunRequest,
@@ -28,6 +28,9 @@ interface NewsRunControlProps {
   errorMessage?: string | null;
   isSubmitting?: boolean;
   onLimitsChange?: (state: NewsRunFormState) => void;
+  formState?: NewsRunFormState;
+  onFormStateChange?: Dispatch<SetStateAction<NewsRunFormState>>;
+  showRunLimitPanel?: boolean;
   onStart: (request: ManualNewsRunRequest) => Promise<void> | void;
   onStop: () => Promise<void> | void;
 }
@@ -86,6 +89,23 @@ export function toAbsoluteDateTime(value: string, endOfDay: boolean): string | n
   return `${value}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}Z`;
 }
 
+export function buildManualNewsRunRequest(formState: NewsRunFormState): ManualNewsRunRequest | null {
+  if (formState.timeMode === "absolute" && (!formState.startDate || !formState.endDate)) {
+    return null;
+  }
+  const targetCount = Number(formState.targetCount);
+  if (!Number.isFinite(targetCount) || targetCount <= 0) {
+    return null;
+  }
+  return {
+    time_mode: formState.timeMode,
+    relative_range: formState.timeMode === "relative" ? formState.relativeRange : null,
+    start_at: formState.timeMode === "absolute" ? toAbsoluteDateTime(formState.startDate, false) : null,
+    end_at: formState.timeMode === "absolute" ? toAbsoluteDateTime(formState.endDate, true) : null,
+    target_count: targetCount,
+  };
+}
+
 export function NewsRunControl(props: NewsRunControlProps) {
   const {
     mode = "standard",
@@ -97,16 +117,30 @@ export function NewsRunControl(props: NewsRunControlProps) {
     errorMessage,
     isSubmitting = false,
     onLimitsChange,
+    formState: controlledFormState,
+    onFormStateChange,
+    showRunLimitPanel = true,
     onStart,
     onStop,
   } = props;
-  const [formState, setFormState] = useState<NewsRunFormState>(() => buildNewsRunFormState(status));
+  const [localFormState, setLocalFormState] = useState<NewsRunFormState>(() => buildNewsRunFormState(status));
   const [localError, setLocalError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(() => shouldAutoExpandNewsRunControl(status?.state));
-  const [limitsExpanded, setLimitsExpanded] = useState(false);
   const [collapseSignal, setCollapseSignal] = useState(0);
+  const formState = controlledFormState ?? localFormState;
+  const setFormState = useCallback<Dispatch<SetStateAction<NewsRunFormState>>>(
+    (value) => {
+      if (onFormStateChange) {
+        onFormStateChange(value);
+        return;
+      }
+      setLocalFormState(value);
+    },
+    [onFormStateChange],
+  );
 
   useEffect(() => {
+    if (controlledFormState) return;
     if (!status || isNewsRunBusy(status.state)) return;
     if (status.state === "idle") {
       setFormState(buildNewsRunFormState(status));
@@ -130,14 +164,14 @@ export function NewsRunControl(props: NewsRunControlProps) {
 
   useEffect(() => {
     if (!expanded) {
-      setLimitsExpanded(false);
       setCollapseSignal((value) => value + 1);
     }
   }, [expanded]);
 
   useEffect(() => {
+    if (controlledFormState) return;
     onLimitsChange?.(formState);
-  }, [formState, onLimitsChange]);
+  }, [controlledFormState, formState, onLimitsChange]);
 
   const busy = status ? isNewsRunBusy(status.state) : false;
   const disabled = busy || isSubmitting;
@@ -197,24 +231,16 @@ export function NewsRunControl(props: NewsRunControlProps) {
       return;
     }
 
-    const targetCount = Number(formState.targetCount);
-    if (!Number.isFinite(targetCount) || targetCount <= 0) {
-      setLocalError("目标条目数需要大于 0");
+    const request = buildManualNewsRunRequest(formState);
+    if (!request) {
+      setLocalError(
+        formState.timeMode === "absolute"
+          ? "绝对范围需要同时选择开始和结束日期"
+          : "目标条目数需要大于 0",
+      );
       return;
     }
-
-    if (formState.timeMode === "absolute" && (!formState.startDate || !formState.endDate)) {
-      setLocalError("绝对范围需要同时选择开始和结束日期");
-      return;
-    }
-
-    await onStart({
-      time_mode: formState.timeMode,
-      relative_range: formState.timeMode === "relative" ? formState.relativeRange : null,
-      start_at: formState.timeMode === "absolute" ? toAbsoluteDateTime(formState.startDate, false) : null,
-      end_at: formState.timeMode === "absolute" ? toAbsoluteDateTime(formState.endDate, true) : null,
-      target_count: targetCount,
-    });
+    await onStart(request);
   }
 
   return (
@@ -323,13 +349,9 @@ export function NewsRunControl(props: NewsRunControlProps) {
 
       {expanded && (
         <div style={{ display: "grid", gap: 12, marginBottom: 14 }}>
-          <RunLimitPanel
-            formState={formState}
-            disabled={disabled}
-            expanded={limitsExpanded}
-            onToggle={() => setLimitsExpanded((value) => !value)}
-            onChange={setFormState}
-          />
+          {showRunLimitPanel && (
+            <RunLimitCard formState={formState} disabled={disabled} defaultExpanded={false} onChange={setFormState} />
+          )}
           {sourceManagerWithCollapse}
         </div>
       )}
@@ -487,84 +509,6 @@ export function NewsRunControl(props: NewsRunControlProps) {
     </section>
   );
 }
-
-function RunLimitPanel(props: {
-  formState: NewsRunFormState;
-  disabled: boolean;
-  expanded: boolean;
-  onToggle: () => void;
-  onChange: Dispatch<SetStateAction<NewsRunFormState>>;
-}) {
-  const { formState, disabled, expanded, onToggle, onChange } = props;
-  return (
-    <section
-      style={{
-        border: "1px solid #d0d5dd",
-        borderRadius: 8,
-        background: "linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)",
-        padding: 14,
-        display: "grid",
-        gap: 12,
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
-        <div style={{ display: "grid", gap: 4 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "#101828" }}>抓取限制</div>
-          <div style={{ fontSize: 13, color: "#667085" }}>统一设置时间范围和数量上限，标准抓取与 Agent Crawl 共用。</div>
-        </div>
-        <button type="button" onClick={onToggle} style={sectionToggleStyle}>
-          {expanded ? "收起" : "展开"}
-        </button>
-      </div>
-      {expanded && (
-        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
-          <TimeRangePicker
-            timeMode={formState.timeMode}
-            relativeRange={formState.relativeRange}
-            startDate={formState.startDate}
-            endDate={formState.endDate}
-            disabled={disabled}
-            onTimeModeChange={(value) => onChange((state) => ({ ...state, timeMode: value }))}
-            onRelativeRangeChange={(value) => onChange((state) => ({ ...state, relativeRange: value }))}
-            onStartDateChange={(value) => onChange((state) => ({ ...state, startDate: value }))}
-            onEndDateChange={(value) => onChange((state) => ({ ...state, endDate: value }))}
-          />
-          <label style={{ display: "grid", gap: 6, minWidth: 140, color: "#475467", fontSize: 13 }}>
-            <span>数量上限</span>
-            <input
-              type="number"
-              min={1}
-              max={500}
-              value={formState.targetCount}
-              disabled={disabled}
-              onChange={(event) => onChange((state) => ({ ...state, targetCount: event.target.value }))}
-              style={{
-                border: "1px solid #d0d5dd",
-                borderRadius: 8,
-                padding: "10px 12px",
-                fontSize: 14,
-                color: "#101828",
-                background: "#fff",
-              }}
-            />
-          </label>
-        </div>
-      )}
-    </section>
-  );
-}
-
-const sectionToggleStyle = {
-  border: "1px solid #d0d5dd",
-  borderRadius: 999,
-  padding: "8px 12px",
-  minWidth: 72,
-  background: "linear-gradient(135deg, #ffffff 0%, #f2f4f7 100%)",
-  color: "#344054",
-  fontSize: 12,
-  fontWeight: 700,
-  cursor: "pointer",
-} satisfies CSSProperties;
 
 function StatusBlock(props: { label: string; value: string }) {
   return (

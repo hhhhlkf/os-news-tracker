@@ -364,4 +364,28 @@ describe("DiscoveryPanel", () => {
 
     expect(container.textContent).toContain("自动命名超时");
   });
+
+  it("stays expanded before a run starts and supports collapsing", async () => {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <DiscoveryPanel />
+        </QueryClientProvider>,
+      );
+    });
+    await flush();
+
+    expect(container.querySelector("[data-testid='discovery-layout-grid']")).toBeTruthy();
+
+    const toggleButton = [...container.querySelectorAll("button")].find((node) => node.textContent === "收起") as HTMLButtonElement;
+    expect(toggleButton).toBeTruthy();
+
+    act(() => {
+      toggleButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    expect(container.querySelector("[data-testid='discovery-layout-grid']")).toBeNull();
+    expect(container.textContent).toContain("展开");
+  });
 });

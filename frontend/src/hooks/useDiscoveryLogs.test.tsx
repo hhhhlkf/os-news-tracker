@@ -14,8 +14,8 @@ function flush() {
   });
 }
 
-function Harness({ runId, enabled }: { runId: number | null; enabled: boolean }) {
-  const logs = useDiscoveryLogs(runId, enabled);
+function Harness({ runId, enabled, includeAll = false }: { runId: number | null; enabled: boolean; includeAll?: boolean }) {
+  const logs = useDiscoveryLogs(runId, enabled, includeAll);
   return <div data-testid="logs">{logs.map((log) => log.message).join("|")}</div>;
 }
 
@@ -69,5 +69,22 @@ describe("useDiscoveryLogs", () => {
     );
     expect(container.textContent).toContain("mine-1|mine-2");
     expect(container.textContent).not.toContain("other run");
+  });
+
+  it("keeps all logs when includeAll is enabled", async () => {
+    const batch: NewsRunLogEntry[] = [
+      { id: 4, ts: "2026-07-01T00:00:00Z", level: "info", stage: "other", source: null, message: "other run", run_id: 99 },
+      { id: 5, ts: "2026-07-01T00:00:01Z", level: "info", stage: "discovery", source: null, message: "mine-1", run_id: 7 },
+    ];
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify({ logs: batch }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(<Harness runId={7} enabled includeAll />);
+    });
+    await flush();
+
+    expect(container.textContent).toContain("other run|mine-1");
   });
 });

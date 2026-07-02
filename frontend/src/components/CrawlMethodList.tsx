@@ -3,11 +3,15 @@ import { useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, fetchDiscoveryMethod, listDiscoveryMethods } from "../api/client";
 import type { CrawlMethod } from "../types";
+import { buildManualNewsRunRequest } from "./NewsRunControl";
+import type { NewsRunFormState } from "./NewsRunControl";
 
 type RowState = { kind: "idle" } | { kind: "running" } | { kind: "done"; discovered: number; stored: number } | { kind: "error"; msg: string };
 
-export function CrawlMethodList({ onOpenMethod, highlightId }: {
-  onOpenMethod?: (id: number) => void; highlightId?: number | null;
+export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
+  onOpenMethod?: (id: number) => void;
+  highlightId?: number | null;
+  runLimitState: NewsRunFormState;
 }) {
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -16,17 +20,23 @@ export function CrawlMethodList({ onOpenMethod, highlightId }: {
 
   const list = useQuery({ queryKey: ["discovery-methods"], queryFn: listDiscoveryMethods });
   const fetchMut = useMutation({
-    mutationFn: (id: number) => fetchDiscoveryMethod(id),
+    mutationFn: ({ id, request }: { id: number; request: ReturnType<typeof buildManualNewsRunRequest> }) =>
+      fetchDiscoveryMethod(id, request),
   });
 
   async function batchFetch() {
     const ids = [...selected];
+    const request = buildManualNewsRunRequest(runLimitState);
+    if (!request) {
+      setSummary("抓取限制无效，请先补全时间范围和目标条目数。");
+      return;
+    }
     setSummary(null);
     let totalDisc = 0, totalStored = 0;
     await Promise.all(ids.map(async (id) => {
       setRowStates((s) => ({ ...s, [id]: { kind: "running" } }));
       try {
-        const r = await fetchMut.mutateAsync(id);
+        const r = await fetchMut.mutateAsync({ id, request });
         totalDisc += r.discovered_count; totalStored += r.stored_count;
         setRowStates((s) => ({ ...s, [id]: { kind: "done", discovered: r.discovered_count, stored: r.stored_count } }));
       } catch (e) {

@@ -3,11 +3,11 @@ import { useEffect, useRef, useState } from "react";
 import { authHeaders } from "../auth";
 import type { NewsRunLogEntry } from "../types";
 
-export function useDiscoveryLogs(runId: number | null, enabled: boolean) {
+export function useDiscoveryLogs(runId: number | null, enabled: boolean, includeAll = false) {
   const [logs, setLogs] = useState<NewsRunLogEntry[]>([]);
   const lastId = useRef(0);
   useEffect(() => {
-    if (!enabled || runId == null) return;
+    if (!enabled || (!includeAll && runId == null)) return;
     setLogs([]);
     lastId.current = 0;
     let stop = false;
@@ -20,13 +20,15 @@ export function useDiscoveryLogs(runId: number | null, enabled: boolean) {
         if (data.logs.length) {
           lastId.current = Math.max(lastId.current, ...data.logs.map((l) => l.id));
         }
-        const mine = data.logs.filter((l) => Number((l as Record<string, unknown>).run_id) === runId);
-        if (!stop) setLogs((prev) => [...prev, ...mine]);
+        const nextLogs = includeAll
+          ? data.logs
+          : data.logs.filter((l) => Number((l as Record<string, unknown>).run_id) === runId);
+        if (!stop) setLogs((prev) => [...prev, ...nextLogs]);
       } catch { /* ignore */ }
     }
     poll();
     const t = window.setInterval(poll, 1500);
     return () => { stop = true; window.clearInterval(t); };
-  }, [runId, enabled]);
+  }, [runId, enabled, includeAll]);
   return logs;
 }

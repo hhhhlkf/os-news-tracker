@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CrawlMethodDetail } from "./CrawlMethodDetail";
 import { CrawlMethodList } from "./CrawlMethodList";
+import type { NewsRunFormState } from "./NewsRunControl";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -22,6 +23,14 @@ function renderWithQueryClient(root: Root, queryClient: QueryClient, node: impor
     root.render(<QueryClientProvider client={queryClient}>{node}</QueryClientProvider>);
   });
 }
+
+const runLimitState: NewsRunFormState = {
+  timeMode: "relative",
+  relativeRange: "7d",
+  startDate: "",
+  endDate: "",
+  targetCount: "12",
+};
 
 describe("crawl method query states", () => {
   let container: HTMLDivElement;
@@ -49,7 +58,7 @@ describe("crawl method query states", () => {
   it("shows a loading state for the method list", async () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
 
-    await renderWithQueryClient(root, queryClient, <CrawlMethodList />);
+    await renderWithQueryClient(root, queryClient, <CrawlMethodList runLimitState={runLimitState} />);
 
     expect(container.textContent).toContain("加载爬取方式中");
   });
@@ -65,7 +74,7 @@ describe("crawl method query states", () => {
       ),
     );
 
-    await renderWithQueryClient(root, queryClient, <CrawlMethodList />);
+    await renderWithQueryClient(root, queryClient, <CrawlMethodList runLimitState={runLimitState} />);
     await flush();
 
     expect(container.textContent).toContain("加载爬取方式失败");

@@ -447,9 +447,14 @@ export async function deleteDiscoveryMethod(methodId: number): Promise<void> {
   throw new ApiError(r.status, `failed to delete method (HTTP ${r.status})`, body);
 }
 
-export async function fetchDiscoveryMethod(methodId: number): Promise<DiscoveryFetchResult> {
+export async function fetchDiscoveryMethod(
+  methodId: number,
+  request?: ManualNewsRunRequest | null,
+): Promise<DiscoveryFetchResult> {
   const r = await fetch(`${DISCOVERY_BASE}/methods/${methodId}/fetch`, {
-    method: "POST", headers: authHeaders(),
+    method: "POST",
+    headers: request ? { "Content-Type": "application/json", ...authHeaders() } : authHeaders(),
+    body: request ? JSON.stringify(request) : undefined,
   });
   return expectOk<DiscoveryFetchResult>(r, "failed to fetch method");
 }

@@ -111,7 +111,7 @@ export function DiscoveryFlowChart({ run, onSelectNode, selectedNode }: {
         nodes={nodes} edges={edges} nodeTypes={nodeTypes}
         onNodeClick={(_, n) => onSelectNode?.(n.id as FlowNodeId)}
         nodesDraggable={false} nodesConnectable={false} elementsSelectable
-        panOnDrag={false} zoomOnScroll={false} zoomOnPinch={false} panOnScroll={false}
+        panOnDrag zoomOnScroll={false} zoomOnPinch={false} panOnScroll={false}
         proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="#e4e8ee" />

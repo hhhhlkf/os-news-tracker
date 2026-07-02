@@ -136,6 +136,47 @@ def test_discovery_fetch_endpoint(client, session):
     assert m.last_run_at is not None
 
 
+def test_discovery_fetch_applies_time_window_and_target_count(client, session):
+    """运行命 /fetch 接收抓取限制，并在入 pipeline 前先做时间过滤和总条目截断。"""
+    from app.enums import SourceType
+    from app.models import Source
+
+    src = Source(name="x.com", type=SourceType.DISCOVERY.value, url="https://x.com")
+    session.add(src)
+    session.flush()
+    m = CrawlMethod(
+        domain="x.com",
+        entry_url="https://x.com",
+        source_id=src.id,
+        dsl_recipe={"recipe_type": "dsl", "entry_url": "https://x.com", "actions": []},
+        signature="abc",
+    )
+    session.add(m)
+    session.commit()
+
+    with patch(
+        "app.api.discovery_routes.run_method",
+        return_value={
+            "items": [
+                {"title": "recent-a", "url": "https://x.com/a", "published_at": "2026-07-02T10:00:00Z"},
+                {"title": "recent-b", "url": "https://x.com/b", "published_at": "2026-07-01T10:00:00Z"},
+                {"title": "old-c", "url": "https://x.com/c", "published_at": "2026-05-01T10:00:00Z"},
+            ],
+            "stats": {},
+        },
+    ):
+        r = client.post(
+            f"/discovery/methods/{m.id}/fetch",
+            json={"time_mode": "relative", "relative_range": "7d", "target_count": 1},
+        )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["discovered_count"] == 1
+    assert len(body["items"]) == 1
+    assert body["items"][0]["url"] == "https://x.com/a"
+
+
 # --- Task 16: methods CRUD ---
 
 def _make_crawl_method(session, domain="x.com", **overrides):
