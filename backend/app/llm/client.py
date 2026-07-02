@@ -1,4 +1,5 @@
 import hashlib
+import json as jsonlib
 
 from app.config import get_settings
 
@@ -15,21 +16,33 @@ class LlmClient:
 
         return httpx.Client(timeout=60.0)
 
-    def _key(self, prompt: str) -> str:
-        return hashlib.sha256(f"{self._model}:{prompt}".encode("utf-8")).hexdigest()
+    def _key(self, prompt: str, *, temperature: float, response_format: dict | None) -> str:
+        extra = jsonlib.dumps(response_format, ensure_ascii=False, sort_keys=True) if response_format else ""
+        return hashlib.sha256(
+            f"{self._model}:{temperature}:{extra}:{prompt}".encode("utf-8")
+        ).hexdigest()
 
-    def complete(self, prompt: str, *, temperature: float = 0.2) -> str:
-        key = self._key(prompt)
+    def complete(
+        self,
+        prompt: str,
+        *,
+        temperature: float = 0.2,
+        response_format: dict | None = None,
+    ) -> str:
+        key = self._key(prompt, temperature=temperature, response_format=response_format)
         if key in self._cache:
             return self._cache[key]
+        payload = {
+            "model": self._model,
+            "temperature": temperature,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if response_format is not None:
+            payload["response_format"] = response_format
         resp = self._http.post(
             f"{self._settings.llm_base_url}/chat/completions",
             headers={"Authorization": f"Bearer {self._settings.llm_api_key}"},
-            json={
-                "model": self._model,
-                "temperature": temperature,
-                "messages": [{"role": "user", "content": prompt}],
-            },
+            json=payload,
         )
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]

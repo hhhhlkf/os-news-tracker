@@ -74,3 +74,42 @@ def test_per_step_logs_carry_run_id():
         assert c.get("run_id") == 42, (
             f"per-step log for step={c['step']} missing run_id: {c}"
         )
+
+
+def test_explorer_logs_include_generation_details():
+    from app.discovery import graph as graph_mod
+
+    calls = []
+
+    def capture_append(stage, message, *, source=None, level="info", **fields):
+        calls.append({"stage": stage, "message": message, "source": source,
+                      "level": level, **fields})
+        return {}
+
+    class _GraphWithExplorerDetails(_FakeGraph):
+        def __init__(self):
+            self._chunks = [
+                {"explorer": {
+                    "exploration": {"source_type": "json_api", "success": True},
+                    "explorer_agent_output": "原始输出：先解释再给 JSON",
+                    "explorer_synthesis_output": '{"source_type":"json_api","success":true}',
+                }},
+            ]
+
+        def get_state(self, config):
+            return SimpleNamespace(values={"verdict": "failed", "method_id": None, "token_used": 0})
+
+    fake_session = _FakeSession()
+    with patch("langgraph.checkpoint.postgres.PostgresSaver.from_conn_string",
+               lambda *a, **k: _FakeCheckpointer()), \
+         patch.object(graph_mod, "_to_psycopg_conn_string", return_value="postgresql://x"), \
+         patch.object(graph_mod, "build_graph", return_value=_GraphWithExplorerDetails()), \
+         patch("app.db.SessionLocal", return_value=fake_session), \
+         patch("app.run_logs.append_run_log", side_effect=capture_append):
+        graph_mod._execute_discovery(
+            run_id=99, site_url="https://x.test", force=False, name=None,
+        )
+
+    messages = [c["message"] for c in calls if c.get("run_id") == 99]
+    assert any("原始输出" in m for m in messages)
+    assert any("结构化整理" in m for m in messages)

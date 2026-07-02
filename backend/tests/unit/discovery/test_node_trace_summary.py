@@ -1,10 +1,16 @@
 from app.discovery.graph import _step_summary
 
 def test_summary_explorer():
-    upd = {"exploration": {"source_type": "rss", "list_url": "/feed.xml", "success": True}}
+    upd = {
+        "exploration": {"source_type": "rss", "list_url": "/feed.xml", "success": True},
+        "explorer_agent_output": "原始说明文字\n```json\n{}\n```",
+        "explorer_synthesis_output": '{"source_type":"rss"}',
+    }
     s = _step_summary("explorer", upd)
     assert s["source_type"] == "rss"
     assert s["list_url"] == "/feed.xml"
+    assert "原始说明文字" in s["agent_output_preview"]
+    assert "source_type" in s["synthesis_preview"]
 
 def test_summary_validator():
     upd = {"url_rule": {"mode": "existing_url", "url_field": "link", "evidence": "existing_url"}}

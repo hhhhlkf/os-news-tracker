@@ -235,6 +235,33 @@ def test_explorer_passes_existing_network_captures_to_agent(monkeypatch):
     assert "category" in user_msg
 
 
+def test_explorer_uses_second_stage_synthesis_when_agent_output_is_not_json(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from app.discovery import graph as graph_mod
+
+    class _FakeAgent:
+        def invoke(self, args):
+            return {"messages": [AIMessage(content="说明文字\n```json\n{\"broken\": true}\n```")]}
+
+    monkeypatch.setattr(
+        "langgraph.prebuilt.create_react_agent",
+        lambda llm, tools, prompt=None, **kw: _FakeAgent(),
+    )
+    monkeypatch.setattr(
+        graph_mod,
+        "_synthesize_exploration",
+        lambda **kwargs: (
+            '{"source_type":"json_api","list_url":"https://x.com/api","success":true}',
+            {"source_type": "json_api", "list_url": "https://x.com/api", "success": True},
+        ),
+    )
+    out = graph_mod.explorer(_state(site_url="https://x.com"), llm=_MockChat())
+    assert out["exploration"]["source_type"] == "json_api"
+    assert out["exploration"]["success"] is True
+    assert "说明文字" in out["explorer_agent_output"]
+    assert out["explorer_synthesis_output"].startswith("{")
+
+
 # --- validator worker ---
 
 def _fake_tool(ret):

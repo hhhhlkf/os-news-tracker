@@ -65,6 +65,9 @@ class DiscoveryState(TypedDict, total=False):
     force: bool             # true=覆盖同 domain 旧范式（去重覆盖用，Task 15）
     error: str | None
     name: str | None        # 站点别名（前端选填，不填自动用域名）
+    explorer_agent_output: str | None
+    explorer_synthesis_output: str | None
+    explorer_parse_error: str | None
 
 
 def supervisor_route(state: DiscoveryState) -> str:
@@ -253,7 +256,7 @@ EXPLORER_SYSTEM_PROMPT = """# 角色
 
 
 def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
-    """Explorer worker：ReAct agent 自主调工具探查站点，最终产出结构化 JSON（exploration）。"""
+    """Explorer worker：先 ReAct 探证据，再单独做结构化整理。"""
     llm = llm or _make_llm()
     from app.discovery.tools import TOOLS
     from langgraph.prebuilt import create_react_agent
@@ -261,9 +264,24 @@ def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
     result = agent.invoke({
         "messages": [("user", _explorer_input_message(state))],
     })
-    # 取最后一条 AIMessage 的内容，按 prompt 要求是 JSON
-    final_content = _extract_final_ai_content(result)
-    return {"exploration": _parse_json_or_fallback(final_content)}
+    agent_output = _extract_final_ai_content(result)
+    synth_raw = ""
+    parse_error = None
+    try:
+        synth_raw, exploration = _synthesize_exploration(
+            site_url=state["site_url"],
+            result=result,
+            agent_output=agent_output,
+        )
+    except Exception as e:
+        parse_error = str(e)
+        exploration = _parse_json_or_fallback(agent_output)
+    return {
+        "exploration": exploration,
+        "explorer_agent_output": agent_output,
+        "explorer_synthesis_output": synth_raw,
+        "explorer_parse_error": parse_error,
+    }
 
 
 def _extract_final_ai_content(result: dict) -> str:
@@ -304,6 +322,77 @@ def _explorer_input_message(state: DiscoveryState) -> str:
             })
         lines.append(json.dumps(summarized, ensure_ascii=False))
     return "\n".join(lines)
+
+
+def _truncate_text(text: str | None, limit: int = 500) -> str:
+    if not text:
+        return ""
+    text = str(text).strip()
+    return text if len(text) <= limit else text[:limit] + "...[truncated]"
+
+
+def _explorer_evidence_payload(result: dict) -> list[dict]:
+    """从 ReAct 轨迹提炼证据，供第二阶段结构化整理使用。"""
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    payload: list[dict] = []
+    for msg in result.get("messages", []):
+        if isinstance(msg, AIMessage):
+            entry = {"kind": "ai", "content": _truncate_text(getattr(msg, "content", ""), 1200)}
+            tool_calls = getattr(msg, "tool_calls", None)
+            if tool_calls:
+                entry["tool_calls"] = [
+                    {"name": call.get("name"), "args": call.get("args")}
+                    for call in tool_calls[:8]
+                ]
+            payload.append(entry)
+        elif isinstance(msg, ToolMessage):
+            payload.append({
+                "kind": "tool",
+                "name": getattr(msg, "name", None),
+                "content": _truncate_text(getattr(msg, "content", ""), 2400),
+            })
+    return payload[-12:]
+
+
+def _synthesize_exploration(*, site_url: str, result: dict, agent_output: str) -> tuple[str, dict]:
+    """第二阶段：根据 ReAct 证据整理结构化 exploration JSON。"""
+    from app.llm.client import LlmClient
+
+    evidence = _explorer_evidence_payload(result)
+    prompt = (
+        "你是站点探查结果整理器。"
+        "请根据给定站点探查证据，输出一个 JSON object。"
+        "要求：\n"
+        "1. 只输出 JSON object，不要解释，不要 Markdown；\n"
+        "2. 所有字符串必须是合法 JSON 字符串；\n"
+        "3. 如果证据不足，如实返回 source_type=unknown, success=false；\n"
+        "4. 尽量保留证据中已经确认的字段和值。\n\n"
+        "输出 schema：\n"
+        "{\n"
+        '  "source_type": "json_api | rss | atom | html | unknown",\n'
+        '  "list_url": "string or null",\n'
+        '  "fetch": {"method": "GET | POST", "headers": {}, "query": {}, "json_body": null},\n'
+        '  "format_locator": {"kind": "json_path | feed_entries | html_selector | unknown", "value": "string"},\n'
+        '  "fields": {"id": null, "title": null, "url": null, "published_at": null, "summary": null, "content": null},\n'
+        '  "html_selectors": {"item_selector": null, "link_selector": null, "title_selector": null, "date_selector": null},\n'
+        '  "sample_items": [],\n'
+        '  "url_candidates": [],\n'
+        '  "pagination": {"type": "none | page_param | offset_limit | cursor | next_url | html_next | unknown", "page_param": null, "size_param": null, "offset_param": null, "limit_param": null, "cursor_param": null, "next_path": null, "has_more_path": null, "start": 1, "size": null, "notes": ""},\n'
+        '  "evidence": [],\n'
+        '  "notes": [],\n'
+        '  "success": true\n'
+        "}\n\n"
+        f"站点 URL: {site_url}\n"
+        f"第一阶段最终输出:\n{agent_output}\n\n"
+        f"ReAct 证据轨迹:\n{json.dumps(evidence, ensure_ascii=False)}\n"
+    )
+    raw = LlmClient().complete(
+        prompt,
+        temperature=0.0,
+        response_format={"type": "json_object"},
+    )
+    return raw, _parse_json_or_fallback(raw)
 
 
 def _parse_json_or_fallback(content: str) -> dict:
@@ -777,8 +866,14 @@ def _step_summary(node_name: str, update: dict) -> dict:
                 "sample_urls": ", ".join(api_urls) if api_urls else "无"}
     if node_name == "explorer":
         e = update.get("exploration") or {}
-        return {"source_type": e.get("source_type"), "list_url": e.get("list_url"),
-                "success": e.get("success")}
+        return {
+            "source_type": e.get("source_type"),
+            "list_url": e.get("list_url"),
+            "success": e.get("success"),
+            "agent_output_preview": _truncate_text(update.get("explorer_agent_output"), 180),
+            "synthesis_preview": _truncate_text(update.get("explorer_synthesis_output"), 180),
+            "parse_error": update.get("explorer_parse_error"),
+        }
     if node_name == "validator":
         u = update.get("url_rule") or {}
         return {"mode": u.get("mode"), "template": u.get("template"),
@@ -809,7 +904,8 @@ def _step_log_detail(node_name: str, update: dict) -> str:
     if node_name == "explorer":
         e = update.get("exploration") or {}
         st = e.get("source_type", "?")
-        return f" · source_type={st}"
+        status = e.get("success")
+        return f" · source_type={st} · success={status}"
     if node_name == "validator":
         u = update.get("url_rule") or {}
         return f" · mode={u.get('mode', '?')} · evidence={u.get('evidence', '?')}"
@@ -861,6 +957,13 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
                     detail = _step_log_detail(node_name, update or {})
                     append_run_log(stage, base_msg + detail, source=source_label,
                                    run_id=run_id, step=node_name, trace_count=len(node_trace))
+                    if node_name == "explorer":
+                        _append_explorer_generation_logs(
+                            append_run_log=append_run_log,
+                            run_id=run_id,
+                            source_label=source_label,
+                            update=update or {},
+                        )
                     logger.info("discovery run %s: step=%s done (%d steps so far)",
                                 run_id, node_name, len(node_trace))
                     # 实时写 DB 供前端轮询 GET /discovery/runs/{id}
@@ -898,6 +1001,38 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
             logger.exception("discovery run %s: failed with exception", run_id)
         finally:
             db_sess.close()
+
+
+def _append_explorer_generation_logs(*, append_run_log, run_id: int, source_label: str, update: dict) -> None:
+    """把 explorer 两阶段生成内容写入日志面板，便于前端排查。"""
+    raw = _truncate_text(update.get("explorer_agent_output"), 600)
+    if raw:
+        append_run_log(
+            "探查",
+            f"explorer 原始输出 · {raw}",
+            source=source_label,
+            run_id=run_id,
+            step="explorer_raw",
+        )
+    synth = _truncate_text(update.get("explorer_synthesis_output"), 600)
+    if synth:
+        append_run_log(
+            "探查",
+            f"explorer 结构化整理 · {synth}",
+            source=source_label,
+            run_id=run_id,
+            step="explorer_structured",
+        )
+    err = update.get("explorer_parse_error")
+    if err:
+        append_run_log(
+            "探查",
+            f"explorer 整理失败 · {err}",
+            source=source_label,
+            run_id=run_id,
+            level="warning",
+            step="explorer_parse_error",
+        )
 
 
 def run_discovery(site_url: str, force: bool = False, name: str | None = None) -> dict:
