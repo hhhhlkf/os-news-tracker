@@ -211,20 +211,60 @@ def discovery_fetch(
     from app.models import Source
     from app.pipeline import Pipeline
     from app.processing.enricher import Enricher
+    from app.run_logs import append_run_log
     m = db.get(CrawlMethod, method_id)
     if not m:
         raise HTTPException(404, "method not found")
     recipe = DslRecipe(**m.dsl_recipe)
-    output = run_method(recipe)  # 纯确定性执行（可被测试 mock）
-    output["items"] = _apply_fetch_limits(list(output.get("items", [])), request)
-    # 转 RawItem → 走正常 pipeline 路径（调 Enricher LLM 富化：category/tags/summary/importance）
-    raws = CrawlOutputIngester().to_raw_items(output, source_id=m.source_id)
-    source = db.get(Source, m.source_id)
-    pipeline = Pipeline(session=db, extractor=None, enricher=Enricher())
+    append_run_log(
+        "抓方式",
+        "开始抓取爬取方式",
+        source=m.domain,
+        method_id=m.id,
+        entry_url=m.entry_url,
+        status=m.status,
+    )
     stored = 0
-    for raw in raws:
-        if pipeline.process_item(source, raw):
-            stored += 1
+    try:
+        output = run_method(recipe)  # 纯确定性执行（可被测试 mock）
+        output["items"] = _apply_fetch_limits(list(output.get("items", [])), request)
+        append_run_log(
+            "抓方式",
+            "DSL 执行完成，准备入库",
+            source=m.domain,
+            method_id=m.id,
+            discovered_count=len(output.get("items", [])),
+            limit_applied=bool(request),
+        )
+        # 转 RawItem → 走正常 pipeline 路径（调 Enricher LLM 富化：category/tags/summary/importance）
+        raws = CrawlOutputIngester().to_raw_items(output, source_id=m.source_id)
+        source = db.get(Source, m.source_id)
+        pipeline = Pipeline(session=db, extractor=None, enricher=Enricher())
+        for raw in raws:
+            if pipeline.process_item(source, raw):
+                stored += 1
+        append_run_log(
+            "抓方式",
+            "爬取方式抓取完成",
+            source=m.domain,
+            method_id=m.id,
+            discovered_count=len(raws),
+            stored_count=stored,
+            summary=(
+                f"抓取 {len(raws)} 条，入库 {stored} 条"
+                if stored > 0
+                else f"抓取 {len(raws)} 条，未入库（可能重复或被富化拒绝）"
+            ),
+        )
+    except Exception as exc:
+        append_run_log(
+            "抓方式",
+            f"爬取方式抓取失败 · {exc}",
+            source=m.domain,
+            method_id=m.id,
+            level="error",
+        )
+        raise
     m.last_run_at = datetime.now(timezone.utc)
     m.last_run_status = "ok" if stored > 0 else "empty"
     db.commit()

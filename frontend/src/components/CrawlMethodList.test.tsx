@@ -24,6 +24,14 @@ vi.mock("../api/client", () => ({
   fetchDiscoveryMethod: (...args: unknown[]) => fetchDiscoveryMethod(...args),
 }));
 
+function flush() {
+  return act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+  });
+}
+
 describe("CrawlMethodList", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -102,12 +110,99 @@ describe("CrawlMethodList", () => {
       fetchButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
-    expect(fetchDiscoveryMethod).toHaveBeenCalledWith(7, {
-      time_mode: "relative",
-      relative_range: "7d",
-      start_at: null,
-      end_at: null,
-      target_count: 12,
+    expect(fetchDiscoveryMethod).toHaveBeenCalledWith(
+      7,
+      {
+        time_mode: "relative",
+        relative_range: "7d",
+        start_at: null,
+        end_at: null,
+        target_count: 12,
+      },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("stops batch fetching when the user cancels the crawl", async () => {
+    listDiscoveryMethods.mockResolvedValue([
+      {
+        id: 7,
+        domain: "example.com",
+        entry_url: "https://example.com/news",
+        status: "active",
+        signature: "sig",
+        last_run_at: null,
+        last_run_status: null,
+      },
+      {
+        id: 8,
+        domain: "second.example.com",
+        entry_url: "https://second.example.com/news",
+        status: "active",
+        signature: "sig-2",
+        last_run_at: null,
+        last_run_status: null,
+      },
+    ]);
+
+    let resolveFirst: ((value: { discovered_count: number; stored_count: number; items: []; stats: {}; message: string }) => void) | null = null;
+    fetchDiscoveryMethod.mockImplementation((_id: number, _request?: unknown, signal?: AbortSignal) => {
+      if (resolveFirst == null) {
+        return new Promise((resolve, reject) => {
+          resolveFirst = resolve as typeof resolveFirst;
+          signal?.addEventListener("abort", () => {
+            reject(new DOMException("Aborted", "AbortError"));
+          }, { once: true });
+        });
+      }
+      return Promise.resolve({
+        discovered_count: 1,
+        stored_count: 1,
+        items: [],
+        stats: {},
+        message: "ok",
+      });
     });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CrawlMethodList runLimitState={runLimitState} />
+        </QueryClientProvider>,
+      );
+    });
+
+    await flush();
+
+    const checkboxes = Array.from(container.querySelectorAll("input[type='checkbox']")) as HTMLInputElement[];
+    expect(checkboxes).toHaveLength(2);
+
+    await act(async () => {
+      checkboxes[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      checkboxes[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    const fetchButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("抓取选中"),
+    ) as HTMLButtonElement | undefined;
+    expect(fetchButton).toBeTruthy();
+
+    await act(async () => {
+      fetchButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    const cancelButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("取消抓取"),
+    ) as HTMLButtonElement | undefined;
+    expect(cancelButton).toBeTruthy();
+
+    await act(async () => {
+      cancelButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    expect(fetchDiscoveryMethod).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("已取消");
   });
 });

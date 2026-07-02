@@ -1,12 +1,17 @@
 // frontend/src/components/CrawlMethodList.tsx
-import { useState, type CSSProperties } from "react";
+import { useRef, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, fetchDiscoveryMethod, listDiscoveryMethods } from "../api/client";
 import type { CrawlMethod } from "../types";
 import { buildManualNewsRunRequest } from "./NewsRunControl";
 import type { NewsRunFormState } from "./NewsRunControl";
 
-type RowState = { kind: "idle" } | { kind: "running" } | { kind: "done"; discovered: number; stored: number } | { kind: "error"; msg: string };
+type RowState =
+  | { kind: "idle" }
+  | { kind: "running" }
+  | { kind: "done"; discovered: number; stored: number }
+  | { kind: "cancelled" }
+  | { kind: "error"; msg: string };
 
 export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
   onOpenMethod?: (id: number) => void;
@@ -17,11 +22,15 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [rowStates, setRowStates] = useState<Record<number, RowState>>({});
   const [summary, setSummary] = useState<string | null>(null);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchCancelling, setBatchCancelling] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const cancelledRef = useRef(false);
 
   const list = useQuery({ queryKey: ["discovery-methods"], queryFn: listDiscoveryMethods });
   const fetchMut = useMutation({
-    mutationFn: ({ id, request }: { id: number; request: ReturnType<typeof buildManualNewsRunRequest> }) =>
-      fetchDiscoveryMethod(id, request),
+    mutationFn: ({ id, request, signal }: { id: number; request: ReturnType<typeof buildManualNewsRunRequest>; signal?: AbortSignal }) =>
+      fetchDiscoveryMethod(id, request, signal),
   });
 
   async function batchFetch() {
@@ -31,20 +40,59 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
       setSummary("抓取限制无效，请先补全时间范围和目标条目数。");
       return;
     }
+    if (ids.length === 0) {
+      setSummary("请先选择至少一个爬取方式。");
+      return;
+    }
     setSummary(null);
-    let totalDisc = 0, totalStored = 0;
-    await Promise.all(ids.map(async (id) => {
-      setRowStates((s) => ({ ...s, [id]: { kind: "running" } }));
-      try {
-        const r = await fetchMut.mutateAsync({ id, request });
-        totalDisc += r.discovered_count; totalStored += r.stored_count;
-        setRowStates((s) => ({ ...s, [id]: { kind: "done", discovered: r.discovered_count, stored: r.stored_count } }));
-      } catch (e) {
-        setRowStates((s) => ({ ...s, [id]: { kind: "error", msg: e instanceof ApiError ? e.message : "抓取失败" } }));
+    setBatchRunning(true);
+    setBatchCancelling(false);
+    cancelledRef.current = false;
+    let totalDisc = 0;
+    let totalStored = 0;
+    try {
+      for (const id of ids) {
+        if (cancelledRef.current) break;
+        const controller = new AbortController();
+        abortRef.current = controller;
+        setRowStates((s) => ({ ...s, [id]: { kind: "running" } }));
+        try {
+          const r = await fetchMut.mutateAsync({ id, request, signal: controller.signal });
+          if (cancelledRef.current || controller.signal.aborted) {
+            setRowStates((s) => ({ ...s, [id]: { kind: "cancelled" } }));
+            break;
+          }
+          totalDisc += r.discovered_count;
+          totalStored += r.stored_count;
+          setRowStates((s) => ({ ...s, [id]: { kind: "done", discovered: r.discovered_count, stored: r.stored_count } }));
+        } catch (e) {
+          const aborted = controller.signal.aborted || e instanceof DOMException && e.name === "AbortError";
+          if (aborted || cancelledRef.current) {
+            setRowStates((s) => ({ ...s, [id]: { kind: "cancelled" } }));
+            break;
+          }
+          setRowStates((s) => ({ ...s, [id]: { kind: "error", msg: e instanceof ApiError ? e.message : "抓取失败" } }));
+        } finally {
+          if (abortRef.current === controller) {
+            abortRef.current = null;
+          }
+        }
       }
-    }));
-    setSummary(`本次抓取 ${totalDisc} 条 · 入库 ${totalStored} 条`);
-    await qc.invalidateQueries({ queryKey: ["discovery-methods"] });
+      setSummary(cancelledRef.current ? `已取消抓取 · 已处理 ${totalDisc} 条 · 入库 ${totalStored} 条` : `本次抓取 ${totalDisc} 条 · 入库 ${totalStored} 条`);
+      await qc.invalidateQueries({ queryKey: ["discovery-methods"] });
+    } finally {
+      setBatchRunning(false);
+      setBatchCancelling(false);
+      abortRef.current = null;
+    }
+  }
+
+  function cancelBatch() {
+    if (!batchRunning) return;
+    cancelledRef.current = true;
+    setBatchCancelling(true);
+    abortRef.current?.abort();
+    setSummary("正在取消当前抓取批次…");
   }
 
   function toggle(id: number, enabled: boolean) {
@@ -56,11 +104,21 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 700, color: "#101828" }}>抓取模块 · 爬取方式库</div>
-          <div style={{ fontSize: 12, color: "#667085", marginTop: 2 }}>勾选若干个一键抓取，结果进入新闻流。</div>
+          <div style={{ fontSize: 12, color: "#667085", marginTop: 2 }}>按顺序抓取已选方式，可随时取消当前批次。结果会进入新闻流和运行日志。</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ fontSize: 12, color: "#475467" }}>已选 <b style={{ color: "#101828" }}>{selected.size}</b> 个</span>
-          <button type="button" style={btnPrimary} disabled={selected.size === 0} onClick={batchFetch}>抓取选中</button>
+          <button type="button" style={btnPrimary} disabled={selected.size === 0 || batchRunning} onClick={batchFetch}>
+            {batchRunning ? "抓取中…" : "抓取选中"}
+          </button>
+          <button
+            type="button"
+            style={batchRunning ? btnDanger : btnDisabled}
+            disabled={!batchRunning || batchCancelling}
+            onClick={cancelBatch}
+          >
+            {batchCancelling ? "取消中…" : "取消抓取"}
+          </button>
           <a style={{ fontSize: 12, color: "#667085", cursor: "pointer" }} onClick={() => setSelected(new Set())}>清空</a>
         </div>
       </div>
@@ -110,6 +168,7 @@ function MethodRow({ m, selected, state, onToggle, onOpen, highlight }: {
       <div style={{ fontSize: 12, color: "#475467", textAlign: "right", minWidth: 150 }}>
         {state?.kind === "running" && <span style={{ color: "#175cd3" }}>抓取中…</span>}
         {state?.kind === "done" && <>抓取 {state.discovered} · 入库 {state.stored}</>}
+        {state?.kind === "cancelled" && <span style={{ color: "#b54708" }}>已取消</span>}
         {state?.kind === "error" && <span style={{ color: "#b42318" }}>{state.msg}</span>}
         {(!state || state.kind === "idle") && (m.last_run_status ? `${m.last_run_status}` : "未运行")}
       </div>
@@ -125,4 +184,6 @@ function badge(status: string): CSSProperties {
 }
 
 const btnPrimary: CSSProperties = { border: "none", borderRadius: 999, padding: "8px 16px", background: "#175cd3", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" };
+const btnDisabled: CSSProperties = { ...btnPrimary, background: "#98a2b3", cursor: "not-allowed" };
+const btnDanger: CSSProperties = { ...btnPrimary, background: "#dc2626" };
 const infoBox: CSSProperties = { border: "1px dashed #d0d5dd", borderRadius: 8, padding: 16, color: "#667085", fontSize: 13 };

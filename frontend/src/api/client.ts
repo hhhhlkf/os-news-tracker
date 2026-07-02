@@ -450,10 +450,12 @@ export async function deleteDiscoveryMethod(methodId: number): Promise<void> {
 export async function fetchDiscoveryMethod(
   methodId: number,
   request?: ManualNewsRunRequest | null,
+  signal?: AbortSignal,
 ): Promise<DiscoveryFetchResult> {
   const r = await fetch(`${DISCOVERY_BASE}/methods/${methodId}/fetch`, {
     method: "POST",
     headers: request ? { "Content-Type": "application/json", ...authHeaders() } : authHeaders(),
+    signal,
     body: request ? JSON.stringify(request) : undefined,
   });
   return expectOk<DiscoveryFetchResult>(r, "failed to fetch method");

@@ -288,6 +288,38 @@ def test_discovery_fetch_ingests_to_items(client, session, monkeypatch):
     assert items[0].summary == "LLM富化摘要"
 
 
+def test_discovery_fetch_logs_are_visible_to_news_run_log_panel(client, session, monkeypatch):
+    from app.enums import SourceType
+    from app.models import Source
+    from app.run_logs import clear_run_logs
+
+    clear_run_logs()
+    src = Source(name="x.com", type=SourceType.DISCOVERY.value, url="https://x.com")
+    session.add(src)
+    session.flush()
+    m = CrawlMethod(
+        domain="x.com",
+        entry_url="https://x.com",
+        source_id=src.id,
+        dsl_recipe={"recipe_type": "dsl", "entry_url": "https://x.com", "actions": []},
+        signature="abc",
+    )
+    session.add(m)
+    session.commit()
+
+    monkeypatch.setattr(
+        "app.api.discovery_routes.run_method",
+        lambda recipe: {"items": [], "stats": {"discovered_count": 0}},
+    )
+
+    r = client.post(f"/discovery/methods/{m.id}/fetch")
+    assert r.status_code == 200
+
+    logs = client.get("/news-run/logs").json()["logs"]
+    assert any(log["stage"] == "抓方式" and log.get("method_id") == m.id for log in logs)
+    assert any("开始抓取爬取方式" in log["message"] for log in logs)
+
+
 def test_discover_run_with_custom_name(client):
     """前端传 name 别名 → /run 透传 + 返回里带 name。"""
     with patch("app.api.discovery_routes.start_discovery_run", return_value=7):

@@ -9,6 +9,7 @@ function ts(t: string) {
 const stageLabels: Record<string, string> = {
   run: "任务",
   fetch: "抓取",
+  "抓方式": "抓方式",
   time_filter: "时间过滤",
   candidate_prefilter: "本地预筛",
   llm_scoring: "LLM筛选",
