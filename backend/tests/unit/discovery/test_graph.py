@@ -373,7 +373,7 @@ def test_explorer_passes_existing_network_captures_to_agent(monkeypatch):
     assert "category" in user_msg
 
 
-def test_explorer_falls_back_to_deterministic_exploration_when_synthesis_fails(monkeypatch):
+def test_explorer_returns_unknown_when_synthesis_fails_even_with_deterministic_hint(monkeypatch):
     from langchain_core.messages import AIMessage
     from app.discovery import graph as graph_mod
 
@@ -390,15 +390,25 @@ def test_explorer_falls_back_to_deterministic_exploration_when_synthesis_fails(m
         "_synthesize_exploration",
         lambda **kwargs: (_ for _ in ()).throw(ValueError("second stage failed")),
     )
-    out = graph_mod.explorer(_state(site_url="https://x.com"), llm=_MockChat())
+    out = graph_mod.explorer(_state(
+        site_url="https://x.com",
+        network_captures=[{
+            "api_url": "https://x.com/api/list",
+            "method": "POST",
+            "parsed_json": {"obj": {"records": [{"title": "A", "path": "/a", "date": "2026-07-01"}]}},
+            "request_json_body": {"page": 1},
+        }],
+    ), llm=_MockChat())
     assert out["exploration"]["source_type"] == "unknown"
     assert out["exploration"]["success"] is False
     assert out["explorer_parse_error"] == "second stage failed"
 
 
-def test_explorer_uses_inspect_item_evidence_for_deterministic_fallback(monkeypatch):
+def test_explorer_passes_inspect_item_hint_into_second_stage(monkeypatch):
     from langchain_core.messages import AIMessage, ToolMessage
     from app.discovery import graph as graph_mod
+
+    seen = {}
 
     class _FakeAgent:
         def invoke(self, args):
@@ -435,25 +445,24 @@ def test_explorer_uses_inspect_item_evidence_for_deterministic_fallback(monkeypa
                 ]
             }
 
+    def fake_synthesize_exploration(*, site_url, result, deterministic_exploration):
+        seen["deterministic_exploration"] = deterministic_exploration
+        return json.dumps(_EXPLORATION_JSON_API, ensure_ascii=False), _EXPLORATION_JSON_API
+
     monkeypatch.setattr(
         "langgraph.prebuilt.create_react_agent",
         lambda llm, tools, prompt=None, **kw: _FakeAgent(),
     )
-    monkeypatch.setattr(
-        graph_mod,
-        "_synthesize_exploration",
-        lambda **kwargs: (_ for _ in ()).throw(ValueError("second stage failed")),
-    )
+    monkeypatch.setattr(graph_mod, "_synthesize_exploration", fake_synthesize_exploration)
     out = graph_mod.explorer(_state(site_url="https://x.com"), llm=_MockChat())
     assert out["exploration"]["source_type"] == "json_api"
     assert out["exploration"]["success"] is True
-    assert out["exploration"]["list_url"] == "https://www.openeuler.org/api-search/search/sort/blog"
-    assert out["exploration"]["fetch"]["method"] == "POST"
-    assert out["exploration"]["fetch"]["json_body"]["category"] == "blog"
-    assert out["exploration"]["format_locator"]["value"] == "obj.records"
+    assert seen["deterministic_exploration"]["list_url"] == "https://www.openeuler.org/api-search/search/sort/blog"
+    assert seen["deterministic_exploration"]["fetch"]["method"] == "POST"
+    assert seen["deterministic_exploration"]["format_locator"]["value"] == "obj.records"
 
 
-def test_explorer_prefers_deterministic_network_capture_when_synthesis_returns_unknown(monkeypatch):
+def test_explorer_returns_unknown_when_synthesis_returns_unknown_despite_network_hint(monkeypatch):
     from langchain_core.messages import AIMessage
     from app.discovery import graph as graph_mod
 
@@ -490,12 +499,8 @@ def test_explorer_prefers_deterministic_network_capture_when_synthesis_returns_u
             },
         }],
     ), llm=_MockChat())
-    assert out["exploration"]["source_type"] == "json_api"
-    assert out["exploration"]["success"] is True
-    assert out["exploration"]["list_url"] == "https://www.openeuler.org/api-search/search/sort/blog"
-    assert out["exploration"]["format_locator"]["value"] == "obj.records"
-    assert out["exploration"]["fields"]["url"] == "path"
-    assert out["exploration"]["sample_items"][0]["url"] == "https://www.openeuler.org/zh/blog/a"
+    assert out["exploration"]["source_type"] == "unknown"
+    assert out["exploration"]["success"] is False
 
 
 # --- validator worker ---

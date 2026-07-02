@@ -349,10 +349,9 @@ def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
             result=result,
             deterministic_exploration=deterministic_exploration,
         )
-        exploration = _merge_exploration(deterministic_exploration, exploration)
     except Exception as e:
         parse_error = str(e)
-        exploration = deterministic_exploration or _unknown_exploration()
+        exploration = _unknown_exploration()
     return {
         "exploration": ExplorationResult(**exploration).model_dump(),
         "explorer_agent_output": agent_output,
@@ -736,50 +735,7 @@ def _synthesize_exploration(*, site_url: str, result: dict, deterministic_explor
         response_format={"type": "json_object"},
     )
     parsed = _parse_strict_exploration_output(raw)
-    merged = _merge_exploration(deterministic_exploration, parsed)
-    return raw, merged
-
-
-def _merge_exploration(base: dict | None, overlay: dict | None) -> dict:
-    if not base:
-        return ExplorationResult(**(overlay or {})).model_dump()
-    if not overlay:
-        return ExplorationResult(**base).model_dump()
-
-    base_obj = ExplorationResult(**base).model_dump()
-    overlay_obj = ExplorationResult(**overlay).model_dump()
-
-    if base_obj.get("success") and not overlay_obj.get("success"):
-        return base_obj
-    if overlay_obj.get("success") and not base_obj.get("success"):
-        return overlay_obj
-
-    merged = dict(base_obj)
-    for key in ("source_type", "list_url"):
-        if _is_empty_value(merged.get(key)) and not _is_empty_value(overlay_obj.get(key)):
-            merged[key] = overlay_obj.get(key)
-
-    for key in ("fetch", "format_locator", "fields", "html_selectors", "pagination"):
-        merged[key] = _merge_mapping_values(merged.get(key) or {}, overlay_obj.get(key) or {})
-
-    for key in ("sample_items", "url_candidates", "evidence", "notes"):
-        if not merged.get(key) and overlay_obj.get(key):
-            merged[key] = overlay_obj.get(key)
-
-    merged["success"] = bool(base_obj.get("success") or overlay_obj.get("success"))
-    return ExplorationResult(**merged).model_dump()
-
-
-def _merge_mapping_values(base: dict, overlay: dict) -> dict:
-    merged = dict(base)
-    for key, value in overlay.items():
-        if _is_empty_value(merged.get(key)) and not _is_empty_value(value):
-            merged[key] = value
-    return merged
-
-
-def _is_empty_value(value: object) -> bool:
-    return value in (None, "", [], {})
+    return raw, parsed
 
 
 def _parse_strict_exploration_output(content: str) -> dict:
