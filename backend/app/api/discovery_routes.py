@@ -19,6 +19,7 @@ from app.discovery.graph import check_existing_method, start_discovery_run
 from app.discovery.ingester import CrawlOutputIngester
 from app.discovery.interpreter import DslInterpreter
 from app.llm.client import LlmClient
+from app.manual_news_run import _build_not_stored_log_fields
 from app.models import CrawlMethod, CrawlMethodDomain, SiteDiscoveryRun
 from app.schemas import ManualNewsRunRequest
 
@@ -264,10 +265,47 @@ def discovery_fetch(
         raws = CrawlOutputIngester().to_raw_items(output, source_id=m.source_id)
         source = db.get(Source, m.source_id)
         pipeline = Pipeline(session=db, extractor=None, enricher=Enricher())
+        append_run_log(
+            "process",
+            "开始处理抓取结果",
+            source=m.domain,
+            method_id=m.id,
+            count=len(raws),
+        )
+        processed_count = 0
         for raw in raws:
-            if pipeline.process_item(source, raw):
+            processed_count += 1
+            result = pipeline.process_item_result(source, raw)
+            if result.stored:
                 stored += 1
+                append_run_log(
+                    "process",
+                    "候选已新增入库",
+                    source=source.name,
+                    method_id=m.id,
+                    title=raw.title,
+                    url=raw.url,
+                )
+            else:
+                append_run_log(
+                    "process",
+                    "候选未入库",
+                    source=source.name,
+                    method_id=m.id,
+                    title=raw.title,
+                    url=raw.url,
+                    **_build_not_stored_log_fields(result),
+                )
         last_run_status = "ok" if stored > 0 else "empty"
+        append_run_log(
+            "process",
+            "抓取结果处理完成",
+            source=m.domain,
+            method_id=m.id,
+            processed_count=processed_count,
+            saved_count=stored,
+            rejected_count=max(processed_count - stored, 0),
+        )
         append_run_log(
             "抓方式",
             "爬取方式抓取完成",

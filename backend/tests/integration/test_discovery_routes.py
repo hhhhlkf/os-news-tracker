@@ -355,6 +355,78 @@ def test_discovery_fetch_logs_are_visible_to_news_run_log_panel(client, session,
     )
 
 
+def test_discovery_fetch_logs_pipeline_item_outcomes(client, session, monkeypatch):
+    from app.enums import SourceType, Stream
+    from app.models import Source
+    from app.run_logs import clear_run_logs
+
+    clear_run_logs()
+    src = Source(
+        name="x.com",
+        type=SourceType.DISCOVERY.value,
+        url="https://x.com",
+        main_category="OS跟踪来源",
+        stream=Stream.NEWS,
+        enabled=True,
+    )
+    session.add(src)
+    session.flush()
+    m = CrawlMethod(
+        domain="x.com",
+        entry_url="https://x.com",
+        source_id=src.id,
+        dsl_recipe={"recipe_type": "dsl", "entry_url": "https://x.com", "actions": []},
+        signature="abc",
+    )
+    session.add(m)
+    session.commit()
+
+    monkeypatch.setattr(
+        "app.api.discovery_routes.run_method",
+        lambda recipe: {
+            "items": [
+                {"title": "duplicate-a", "url": "https://x.com/a", "published_at": "2026-07-02T10:00:00Z"},
+                {"title": "new-b", "url": "https://x.com/b", "published_at": "2026-07-02T11:00:00Z"},
+            ],
+            "stats": {"discovered_count": 2},
+        },
+    )
+
+    from app.pipeline import ProcessItemResult
+
+    results = iter([
+        ProcessItemResult(stored=False, reason="duplicate"),
+        ProcessItemResult(stored=False, reason="enrich_reject", detail="summary too weak"),
+    ])
+
+    def fake_process_item_result(self, source, raw):
+        return next(results)
+
+    monkeypatch.setattr("app.pipeline.Pipeline.process_item_result", fake_process_item_result)
+
+    r = client.post(f"/discovery/methods/{m.id}/fetch")
+    assert r.status_code == 200
+
+    logs = client.get("/news-run/logs").json()["logs"]
+    method_process_logs = [
+        log for log in logs
+        if log["stage"] == "process" and log.get("method_id") == m.id
+    ]
+    assert any(
+        log["message"] == "候选未入库"
+        and log.get("url") == "https://x.com/a"
+        and log.get("reason") == "duplicate"
+        for log in method_process_logs
+    )
+    assert any(
+        log["message"] == "候选未入库"
+        and log.get("url") == "https://x.com/b"
+        and log.get("reason") == "enrich_reject"
+        and log.get("reason_detail") == "summary too weak"
+        for log in method_process_logs
+    )
+
+
 def test_discover_run_with_custom_name(client):
     """前端传 name 别名 → /run 透传 + 返回里带 name。"""
     with patch("app.api.discovery_routes.start_discovery_run", return_value=7):

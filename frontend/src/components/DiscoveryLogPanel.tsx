@@ -29,7 +29,9 @@ const stageLabels: Record<string, string> = {
 type LogView = "all" | "discovery" | "method";
 
 function classifyLog(log: NewsRunLogEntry): LogView {
-  return log.stage === "抓方式" ? "method" : "discovery";
+  return log.stage === "抓方式" || (log.stage === "process" && typeof log.method_id === "number")
+    ? "method"
+    : "discovery";
 }
 
 function compactFields(log: NewsRunLogEntry) {

@@ -16,6 +16,16 @@ const DISCOVERY_RELATED_STAGES = new Set([
   "抓方式",
 ]);
 
+function isDiscoveryLog(log: NewsRunLogEntry, includeAll: boolean, runId: number | null) {
+  if (!includeAll) {
+    return Number((log as Record<string, unknown>).run_id) === runId;
+  }
+  if (DISCOVERY_RELATED_STAGES.has(log.stage)) {
+    return true;
+  }
+  return log.stage === "process" && typeof log.method_id === "number";
+}
+
 export function useDiscoveryLogs(runId: number | null, enabled: boolean, includeAll = false) {
   const [logs, setLogs] = useState<NewsRunLogEntry[]>([]);
   const lastId = useRef(0);
@@ -33,9 +43,7 @@ export function useDiscoveryLogs(runId: number | null, enabled: boolean, include
         if (data.logs.length) {
           lastId.current = Math.max(lastId.current, ...data.logs.map((l) => l.id));
         }
-        const nextLogs = includeAll
-          ? data.logs.filter((l) => DISCOVERY_RELATED_STAGES.has(l.stage))
-          : data.logs.filter((l) => Number((l as Record<string, unknown>).run_id) === runId);
+        const nextLogs = data.logs.filter((l) => isDiscoveryLog(l, includeAll, runId));
         if (!stop) setLogs((prev) => [...prev, ...nextLogs]);
       } catch { /* ignore */ }
     }
