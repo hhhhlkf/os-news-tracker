@@ -71,10 +71,11 @@ describe("useDiscoveryLogs", () => {
     expect(container.textContent).not.toContain("other run");
   });
 
-  it("keeps all logs when includeAll is enabled", async () => {
+  it("keeps only discovery and crawl-method logs when includeAll is enabled", async () => {
     const batch: NewsRunLogEntry[] = [
-      { id: 4, ts: "2026-07-01T00:00:00Z", level: "info", stage: "other", source: null, message: "other run", run_id: 99 },
-      { id: 5, ts: "2026-07-01T00:00:01Z", level: "info", stage: "discovery", source: null, message: "mine-1", run_id: 7 },
+      { id: 4, ts: "2026-07-01T00:00:00Z", level: "info", stage: "process", source: null, message: "other run", run_id: 99 },
+      { id: 5, ts: "2026-07-01T00:00:01Z", level: "info", stage: "探查", source: null, message: "mine-1", run_id: 7 },
+      { id: 6, ts: "2026-07-01T00:00:02Z", level: "info", stage: "抓方式", source: null, message: "method-run", method_id: 5 },
     ];
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValue(new Response(JSON.stringify({ logs: batch }), { status: 200, headers: { "Content-Type": "application/json" } }));
@@ -85,6 +86,7 @@ describe("useDiscoveryLogs", () => {
     });
     await flush();
 
-    expect(container.textContent).toContain("other run|mine-1");
+    expect(container.textContent).toContain("mine-1|method-run");
+    expect(container.textContent).not.toContain("other run");
   });
 });

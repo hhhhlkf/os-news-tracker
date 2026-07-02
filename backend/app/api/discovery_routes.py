@@ -228,18 +228,37 @@ def discovery_fetch(
         method_id=m.id,
         entry_url=m.entry_url,
         status=m.status,
+        time_mode=request.time_mode if request else None,
+        relative_range=request.relative_range if request else None,
+        start_at=request.start_at.isoformat() if request and request.start_at else None,
+        end_at=request.end_at.isoformat() if request and request.end_at else None,
+        target_count=request.target_count if request else None,
     )
     stored = 0
     try:
         output = run_method(recipe)  # 纯确定性执行（可被测试 mock）
-        output["items"] = _apply_fetch_limits(list(output.get("items", [])), request)
+        raw_items = list(output.get("items", []))
         append_run_log(
             "抓方式",
-            "DSL 执行完成，准备入库",
+            "DSL 执行完成",
             source=m.domain,
             method_id=m.id,
-            discovered_count=len(output.get("items", [])),
+            raw_count=len(raw_items),
+            stats_count=output.get("stats", {}).get("discovered_count"),
+        )
+        filtered_items = _apply_fetch_limits(raw_items, request)
+        output["items"] = filtered_items
+        append_run_log(
+            "抓方式",
+            "抓取限制已应用",
+            source=m.domain,
+            method_id=m.id,
+            input_count=len(raw_items),
+            kept_count=len(filtered_items),
+            dropped_count=max(len(raw_items) - len(filtered_items), 0),
             limit_applied=bool(request),
+            time_mode=request.time_mode if request else None,
+            target_count=request.target_count if request else None,
         )
         # 转 RawItem → 走正常 pipeline 路径（调 Enricher LLM 富化：category/tags/summary/importance）
         raws = CrawlOutputIngester().to_raw_items(output, source_id=m.source_id)
@@ -248,6 +267,7 @@ def discovery_fetch(
         for raw in raws:
             if pipeline.process_item(source, raw):
                 stored += 1
+        last_run_status = "ok" if stored > 0 else "empty"
         append_run_log(
             "抓方式",
             "爬取方式抓取完成",
@@ -255,6 +275,7 @@ def discovery_fetch(
             method_id=m.id,
             discovered_count=len(raws),
             stored_count=stored,
+            last_run_status=last_run_status,
             summary=(
                 f"抓取 {len(raws)} 条，入库 {stored} 条"
                 if stored > 0
@@ -268,6 +289,7 @@ def discovery_fetch(
             source=m.domain,
             method_id=m.id,
             level="error",
+            error_type=type(exc).__name__,
         )
         raise
     m.last_run_at = datetime.now(timezone.utc)

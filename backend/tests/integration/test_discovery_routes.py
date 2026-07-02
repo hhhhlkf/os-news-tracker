@@ -313,15 +313,46 @@ def test_discovery_fetch_logs_are_visible_to_news_run_log_panel(client, session,
 
     monkeypatch.setattr(
         "app.api.discovery_routes.run_method",
-        lambda recipe: {"items": [], "stats": {"discovered_count": 0}},
+        lambda recipe: {
+            "items": [
+                {"title": "recent", "url": "https://x.com/a", "published_at": "2026-07-02T10:00:00Z"},
+                {"title": "older", "url": "https://x.com/b", "published_at": "2026-06-02T10:00:00Z"},
+            ],
+            "stats": {"discovered_count": 2},
+        },
     )
 
-    r = client.post(f"/discovery/methods/{m.id}/fetch")
+    r = client.post(
+        f"/discovery/methods/{m.id}/fetch",
+        json={
+            "time_mode": "absolute",
+            "start_at": "2026-07-01T00:00:00Z",
+            "end_at": "2026-07-03T00:00:00Z",
+            "target_count": 1,
+        },
+    )
     assert r.status_code == 200
 
     logs = client.get("/news-run/logs").json()["logs"]
-    assert any(log["stage"] == "抓方式" and log.get("method_id") == m.id for log in logs)
+    fetch_logs = [log for log in logs if log["stage"] == "抓方式" and log.get("method_id") == m.id]
+    assert fetch_logs
     assert any("开始抓取爬取方式" in log["message"] for log in logs)
+    assert any("DSL 执行完成" in log["message"] and log.get("raw_count") == 2 for log in fetch_logs)
+    assert any(
+        "抓取限制已应用" in log["message"]
+        and log.get("input_count") == 2
+        and log.get("kept_count") == 1
+        and log.get("dropped_count") == 1
+        and log.get("target_count") == 1
+        for log in fetch_logs
+    )
+    assert any(
+        "爬取方式抓取完成" in log["message"]
+        and log.get("discovered_count") == 1
+        and log.get("stored_count") == 0
+        and log.get("last_run_status") == "empty"
+        for log in fetch_logs
+    )
 
 
 def test_discover_run_with_custom_name(client):

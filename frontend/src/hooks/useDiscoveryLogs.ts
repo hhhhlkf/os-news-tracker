@@ -3,6 +3,19 @@ import { useEffect, useRef, useState } from "react";
 import { authHeaders } from "../auth";
 import type { NewsRunLogEntry } from "../types";
 
+const DISCOVERY_RELATED_STAGES = new Set([
+  "任务",
+  "抓首页",
+  "抓网络请求",
+  "路由",
+  "探查",
+  "验证URL",
+  "写配方",
+  "审计",
+  "存库",
+  "抓方式",
+]);
+
 export function useDiscoveryLogs(runId: number | null, enabled: boolean, includeAll = false) {
   const [logs, setLogs] = useState<NewsRunLogEntry[]>([]);
   const lastId = useRef(0);
@@ -21,7 +34,7 @@ export function useDiscoveryLogs(runId: number | null, enabled: boolean, include
           lastId.current = Math.max(lastId.current, ...data.logs.map((l) => l.id));
         }
         const nextLogs = includeAll
-          ? data.logs
+          ? data.logs.filter((l) => DISCOVERY_RELATED_STAGES.has(l.stage))
           : data.logs.filter((l) => Number((l as Record<string, unknown>).run_id) === runId);
         if (!stop) setLogs((prev) => [...prev, ...nextLogs]);
       } catch { /* ignore */ }
