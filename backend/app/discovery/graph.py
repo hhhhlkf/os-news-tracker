@@ -16,6 +16,14 @@ from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, END
 
 from app.config import get_settings
+from app.discovery.cancel import (
+    DiscoveryCancelled,
+    activate_run,
+    deactivate_run,
+    ensure_not_cancelled,
+    register_run,
+    unregister_run,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,16 +32,16 @@ MAX_ATTEMPTS = 3      # 图级重试上限
 STALE_RUN_TIMEOUT_SECONDS = 1800       # running 超过 30 分钟判超时回收（定时巡检用）
 STALE_RUN_PATROL_INTERVAL_MINUTES = 5  # 定时巡检间隔
 
-# node_name → 日志 stage 标签（前端渲染 [stage] source message · key=value）
+# node_name → 流程图节点标签 / 日志 stage 标签（前端渲染 [stage] source message · key=value）
 _STAGE_LABELS = {
-    "fetch_homepage": "探查",
-    "capture_network": "探查",
+    "fetch_homepage": "抓首页",
+    "capture_network": "抓网络请求",
     "supervisor": "路由",
     "explorer": "探查",
-    "validator": "验证",
-    "dsl_writer": "配方",
+    "validator": "验证URL",
+    "dsl_writer": "写配方",
     "auditor": "审计",
-    "save_method": "存储",
+    "save_method": "存库",
 }
 
 # node_name → 日志描述
@@ -70,11 +78,90 @@ class DiscoveryState(TypedDict, total=False):
     explorer_parse_error: str | None
 
 
+class ExplorationFetch(BaseModel):
+    method: str = "GET"
+    headers: dict = Field(default_factory=dict)
+    query: dict = Field(default_factory=dict)
+    json_body: dict | None = None
+
+
+class ExplorationFormatLocator(BaseModel):
+    kind: str = "unknown"
+    value: str = ""
+
+
+class ExplorationFields(BaseModel):
+    id: str | None = None
+    title: str | None = None
+    url: str | None = None
+    published_at: str | None = None
+    summary: str | None = None
+    content: str | None = None
+
+
+class ExplorationHtmlSelectors(BaseModel):
+    item_selector: str | None = None
+    link_selector: str | None = None
+    title_selector: str | None = None
+    date_selector: str | None = None
+
+
+class ExplorationSampleItem(BaseModel):
+    raw: dict | str | None = None
+    id: str | None = None
+    title: str | None = None
+    url: str | None = None
+    published_at: str | None = None
+
+
+class ExplorationUrlCandidate(BaseModel):
+    mode: str = "unknown"
+    url_field: str | None = None
+    id_field: str | None = None
+    template: str | None = None
+    verification: str | None = None
+
+
+class ExplorationPagination(BaseModel):
+    type: str = "unknown"
+    page_param: str | None = None
+    size_param: str | None = None
+    offset_param: str | None = None
+    limit_param: str | None = None
+    cursor_param: str | None = None
+    next_path: str | None = None
+    has_more_path: str | None = None
+    start: int = 1
+    size: int | None = None
+    notes: str = ""
+
+
+class ExplorationEvidence(BaseModel):
+    tool: str
+    summary: str
+
+
+class ExplorationResult(BaseModel):
+    source_type: str = "unknown"
+    list_url: str | None = None
+    fetch: ExplorationFetch = Field(default_factory=ExplorationFetch)
+    format_locator: ExplorationFormatLocator = Field(default_factory=ExplorationFormatLocator)
+    fields: ExplorationFields = Field(default_factory=ExplorationFields)
+    html_selectors: ExplorationHtmlSelectors = Field(default_factory=ExplorationHtmlSelectors)
+    sample_items: list[ExplorationSampleItem] = Field(default_factory=list)
+    url_candidates: list[ExplorationUrlCandidate] = Field(default_factory=list)
+    pagination: ExplorationPagination = Field(default_factory=ExplorationPagination)
+    evidence: list[ExplorationEvidence] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+    success: bool = False
+
+
 def supervisor_route(state: DiscoveryState) -> str:
     """supervisor 路由：按 State 决定下一个节点。
 
     优先级：token 硬中止 > audit 通过 > 重试用尽 > 接力。
     """
+    ensure_not_cancelled()
     if state.get("token_used", 0) >= TOKEN_BUDGET:
         return "__end__"  # token 超预算，硬中止
     audit = state.get("audit_result")
@@ -96,6 +183,7 @@ def supervisor_route(state: DiscoveryState) -> str:
 
 def fetch_homepage(state: DiscoveryState) -> DiscoveryState:
     """确定性节点：抓首页 html/links，零 LLM。"""
+    ensure_not_cancelled()
     from app.discovery.tools import fetch_page
     out = fetch_page.invoke({"url": state["site_url"], "render_js": False})
     return {"homepage": out}
@@ -103,6 +191,7 @@ def fetch_homepage(state: DiscoveryState) -> DiscoveryState:
 
 def capture_network(state: DiscoveryState) -> DiscoveryState:
     """确定性节点：Playwright 抓 XHR/JSON，零 LLM。"""
+    ensure_not_cancelled()
     from app.discovery.tools import capture_network as _cap
     caps = _cap.invoke({"url": state["site_url"]})
     return {"network_captures": caps}
@@ -115,6 +204,7 @@ def save_method(state: DiscoveryState, db=None) -> DiscoveryState:
     否则新建 crawl_method + 对应 sources(type=discovery) 记录。
     db=None 时自建 SessionLocal（图运行命用）；传入 db 时复用（测试用，不负责关闭）。
     """
+    ensure_not_cancelled()
     own_session = db is None
     if own_session:
         from app.db import SessionLocal
@@ -221,7 +311,12 @@ EXPLORER_SYSTEM_PROMPT = """# 角色
    把结果记进 url_candidates（只给候选 + 初步验证，不正式产出 UrlRule）。
 8. 控制工具调用次数，信息足够后停止。
 
-# 输出（最终回复必须是 JSON，不要 Markdown，不要解释，不要包代码块）
+# 最终回答规则（最高优先级）
+- 你可以自由调用工具做探索，但最终回复必须只输出一个 JSON object。
+- 禁止输出 Markdown、禁止 ```json 代码块、禁止任何解释性前后缀、禁止“下面是结果”之类文字。
+- 如果你最后输出的不是单个合法 JSON object，这次任务就算失败。
+
+# 输出（最终回复必须是严格 JSON object）
 固定字段：
 {
   "source_type": "json_api | rss | atom | html | unknown",
@@ -252,11 +347,13 @@ EXPLORER_SYSTEM_PROMPT = """# 角色
 - 如果列表已有 url/link 字段，在 url_candidates 里记 mode=existing_url，不要强行推模板。
 - 站点有反爬、JS 渲染、需登录、POST body、特殊 headers，要明确写在 notes。
 - 探查失败或没找到列表数据源，如实输出 source_type=unknown、success=false。
+- 最终答案只能是一个可被 json.loads 直接解析的对象；不要包代码块，不要加说明文字。
 """
 
 
 def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
     """Explorer worker：先 ReAct 探证据，再单独做结构化整理。"""
+    ensure_not_cancelled()
     llm = llm or _make_llm()
     from app.discovery.tools import TOOLS
     from langgraph.prebuilt import create_react_agent
@@ -264,18 +361,30 @@ def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
     result = agent.invoke({
         "messages": [("user", _explorer_input_message(state))],
     })
+    ensure_not_cancelled()
     agent_output = _extract_final_ai_content(result)
     synth_raw = ""
     parse_error = None
     try:
+        first_stage = _parse_strict_exploration_output(agent_output)
+    except Exception as e:
+        parse_error = str(e)
+        exploration = _derive_exploration_from_state(state) or _unknown_exploration()
+        return {
+            "exploration": exploration,
+            "explorer_agent_output": agent_output,
+            "explorer_synthesis_output": synth_raw,
+            "explorer_parse_error": parse_error,
+        }
+    try:
         synth_raw, exploration = _synthesize_exploration(
             site_url=state["site_url"],
             result=result,
-            agent_output=agent_output,
+            first_stage_exploration=first_stage,
         )
     except Exception as e:
         parse_error = str(e)
-        exploration = _parse_json_or_fallback(agent_output)
+        exploration = first_stage
     return {
         "exploration": exploration,
         "explorer_agent_output": agent_output,
@@ -291,6 +400,136 @@ def _extract_final_ai_content(result: dict) -> str:
         if isinstance(msg, AIMessage) and msg.content:
             return msg.content
     return ""
+
+
+def _derive_exploration_from_state(state: DiscoveryState) -> dict | None:
+    """从已有确定性证据直接拼 exploration，减少对 LLM 结构化稳定性的依赖。"""
+    caps = state.get("network_captures") or []
+    for cap in caps:
+        parsed = cap.get("parsed_json")
+        best = _find_best_json_items_path(parsed)
+        if not best:
+            continue
+        path, items = best
+        fields = _infer_item_fields(items[0], state["site_url"])
+        sample_items = _build_sample_items(items, state["site_url"])
+        if not sample_items:
+            continue
+        return ExplorationResult(
+            source_type="json_api",
+            list_url=cap.get("api_url"),
+            fetch={
+                "method": cap.get("method") or "GET",
+                "headers": {},
+                "query": {},
+                "json_body": cap.get("request_json_body"),
+            },
+            format_locator={"kind": "json_path", "value": path},
+            fields=fields,
+            html_selectors={
+                "item_selector": None, "link_selector": None, "title_selector": None, "date_selector": None,
+            },
+            sample_items=sample_items,
+            url_candidates=[{
+                "mode": "existing_url" if fields.get("url") else "unknown",
+                "url_field": fields.get("url"),
+                "id_field": fields.get("id"),
+                "template": None,
+                "verification": "captured_network_response",
+            }],
+            pagination={
+                "type": "unknown", "page_param": None, "size_param": None, "offset_param": None,
+                "limit_param": None, "cursor_param": None, "next_path": None, "has_more_path": None,
+                "start": 1, "size": None, "notes": "deterministic fallback from capture_network",
+            },
+            evidence=[{
+                "tool": "capture_network",
+                "summary": f"api_url={cap.get('api_url')} · items_path={path} · sample_items={len(sample_items)}",
+            }],
+            notes=["deterministic fallback from captured network response"],
+            success=True,
+        ).model_dump()
+    return None
+
+
+def _find_best_json_items_path(payload: object) -> tuple[str, list[dict]] | None:
+    """在 JSON 响应里找最像文章列表的数组路径。"""
+    candidates: list[tuple[int, str, list[dict]]] = []
+
+    def walk(node: object, path: str) -> None:
+        if isinstance(node, list) and node and all(isinstance(item, dict) for item in node[:5]):
+            score = _score_item_list(node)
+            if score > 0:
+                candidates.append((score, path or "obj", node))
+            return
+        if isinstance(node, dict):
+            for key, value in node.items():
+                walk(value, f"{path}.{key}" if path else key)
+
+    walk(payload, "")
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    _, path, items = candidates[0]
+    return path, items
+
+
+def _score_item_list(items: list[dict]) -> int:
+    first = items[0] if items else {}
+    keys = set(first.keys())
+    score = 0
+    if keys & {"title", "name", "subject"}:
+        score += 3
+    if keys & {"url", "link", "href", "path"}:
+        score += 3
+    if keys & {"date", "published_at", "pubDate", "publishTime", "created_at", "time"}:
+        score += 2
+    if len(items) >= 2:
+        score += 1
+    return score
+
+
+def _infer_item_fields(sample: dict, site_url: str) -> dict:
+    def pick(*names: str) -> str | None:
+        for name in names:
+            if name in sample:
+                return name
+        return None
+
+    return {
+        "id": pick("id", "no", "slug", "uuid"),
+        "title": pick("title", "name", "subject"),
+        "url": pick("url", "link", "href", "path"),
+        "published_at": pick("published_at", "date", "pubDate", "publishTime", "created_at", "time"),
+        "summary": pick("summary", "description", "desc", "brief"),
+        "content": pick("content", "textContent", "body", "text"),
+    }
+
+
+def _build_sample_items(items: list[dict], site_url: str) -> list[dict]:
+    sample_items: list[dict] = []
+    for item in items[:5]:
+        url_field = None
+        for candidate in ("url", "link", "href", "path"):
+            if candidate in item and item.get(candidate):
+                url_field = candidate
+                break
+        raw_url = item.get(url_field) if url_field else None
+        sample_items.append({
+            "id": item.get("id") or item.get("no") or item.get("slug") or item.get("uuid"),
+            "url": urljoin(site_url, str(raw_url)) if raw_url else None,
+            "title": item.get("title") or item.get("name") or item.get("subject"),
+            "published_at": (
+                item.get("published_at")
+                or item.get("date")
+                or item.get("pubDate")
+                or item.get("publishTime")
+                or item.get("created_at")
+                or item.get("time")
+            ),
+            "raw": item,
+        })
+    return sample_items
 
 
 def _explorer_input_message(state: DiscoveryState) -> str:
@@ -355,11 +594,12 @@ def _explorer_evidence_payload(result: dict) -> list[dict]:
     return payload[-12:]
 
 
-def _synthesize_exploration(*, site_url: str, result: dict, agent_output: str) -> tuple[str, dict]:
+def _synthesize_exploration(*, site_url: str, result: dict, first_stage_exploration: dict) -> tuple[str, dict]:
     """第二阶段：根据 ReAct 证据整理结构化 exploration JSON。"""
     from app.llm.client import LlmClient
 
     evidence = _explorer_evidence_payload(result)
+    ensure_not_cancelled()
     prompt = (
         "你是站点探查结果整理器。"
         "请根据给定站点探查证据，输出一个 JSON object。"
@@ -384,7 +624,7 @@ def _synthesize_exploration(*, site_url: str, result: dict, agent_output: str) -
         '  "success": true\n'
         "}\n\n"
         f"站点 URL: {site_url}\n"
-        f"第一阶段最终输出:\n{agent_output}\n\n"
+        f"第一阶段严格 JSON 输出:\n{json.dumps(first_stage_exploration, ensure_ascii=False)}\n\n"
         f"ReAct 证据轨迹:\n{json.dumps(evidence, ensure_ascii=False)}\n"
     )
     raw = LlmClient().complete(
@@ -392,7 +632,44 @@ def _synthesize_exploration(*, site_url: str, result: dict, agent_output: str) -
         temperature=0.0,
         response_format={"type": "json_object"},
     )
-    return raw, _parse_json_or_fallback(raw)
+    parsed = _parse_strict_exploration_output(raw)
+    if parsed.get("source_type") == "unknown" and parsed.get("success") is False:
+        raise ValueError(_json_parse_error_message(raw))
+    return raw, parsed
+
+
+def _parse_strict_exploration_output(content: str) -> dict:
+    """严格解析 explorer 输出：必须是可直接 json.loads 的单个对象且满足 schema。"""
+    if not content:
+        raise ValueError("explorer output is empty")
+    try:
+        parsed = json.loads(content)
+    except Exception as e:
+        raise ValueError(f"strict exploration json parse failed: {e}") from e
+    if not isinstance(parsed, dict):
+        raise ValueError("strict exploration output must be a JSON object")
+    return ExplorationResult(**parsed).model_dump()
+
+
+def _unknown_exploration() -> dict:
+    return ExplorationResult(source_type="unknown", success=False).model_dump()
+
+
+def _json_parse_error_message(content: str) -> str:
+    """给原始文本生成更直接的 JSON 解析错误信息。"""
+    import re
+    try:
+        json.loads(content)
+        return "unknown parse failure"
+    except Exception as e:
+        direct = f"{type(e).__name__}: {e}"
+    m = re.search(r"```(?:json)?\s*(\{.*\})\s*```", content, re.DOTALL)
+    if m:
+        try:
+            json.loads(m.group(1))
+        except Exception as e:
+            return f"{type(e).__name__}: {e}"
+    return direct
 
 
 def _parse_json_or_fallback(content: str) -> dict:
@@ -415,11 +692,14 @@ def _parse_json_or_fallback(content: str) -> dict:
 
 class UrlRule(BaseModel):
     """LLM 推断的 URL 规律：mode + 模板/id 字段/url 字段 + 样本（供程序验证）。"""
-    mode: str = "unknown"                       # existing_url | template | unknown
+    mode: str = "unknown"                       # existing_url | path_join | template | unknown
     template: str | None = None                 # 仅 mode=template 时填，用 {id} 占位
+    base_url: str | None = None                 # 仅 mode=path_join 时填，和 path_field 拼接
+    path_field: str | None = None               # 仅 mode=path_join 时填，相对路径字段名
     id_field: str | None = None                 # 列表里充当 id 的字段名（原字段名）
     url_field: str | None = None                # 列表里直接给出 URL 的字段名（mode=existing_url）
     sample_items: list[dict] = Field(default_factory=list)  # [{id,url,title,raw}]
+    validation_samples: list[dict] = Field(default_factory=list)  # 验证样例 URL/值/状态
     confidence: str = "low"                     # high | medium | low
     reason: str = ""
 
@@ -441,14 +721,16 @@ VALIDATOR_PROMPT = """# 角色
 explorer 只给了候选，最终的 UrlRule 由你产出。
 
 # 任务
-判断文章详情页 URL 如何获得（三选一）：
+判断文章详情页 URL 如何获得（四选一）：
 1. 列表 item 已经直接给出 URL → mode=existing_url
-2. 需要用 id/slug/no 拼 URL 模板 → mode=template
-3. 无法判断 → mode=unknown
+2. 列表给的是相对路径字段（如 path）→ mode=path_join
+3. 需要用 id/slug/no 拼 URL 模板 → mode=template
+4. 无法判断 → mode=unknown
 你的输出会被程序拿真实样本请求验证，不通过会回退让你重提。
 
 # 背景
 - 如果列表里已有 url/link 字段，应直接使用该字段（mode=existing_url），不要多此一举去推模板。
+- 如果列表里给的是 path/href 这类相对路径字段，应输出 mode=path_join，填写 base_url 与 path_field。
 - 如果列表只有 id/slug/no，则需要推断模板，如 https://x.com/blog/{id}（mode=template）。
 - 如果没有把握，不要猜，mode=unknown。
 
@@ -460,8 +742,10 @@ explorer 只给了候选，最终的 UrlRule 由你产出。
 必须按 UrlRule schema 结构化输出：
 
 {
-  "mode": "existing_url | template | unknown",
+  "mode": "existing_url | path_join | template | unknown",
   "template": "详情页 URL 模板；仅 mode=template 时填写，必须使用 {id} 占位；否则 null",
+  "base_url": "path_join 时的站点根 URL；仅 mode=path_join 时填写；否则 null",
+  "path_field": "列表文章里提供相对路径的字段名；仅 mode=path_join 时填写；否则 null",
   "id_field": "列表文章里充当 id 的字段名；仅 mode=template 时填写；否则 null",
   "url_field": "列表文章里直接给出 URL 的字段名；仅 mode=existing_url 时填写；否则 null",
   "sample_items": [
@@ -477,15 +761,20 @@ explorer 只给了候选，最终的 UrlRule 由你产出。
 }
 
 已有 URL 字段的例子：
-{"mode": "existing_url", "template": null, "id_field": null, "url_field": "url", "sample_items": [...], "confidence": "high", "reason": "exploration.fields.url=link，sample_items 已有真实详情页链接"}
+{"mode": "existing_url", "template": null, "base_url": null, "path_field": null, "id_field": null, "url_field": "url", "sample_items": [...], "confidence": "high", "reason": "exploration.fields.url=link，sample_items 已有真实详情页链接"}
+
+相对路径字段的例子：
+{"mode": "path_join", "template": null, "base_url": "https://www.openeuler.org", "path_field": "path", "id_field": null, "url_field": null, "sample_items": [...], "confidence": "high", "reason": "sample_items.raw.path 是相对路径，需与站点根 URL 拼接"}
 
 # 质量约束
 - 如果 exploration.fields.url 或 sample_items.url 已有真实详情页链接，优先 mode=existing_url，不要强推 template。
+- 如果 raw 样本里字段值像 /xx/yy 这种相对路径，优先 mode=path_join，不要伪装成 template + {id}。
 - template 必须使用 {id} 占位符，不要写 {item.no}。
 - sample_items 必须来自 exploration.sample_items，严禁编造。
 - sample_items 数量 3~5 个；不足则给已有数量并说明。
 - 没把握就 mode=unknown，不要为了输出模板而猜。
 - id_field 必须是 exploration 里真实存在的字段名。
+- path_field 必须是 exploration 里真实存在的字段名。
 """
 
 
@@ -497,23 +786,58 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
     mode=unknown / 验证失败：probe_url_patterns 批量试常见 pattern 兜底。
     都不中 → evidence="unverified"。
     """
-    llm = llm or _make_llm()
-    from app.discovery.tools import test_url_template, probe_url_patterns
+    ensure_not_cancelled()
+    from app.discovery.tools import test_path_join, test_url_template, probe_url_patterns
     exploration = state.get("exploration") or {}
     prompt = (VALIDATOR_PROMPT
               .replace("{site_url}", state["site_url"])
               .replace("{exploration}", json.dumps(exploration, ensure_ascii=False)))
-    structured = llm.with_structured_output(UrlRule)
-    rule = structured.invoke(prompt)
-    rule_obj = rule if isinstance(rule, UrlRule) else UrlRule(**rule)
+    if llm is None:
+        from app.llm.client import LlmClient
+        ensure_not_cancelled()
+        raw = LlmClient().complete(
+            prompt,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        rule_obj = UrlRule(**_parse_json_or_fallback(raw))
+    else:
+        structured = llm.with_structured_output(UrlRule)
+        rule = structured.invoke(prompt)
+        rule_obj = rule if isinstance(rule, UrlRule) else UrlRule(**rule)
+    if rule_obj.mode == "template" and rule_obj.id_field == "path" and not rule_obj.path_field:
+        rule_obj = rule_obj.model_copy(update={
+            "mode": "path_join",
+            "base_url": state["site_url"],
+            "path_field": "path",
+            "template": None,
+            "id_field": None,
+        })
 
     # mode=existing_url：列表已有 url 字段，无需模板验证
     if rule_obj.mode == "existing_url" and rule_obj.url_field:
         return {"url_rule": {
             "mode": "existing_url", "url_field": rule_obj.url_field,
             "id_field": rule_obj.id_field, "evidence": "existing_url",
-            "confidence": rule_obj.confidence,
+            "confidence": rule_obj.confidence, "validation_samples": rule_obj.validation_samples,
         }}
+
+    if rule_obj.mode == "path_join" and rule_obj.base_url and rule_obj.path_field and rule_obj.sample_items:
+        test_out = test_path_join.invoke({
+            "base_url": rule_obj.base_url,
+            "path_field": rule_obj.path_field,
+            "sample_items": rule_obj.sample_items,
+        })
+        results = test_out.get("results", [])
+        valid = [r for r in results if r.get("is_article_page")]
+        if valid:
+            return {"url_rule": {
+                "mode": "path_join", "base_url": rule_obj.base_url,
+                "path_field": rule_obj.path_field,
+                "evidence": f"validated {len(valid)}/{len(results)}",
+                "confidence": rule_obj.confidence,
+                "validation_samples": results[:5],
+            }}
 
     # mode=template：test_url_template 程序验证（sample 里 id 值放在 "id" 键）
     if rule_obj.mode == "template" and rule_obj.template and rule_obj.sample_items:
@@ -529,6 +853,7 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
                 "mode": "template", "template": rule_obj.template,
                 "id_field": rule_obj.id_field, "evidence": f"validated {len(valid)}/{len(results)}",
                 "confidence": rule_obj.confidence,
+                "validation_samples": results[:5],
             }}
 
     # mode=unknown / template 验证失败 → probe_url_patterns 兜底
@@ -542,11 +867,14 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
             "mode": "template", "template": urljoin(state["site_url"], hit["pattern"]),
             "id_field": rule_obj.id_field, "evidence": f"probed: {hit['pattern']}",
             "confidence": "low",
+            "validation_samples": [hit],
         }}
     return {"url_rule": {
         "mode": rule_obj.mode, "template": rule_obj.template,
+        "base_url": rule_obj.base_url, "path_field": rule_obj.path_field,
         "id_field": rule_obj.id_field, "url_field": rule_obj.url_field,
         "evidence": "unverified", "confidence": rule_obj.confidence,
+        "validation_samples": rule_obj.validation_samples,
     }}
 
 
@@ -618,6 +946,8 @@ max_iters 必须 1~20。
 4. extract.fields 必须产出 title 和 url：
    - title 从 exploration.fields.title 或 html title_selector 来。
    - 如果 url_rule.mode=existing_url：url 直接用 url_rule.url_field（裸字段名），不要拼模板。
+   - 如果 url_rule.mode=path_join：url 用 template:{base_url}{item.<path_field>}。
+     例如 base_url=https://www.openeuler.org、path_field=path，则 DSL 写 template:https://www.openeuler.org{item.path}。
    - 如果 url_rule.mode=template：url 用 template:，并把 {id} 转成 {item.<id_field>}。
      例如 url_rule.template=https://x.com/blog/{id}、id_field=no，则 DSL 写 template:https://x.com/blog/{item.no}。
    - 如果 HTML 链接来自 link_selector：url 用 attr:href，并确保 extract 的 from（item selector）能定位到含链接的元素。
@@ -641,21 +971,62 @@ max_iters 必须 1~20。
 
 def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
     """DslWriter worker：with_structured_output 强制产出合法 DSL Recipe（喂 site_url+url_rule+exploration）。"""
-    llm = llm or _make_llm()
+    ensure_not_cancelled()
     from app.discovery.dsl import DslRecipe
     exploration = state.get("exploration") or {}
     url_rule = state.get("url_rule") or {}
+    if url_rule.get("mode") == "path_join" and url_rule.get("base_url") and url_rule.get("path_field"):
+        fields = dict(exploration.get("fields") or {})
+        path_field = url_rule["path_field"]
+        fields["url"] = f"template:{url_rule['base_url']}{{item.{path_field}}}"
+        recipe_dict = {
+            "recipe_type": "dsl",
+            "entry_url": state["site_url"],
+            "actions": [
+                {
+                    "op": "fetch",
+                    "mode": "json",
+                    "url": exploration.get("list_url") or state["site_url"],
+                    "method": (exploration.get("fetch") or {}).get("method", "GET"),
+                    "headers": (exploration.get("fetch") or {}).get("headers", {}),
+                    "query": (exploration.get("fetch") or {}).get("query", {}),
+                    "json_body": (exploration.get("fetch") or {}).get("json_body"),
+                    "as": "last_fetch",
+                },
+                {
+                    "op": "extract",
+                    "from": (exploration.get("format_locator") or {}).get("value", "obj.records"),
+                    "fields": {k: v for k, v in fields.items() if v is not None},
+                    "into": "items",
+                    "merge": False,
+                },
+                {"op": "dedup_by", "field": "url"},
+            ],
+            "notes": ["deterministic path_join recipe"],
+        }
+        return {"dsl_recipe": DslRecipe(**recipe_dict).model_dump(), "token_used": state.get("token_used", 0) + 1000}
     prompt = (DSL_WRITER_PROMPT
               .replace("{site_url}", state["site_url"])
               .replace("{url_rule}", json.dumps(url_rule, ensure_ascii=False))
               .replace("{exploration}", json.dumps(exploration, ensure_ascii=False)))
-    structured = llm.with_structured_output(DslRecipe)  # Pydantic 校验，不合法让 LLM 重产
-    recipe = structured.invoke(prompt)
-    # with_structured_output 真实路径返回 DslRecipe 实例；部分后端/mock 返回 dict —— 统一转 dict
-    if isinstance(recipe, DslRecipe):
-        recipe_dict = recipe.model_dump()
+    if llm is None:
+        from app.llm.client import LlmClient
+
+        ensure_not_cancelled()
+        raw = LlmClient().complete(
+            prompt,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        recipe_dict = DslRecipe(**_parse_json_or_fallback(raw)).model_dump()
     else:
-        recipe_dict = DslRecipe(**recipe).model_dump()
+        structured = llm.with_structured_output(DslRecipe)  # 测试 mock 路径保留
+        recipe = structured.invoke(prompt)
+        # with_structured_output 真实路径返回 DslRecipe 实例；部分后端/mock 返回 dict —— 统一转 dict
+        if isinstance(recipe, DslRecipe):
+            recipe_dict = recipe.model_dump()
+        else:
+            recipe_dict = DslRecipe(**recipe).model_dump()
     return {"dsl_recipe": recipe_dict, "token_used": state.get("token_used", 0) + 1000}
 
 
@@ -754,6 +1125,16 @@ def _llm_audit_quality(llm, site_url: str, recipe: DslRecipe, items: list, error
         n=len(sample),
         discovered_count=len(items),
     )
+    if llm is None:
+        from app.llm.client import LlmClient
+
+        ensure_not_cancelled()
+        raw = LlmClient().complete(
+            prompt,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        return AuditVerdict(**_parse_json_or_fallback(raw)).model_dump()
     structured = llm.with_structured_output(AuditVerdict)
     verdict = structured.invoke(prompt)
     if isinstance(verdict, AuditVerdict):
@@ -767,7 +1148,7 @@ def auditor(state: DiscoveryState, llm=None, test_fn=None) -> DiscoveryState:
     区别于 validator：validator 验单条 URL 规律真伪，auditor 复核整份 Recipe 的实跑结果质量。
     test_fn: 注入"跑配方返回产出"的函数（测试 mock）；None → 真跑 DslInterpreter（生产）。
     """
-    llm = llm or _make_llm()
+    ensure_not_cancelled()
     from app.discovery.dsl import DslRecipe, validate_semantics
     recipe = DslRecipe(**state["dsl_recipe"])
     errors = validate_semantics(recipe)  # 静态审：结构合理性
@@ -845,6 +1226,7 @@ def start_discovery_run(site_url: str, force: bool = False, name: str | None = N
         run_id = run.id
     finally:
         s.close()
+    register_run(run_id)
     threading.Thread(
         target=_execute_discovery, args=(run_id, site_url, force, name),
         daemon=True, name=f"discovery-run-{run_id}",
@@ -876,8 +1258,15 @@ def _step_summary(node_name: str, update: dict) -> dict:
         }
     if node_name == "validator":
         u = update.get("url_rule") or {}
-        return {"mode": u.get("mode"), "template": u.get("template"),
-                "evidence": u.get("evidence")}
+        return {
+            "mode": u.get("mode"),
+            "template": u.get("template"),
+            "base_url": u.get("base_url"),
+            "path_field": u.get("path_field"),
+            "id_field": u.get("id_field"),
+            "evidence": u.get("evidence"),
+            "validation_samples": u.get("validation_samples"),
+        }
     if node_name == "dsl_writer":
         r = update.get("dsl_recipe") or {}
         actions = r.get("actions") or []
@@ -890,7 +1279,12 @@ def _step_summary(node_name: str, update: dict) -> dict:
     return {}
 
 
-def _step_log_detail(node_name: str, update: dict) -> str:
+def _display_step_name(node_name: str) -> str:
+    """给日志 detail 里的 next= 使用可读节点名。"""
+    return _STAGE_LABELS.get(node_name, node_name)
+
+
+def _step_log_detail(node_name: str, update: dict, state: DiscoveryState | None = None) -> str:
     """从节点产出提取关键信息，拼成日志尾部详情（· key=value 格式）。"""
     if node_name == "fetch_homepage":
         h = update.get("homepage") or {}
@@ -900,24 +1294,42 @@ def _step_log_detail(node_name: str, update: dict) -> str:
         return f" · status={status} · title={title} · links={n_links}"
     if node_name == "capture_network":
         caps = update.get("network_captures") or []
-        return f" · 捕获 {len(caps)} 个 JSON API"
+        sample = ", ".join((c.get("api_url") or "")[:80] for c in caps[:3] if c.get("api_url"))
+        return f" · 捕获 {len(caps)} 个 JSON API · sample={sample or '无'}"
+    if node_name == "supervisor":
+        next_step = supervisor_route(state or DiscoveryState())
+        return f" · next={_display_step_name(next_step)}"
     if node_name == "explorer":
         e = update.get("exploration") or {}
         st = e.get("source_type", "?")
         status = e.get("success")
-        return f" · source_type={st} · success={status}"
+        list_url = _truncate_text(e.get("list_url"), 120) or "无"
+        return f" · source_type={st} · success={status} · list_url={list_url}"
     if node_name == "validator":
         u = update.get("url_rule") or {}
-        return f" · mode={u.get('mode', '?')} · evidence={u.get('evidence', '?')}"
+        template = _truncate_text(u.get("template"), 120) or "无"
+        url_field = u.get("url_field") or "无"
+        path_field = u.get("path_field") or "无"
+        id_field = u.get("id_field") or "无"
+        samples = u.get("validation_samples") or []
+        sample_values = ", ".join(str(s.get("sample_value") or s.get("url") or "") for s in samples[:2] if (s.get("sample_value") or s.get("url")))
+        return (
+            f" · mode={u.get('mode', '?')} · evidence={u.get('evidence', '?')}"
+            f" · url_field={url_field} · path_field={path_field} · id_field={id_field}"
+            f" · template={template} · sample_values={sample_values or '无'}"
+        )
     if node_name == "dsl_writer":
         r = update.get("dsl_recipe") or {}
         actions = r.get("actions") or []
         has_loop = any(a.get("op") == "loop" for a in actions)
-        return f" · actions={len(actions)} · has_loop={has_loop}"
+        ops = " > ".join(str(a.get("op")) for a in actions[:6] if a.get("op"))
+        return f" · actions={len(actions)} · has_loop={has_loop} · ops={ops or '无'}"
     if node_name == "auditor":
         a = update.get("audit_result") or {}
         passed = a.get("passed")
-        return f" · passed={passed} · attempt={update.get('attempt')}"
+        issues = a.get("llm_verdict", {}).get("issues") or []
+        issues_text = "; ".join(str(i) for i in issues[:3]) or "无"
+        return f" · passed={passed} · attempt={update.get('attempt')} · issues={issues_text}"
     return ""
 
 
@@ -935,6 +1347,7 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
     from app.run_logs import append_run_log
     s = get_settings()
     source_label = name or site_url
+    token = activate_run(run_id)
     with PostgresSaver.from_conn_string(_to_psycopg_conn_string(s.database_url)) as checkpointer:
         checkpointer.setup()  # 自动建 checkpoint 表
         g = build_graph(checkpointer=checkpointer)
@@ -943,22 +1356,39 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
             config = {"configurable": {"thread_id": f"discovery-{run_id}"}}
             initial = {"site_url": site_url, "attempt": 0, "token_used": 0, "force": force, "name": name}
             node_trace: list = []
+            current_state: DiscoveryState = dict(initial)
             append_run_log("任务", "Discovery 探查开始", source=source_label,
                            run_id=run_id, url=site_url, force=force)
             # 逐节点 stream → 实时更新 node_trace 供前端轮询 + log 输出
             for chunk in g.stream(initial, config=config, stream_mode="updates"):
+                ensure_not_cancelled()
                 for node_name, update in chunk.items():
+                    current_state.update(update or {})
                     entry = {"step": node_name, "status": "done",
                              "ts": datetime.now(timezone.utc).isoformat(),
                              "summary": _step_summary(node_name, update or {})}
                     node_trace.append(entry)
                     stage = _STAGE_LABELS.get(node_name, node_name)
                     base_msg = _STEP_MESSAGES.get(node_name, f"步骤 {node_name} 完成")
-                    detail = _step_log_detail(node_name, update or {})
+                    detail = _step_log_detail(node_name, update or {}, current_state)
                     append_run_log(stage, base_msg + detail, source=source_label,
                                    run_id=run_id, step=node_name, trace_count=len(node_trace))
                     if node_name == "explorer":
                         _append_explorer_generation_logs(
+                            append_run_log=append_run_log,
+                            run_id=run_id,
+                            source_label=source_label,
+                            update=update or {},
+                        )
+                    if node_name == "validator":
+                        _append_validator_logs(
+                            append_run_log=append_run_log,
+                            run_id=run_id,
+                            source_label=source_label,
+                            update=update or {},
+                        )
+                    if node_name == "dsl_writer":
+                        _append_dsl_writer_logs(
                             append_run_log=append_run_log,
                             run_id=run_id,
                             source_label=source_label,
@@ -988,6 +1418,17 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
                            token_used=final.get("token_used", 0))
             logger.info("discovery run %s: finished, verdict=%s, %d steps traced",
                         run_id, final.get("verdict"), len(node_trace))
+        except DiscoveryCancelled as e:
+            db_sess.rollback()
+            run = db_sess.get(SiteDiscoveryRun, run_id)
+            if run:
+                run.status = "cancelled"
+                run.error_message = str(e)
+                run.ended_at = datetime.now(timezone.utc)
+                db_sess.commit()
+            append_run_log("任务", f"Discovery 已取消 · {e}", source=source_label,
+                           run_id=run_id, level="warning")
+            logger.info("discovery run %s: cancelled", run_id)
         except Exception as e:
             # 兜底：图级异常标 failed（节点级异常已在 supervisor 路由处理）
             db_sess.rollback()
@@ -1001,6 +1442,8 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
             logger.exception("discovery run %s: failed with exception", run_id)
         finally:
             db_sess.close()
+            deactivate_run(token)
+            unregister_run(run_id)
 
 
 def _append_explorer_generation_logs(*, append_run_log, run_id: int, source_label: str, update: dict) -> None:
@@ -1033,6 +1476,34 @@ def _append_explorer_generation_logs(*, append_run_log, run_id: int, source_labe
             level="warning",
             step="explorer_parse_error",
         )
+
+
+def _append_dsl_writer_logs(*, append_run_log, run_id: int, source_label: str, update: dict) -> None:
+    """把 dsl_writer 的完整 recipe 写入日志面板，便于直接排查配方内容。"""
+    recipe = update.get("dsl_recipe")
+    if not recipe:
+        return
+    append_run_log(
+        "写配方",
+        f"DSL 全量输出 · {json.dumps(recipe, ensure_ascii=False, indent=2)}",
+        source=source_label,
+        run_id=run_id,
+        step="dsl_writer_recipe",
+    )
+
+
+def _append_validator_logs(*, append_run_log, run_id: int, source_label: str, update: dict) -> None:
+    """把 validator 的完整规则与验证样例写入日志。"""
+    rule = update.get("url_rule")
+    if not rule:
+        return
+    append_run_log(
+        "验证URL",
+        f"URL 规律全量输出 · {json.dumps(rule, ensure_ascii=False, indent=2)}",
+        source=source_label,
+        run_id=run_id,
+        step="validator_rule",
+    )
 
 
 def run_discovery(site_url: str, force: bool = False, name: str | None = None) -> dict:

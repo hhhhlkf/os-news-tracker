@@ -1,5 +1,7 @@
 """SiteDiscoveryGraph 单元测试 — supervisor 路由优先级 + 接力顺序。"""
 
+import json
+
 from app.discovery.graph import supervisor_route, DiscoveryState, TOKEN_BUDGET, MAX_ATTEMPTS
 
 
@@ -83,11 +85,55 @@ def test_dsl_writer_produces_recipe_with_mock_llm():
     assert out["dsl_recipe"]["actions"][0]["op"] == "fetch"
 
 
+def test_dsl_writer_path_join_shortcut_produces_template_url():
+    from app.discovery.graph import dsl_writer
+    state = _state(
+        site_url="https://www.openeuler.org",
+        exploration={
+            "list_url": "https://www.openeuler.org/api-search/search/sort/blog",
+            "fetch": {
+                "method": "POST",
+                "headers": {"Content-Type": "application/json"},
+                "query": {},
+                "json_body": {"category": "blog", "page": 1, "pageSize": 12},
+            },
+            "format_locator": {"kind": "json_path", "value": "obj.records"},
+            "fields": {"title": "title", "published_at": "date", "summary": "summary", "content": "textContent"},
+        },
+        url_rule={"mode": "path_join", "base_url": "https://www.openeuler.org", "path_field": "path"},
+    )
+    out = dsl_writer(state)
+    extract = next(a for a in out["dsl_recipe"]["actions"] if a["op"] == "extract")
+    assert extract["fields"]["url"] == "template:https://www.openeuler.org{item.path}"
+
+
 def test_dsl_writer_increments_token_usage():
     from app.discovery.graph import dsl_writer
     state = _state(token_used=500, url_rule={"template": "https://x/{item.no}"})
     out = dsl_writer(state, llm=_MockChat())
     assert out["token_used"] == 1500  # +1000 per dsl_writer call
+
+
+def test_dsl_writer_uses_json_object_llm_path_in_production(monkeypatch):
+    from app.discovery import graph as graph_mod
+
+    captured = {}
+
+    def fake_complete(self, prompt, *, temperature=0.2, response_format=None):
+        captured["prompt"] = prompt
+        captured["temperature"] = temperature
+        captured["response_format"] = response_format
+        return json.dumps(_DSL_RECIPE_MOCK, ensure_ascii=False)
+
+    monkeypatch.setattr("app.llm.client.LlmClient.complete", fake_complete)
+    state = _state(
+        site_url="https://x.com",
+        exploration={"candidate_api": "https://x.com/api", "fields": {"title": "title"}},
+        url_rule={"mode": "template", "template": "https://x/{id}", "id_field": "id"},
+    )
+    out = graph_mod.dsl_writer(state)
+    assert captured["response_format"] == {"type": "json_object"}
+    assert out["dsl_recipe"]["actions"][0]["op"] == "fetch"
 
 
 _AUDIT_PASS = {"passed": True, "is_real_content": True, "has_pagination": True,
@@ -98,6 +144,62 @@ _AUDIT_FAIL_SINGLE_PAGE = {"passed": False, "is_real_content": True, "has_pagina
 _AUDIT_FAIL_ANTIBOT = {"passed": False, "is_real_content": False, "has_pagination": False,
                        "not_blocked": False, "value_assessment": "反爬验证页",
                        "issues": ["抓到反爬验证页，正文为空"], "suggested_fix": "换 render_js / 加反爬绕过"}
+
+
+_EXPLORATION_JSON_API = {
+    "source_type": "json_api",
+    "list_url": "https://x.com/api",
+    "fetch": {"method": "GET", "headers": {}, "query": {}, "json_body": None},
+    "format_locator": {"kind": "json_path", "value": "obj.records"},
+    "fields": {
+        "id": "id",
+        "title": "title",
+        "url": "url",
+        "published_at": "published_at",
+        "summary": "summary",
+        "content": "content",
+    },
+    "html_selectors": {
+        "item_selector": None,
+        "link_selector": None,
+        "title_selector": None,
+        "date_selector": None,
+    },
+    "sample_items": [
+        {
+            "raw": {"id": "1", "title": "A", "url": "https://x.com/a", "published_at": "2026-07-01"},
+            "id": "1",
+            "title": "A",
+            "url": "https://x.com/a",
+            "published_at": "2026-07-01",
+        }
+    ],
+    "url_candidates": [
+        {
+            "mode": "existing_url",
+            "url_field": "url",
+            "id_field": None,
+            "template": None,
+            "verification": "1/1 opened",
+        }
+    ],
+    "pagination": {
+        "type": "none",
+        "page_param": None,
+        "size_param": None,
+        "offset_param": None,
+        "limit_param": None,
+        "cursor_param": None,
+        "next_path": None,
+        "has_more_path": None,
+        "start": 1,
+        "size": None,
+        "notes": "single page",
+    },
+    "evidence": [{"tool": "capture_network", "summary": "api_url=https://x.com/api · items_path=obj.records"}],
+    "notes": ["无"],
+    "success": True,
+}
 
 
 def test_auditor_rejects_when_no_items_crawled():
@@ -128,6 +230,30 @@ def test_auditor_passes_when_llm_approves_real_items():
     assert out["audit_result"]["passed"] is True
     assert out["attempt"] == 0  # 通过则 attempt 不增
     assert out["audit_result"]["llm_verdict"]["has_pagination"] is True
+
+
+def test_auditor_uses_json_object_llm_path_in_production(monkeypatch):
+    from app.discovery.graph import auditor
+
+    captured = {}
+
+    def fake_complete(self, prompt, *, temperature=0.2, response_format=None):
+        captured["prompt"] = prompt
+        captured["temperature"] = temperature
+        captured["response_format"] = response_format
+        return json.dumps(_AUDIT_PASS, ensure_ascii=False)
+
+    monkeypatch.setattr("app.llm.client.LlmClient.complete", fake_complete)
+    state = _state(dsl_recipe={"entry_url": "https://x.com", "actions": []}, attempt=0)
+    out = auditor(
+        state,
+        test_fn=lambda recipe: {
+            "items": [{"title": "A", "url": "https://x.com/a", "content": "body"}],
+            "stats": {"discovered_count": 1},
+        },
+    )
+    assert captured["response_format"] == {"type": "json_object"}
+    assert out["audit_result"]["passed"] is True
 
 
 def test_auditor_flags_single_page_no_pagination():
@@ -175,8 +301,7 @@ def test_explorer_parses_structured_json_output(monkeypatch):
 
     class _FakeAgent:
         def invoke(self, args):
-            return {"messages": [AIMessage(
-                content='{"source_type":"json_api","list_url":"https://x.com/api","success":true}')]}
+            return {"messages": [AIMessage(content=json.dumps(_EXPLORATION_JSON_API, ensure_ascii=False))]}
 
     def fake_create_react_agent(llm, tools, prompt=None, **kw):
         assert prompt == graph_mod.EXPLORER_SYSTEM_PROMPT  # 确认系统 prompt 传进去了
@@ -190,7 +315,7 @@ def test_explorer_parses_structured_json_output(monkeypatch):
 
 
 def test_explorer_falls_back_when_output_not_json(monkeypatch):
-    """explorer 最终消息不是 JSON → 回退 source_type=unknown/success=false。"""
+    """explorer 最终消息不是严格 JSON 时，不再尝试自由文本解析。"""
     from langchain_core.messages import AIMessage
     from app.discovery import graph as graph_mod
 
@@ -203,6 +328,7 @@ def test_explorer_falls_back_when_output_not_json(monkeypatch):
     out = graph_mod.explorer(_state(site_url="https://x.com"), llm=_MockChat())
     assert out["exploration"]["source_type"] == "unknown"
     assert out["exploration"]["success"] is False
+    assert out["explorer_parse_error"] is not None
 
 
 def test_explorer_passes_existing_network_captures_to_agent(monkeypatch):
@@ -235,13 +361,13 @@ def test_explorer_passes_existing_network_captures_to_agent(monkeypatch):
     assert "category" in user_msg
 
 
-def test_explorer_uses_second_stage_synthesis_when_agent_output_is_not_json(monkeypatch):
+def test_explorer_falls_back_to_first_stage_json_when_synthesis_fails(monkeypatch):
     from langchain_core.messages import AIMessage
     from app.discovery import graph as graph_mod
 
     class _FakeAgent:
         def invoke(self, args):
-            return {"messages": [AIMessage(content="说明文字\n```json\n{\"broken\": true}\n```")]}
+            return {"messages": [AIMessage(content=json.dumps(_EXPLORATION_JSON_API, ensure_ascii=False))]}
 
     monkeypatch.setattr(
         "langgraph.prebuilt.create_react_agent",
@@ -250,16 +376,74 @@ def test_explorer_uses_second_stage_synthesis_when_agent_output_is_not_json(monk
     monkeypatch.setattr(
         graph_mod,
         "_synthesize_exploration",
-        lambda **kwargs: (
-            '{"source_type":"json_api","list_url":"https://x.com/api","success":true}',
-            {"source_type": "json_api", "list_url": "https://x.com/api", "success": True},
-        ),
+        lambda **kwargs: (_ for _ in ()).throw(ValueError("second stage failed")),
     )
     out = graph_mod.explorer(_state(site_url="https://x.com"), llm=_MockChat())
     assert out["exploration"]["source_type"] == "json_api"
     assert out["exploration"]["success"] is True
-    assert "说明文字" in out["explorer_agent_output"]
-    assert out["explorer_synthesis_output"].startswith("{")
+    assert out["exploration"]["list_url"] == "https://x.com/api"
+    assert out["explorer_agent_output"].startswith("{")
+    assert out["explorer_parse_error"] == "second stage failed"
+
+
+def test_explorer_rejects_freeform_agent_output_before_second_stage(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from app.discovery import graph as graph_mod
+
+    class _FakeAgent:
+        def invoke(self, args):
+            return {"messages": [AIMessage(content=(
+                "我已经分析完成，结果如下：\n"
+                "```json\n"
+                + json.dumps(_EXPLORATION_JSON_API, ensure_ascii=False) +
+                "\n```"
+            ))]}
+
+    monkeypatch.setattr(
+        "langgraph.prebuilt.create_react_agent",
+        lambda llm, tools, prompt=None, **kw: _FakeAgent(),
+    )
+    out = graph_mod.explorer(_state(site_url="https://x.com"), llm=_MockChat())
+    assert out["exploration"]["source_type"] == "unknown"
+    assert out["exploration"]["success"] is False
+    assert out["explorer_parse_error"].startswith("strict exploration json parse failed:")
+
+
+def test_explorer_uses_network_capture_fallback_when_first_stage_json_is_invalid(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from app.discovery import graph as graph_mod
+
+    class _FakeAgent:
+        def invoke(self, args):
+            return {"messages": [AIMessage(content='{"source_type":"json_api"')]}
+
+    monkeypatch.setattr(
+        "langgraph.prebuilt.create_react_agent",
+        lambda llm, tools, prompt=None, **kw: _FakeAgent(),
+    )
+    out = graph_mod.explorer(_state(
+        site_url="https://www.openeuler.org",
+        network_captures=[{
+            "api_url": "https://www.openeuler.org/api-search/search/sort/blog",
+            "method": "POST",
+            "status": 200,
+            "request_json_body": {"category": "blog", "page": 1, "pageSize": 12},
+            "parsed_json": {
+                "obj": {
+                    "records": [
+                        {"path": "/zh/blog/a", "title": "A", "date": "2026-07-01", "summary": "S1"},
+                        {"path": "/zh/blog/b", "title": "B", "date": "2026-07-02", "summary": "S2"},
+                    ]
+                }
+            },
+        }],
+    ), llm=_MockChat())
+    assert out["exploration"]["source_type"] == "json_api"
+    assert out["exploration"]["success"] is True
+    assert out["exploration"]["list_url"] == "https://www.openeuler.org/api-search/search/sort/blog"
+    assert out["exploration"]["format_locator"]["value"] == "obj.records"
+    assert out["exploration"]["fields"]["url"] == "path"
+    assert out["exploration"]["sample_items"][0]["url"] == "https://www.openeuler.org/zh/blog/a"
 
 
 # --- validator worker ---
@@ -302,6 +486,20 @@ _GUESS_EXISTING_URL = {
     "confidence": "high",
     "reason": "列表已有 link 字段",
 }
+_GUESS_PATH_JOIN = {
+    "mode": "path_join",
+    "template": None,
+    "base_url": "https://www.openeuler.org",
+    "path_field": "path",
+    "id_field": None,
+    "url_field": None,
+    "sample_items": [
+        {"id": None, "url": None, "title": "A", "raw": {"path": "/zh/blog/a"}},
+        {"id": None, "url": None, "title": "B", "raw": {"path": "/zh/blog/b"}},
+    ],
+    "confidence": "high",
+    "reason": "列表给的是 path，相对路径需与 base_url 拼接",
+}
 _GUESS_UNKNOWN = {
     "mode": "unknown",
     "template": None,
@@ -325,6 +523,26 @@ def test_validator_existing_url_mode_skips_template_test(monkeypatch):
     assert out["url_rule"]["url_field"] == "link"
 
 
+def test_validator_uses_json_object_llm_path_in_production(monkeypatch):
+    monkeypatch.setattr("app.discovery.tools.test_url_template", _fake_tool({"results": []}))
+    monkeypatch.setattr("app.discovery.tools.probe_url_patterns", _fake_tool([]))
+    from app.discovery import graph as graph_mod
+
+    captured = {}
+
+    def fake_complete(self, prompt, *, temperature=0.2, response_format=None):
+        captured["prompt"] = prompt
+        captured["temperature"] = temperature
+        captured["response_format"] = response_format
+        return json.dumps(_GUESS_EXISTING_URL, ensure_ascii=False)
+
+    monkeypatch.setattr("app.llm.client.LlmClient.complete", fake_complete)
+    out = graph_mod.validator(_state(site_url="https://x.com", exploration={"fields": {"url": "link"}}))
+    assert captured["response_format"] == {"type": "json_object"}
+    assert out["url_rule"]["mode"] == "existing_url"
+    assert out["url_rule"]["url_field"] == "link"
+
+
 def test_validator_validates_when_test_url_template_succeeds(monkeypatch):
     monkeypatch.setattr("app.discovery.tools.test_url_template",
                         _fake_tool({"results": [{"url": "https://x.com/blog/1", "status": 200, "is_article_page": True}]}))
@@ -336,6 +554,36 @@ def test_validator_validates_when_test_url_template_succeeds(monkeypatch):
     assert out["url_rule"]["template"] == "https://x.com/blog/{id}"
     assert out["url_rule"]["id_field"] == "no"
     assert out["url_rule"]["mode"] == "template"
+
+
+def test_validator_validates_path_join_with_real_field_name(monkeypatch):
+    monkeypatch.setattr(
+        "app.discovery.tools.test_path_join",
+        _fake_tool({"results": [
+            {
+                "sample_value": "/zh/blog/a",
+                "url": "https://www.openeuler.org/zh/blog/a",
+                "status": 200,
+                "is_article_page": True,
+            },
+            {
+                "sample_value": "/zh/blog/b",
+                "url": "https://www.openeuler.org/zh/blog/b",
+                "status": 200,
+                "is_article_page": True,
+            },
+        ]}),
+    )
+    monkeypatch.setattr("app.discovery.tools.test_url_template", _fake_tool({"results": []}))
+    monkeypatch.setattr("app.discovery.tools.probe_url_patterns", _fake_tool([]))
+    from app.discovery.graph import validator
+    state = _state(site_url="https://www.openeuler.org", exploration={"fields": {"url": "path"}})
+    out = validator(state, llm=_mock_chat(_GUESS_PATH_JOIN))
+    assert out["url_rule"]["mode"] == "path_join"
+    assert out["url_rule"]["base_url"] == "https://www.openeuler.org"
+    assert out["url_rule"]["path_field"] == "path"
+    assert out["url_rule"]["evidence"] == "validated 2/2"
+    assert out["url_rule"]["validation_samples"][0]["sample_value"] == "/zh/blog/a"
 
 
 def test_validator_falls_back_to_probe_when_test_fails(monkeypatch):
