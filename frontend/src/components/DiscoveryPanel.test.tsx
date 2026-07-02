@@ -8,12 +8,14 @@ import { DiscoveryPanel } from "./DiscoveryPanel";
 
 const startDiscoveryRun = vi.fn();
 const getDiscoveryRun = vi.fn();
+const cancelDiscoveryRun = vi.fn();
 const suggestDiscoveryName = vi.fn();
 
 vi.mock("../api/client", () => ({
   ApiError: class ApiError extends Error {},
   getDiscoveryRun: (...args: unknown[]) => getDiscoveryRun(...args),
   startDiscoveryRun: (...args: unknown[]) => startDiscoveryRun(...args),
+  cancelDiscoveryRun: (...args: unknown[]) => cancelDiscoveryRun(...args),
   suggestDiscoveryName: (...args: unknown[]) => suggestDiscoveryName(...args),
 }));
 
@@ -26,7 +28,7 @@ vi.mock("./DiscoveryNodeDetail", () => ({
 }));
 
 vi.mock("./DiscoveryLogPanel", () => ({
-  DiscoveryLogPanel: () => <div>logs</div>,
+  DiscoveryLogPanel: () => <div data-testid="discovery-logs">logs</div>,
 }));
 
 vi.mock("../hooks/useDiscoveryLogs", () => ({
@@ -66,6 +68,7 @@ describe("DiscoveryPanel", () => {
     });
     getDiscoveryRun.mockReset();
     startDiscoveryRun.mockReset();
+    cancelDiscoveryRun.mockReset();
     suggestDiscoveryName.mockReset();
   });
 
@@ -242,5 +245,99 @@ describe("DiscoveryPanel", () => {
     await act(async () => {
       resolveRetry?.({ status: "started", run_id: 22 });
     });
+  });
+
+  it("uses equal-width columns for the discovery workspace layout", async () => {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <DiscoveryPanel />
+        </QueryClientProvider>,
+      );
+    });
+    await flush();
+
+    changeInput(container.querySelector("input[placeholder='站点 URL，如 openanolis.cn/blog']")!, "https://example.com");
+    startDiscoveryRun.mockResolvedValueOnce({ status: "started", run_id: 31 });
+    getDiscoveryRun.mockResolvedValue({
+      id: 31,
+      site_url: "https://example.com",
+      status: "running",
+      resulting_method_id: null,
+      llm_token_usage: 0,
+      node_trace: [],
+      retry_count: 0,
+      current_step: "explorer",
+      started_at: null,
+      ended_at: null,
+      error_message: null,
+    });
+
+    const startButton = [...container.querySelectorAll("button")].find((node) => node.textContent === "开始探查") as HTMLButtonElement;
+    act(() => {
+      startButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+    await flush();
+
+    const grid = container.querySelector("[data-testid='discovery-layout-grid']");
+    expect(grid?.getAttribute("style")).toContain("grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)");
+  });
+
+  it("shows a cancel button while running and sends cancel request", async () => {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <DiscoveryPanel />
+        </QueryClientProvider>,
+      );
+    });
+    await flush();
+
+    changeInput(container.querySelector("input[placeholder='站点 URL，如 openanolis.cn/blog']")!, "https://example.com");
+    startDiscoveryRun.mockResolvedValueOnce({ status: "started", run_id: 41 });
+    getDiscoveryRun.mockResolvedValue({
+      id: 41,
+      site_url: "https://example.com",
+      status: "running",
+      resulting_method_id: null,
+      llm_token_usage: 0,
+      node_trace: [],
+      retry_count: 0,
+      current_step: "explorer",
+      started_at: null,
+      ended_at: null,
+      error_message: null,
+    });
+    cancelDiscoveryRun.mockResolvedValue({
+      id: 41,
+      site_url: "https://example.com",
+      status: "cancelled",
+      resulting_method_id: null,
+      llm_token_usage: 0,
+      node_trace: [],
+      retry_count: 0,
+      current_step: "explorer",
+      started_at: null,
+      ended_at: null,
+      error_message: "已手动取消",
+    });
+
+    const startButton = [...container.querySelectorAll("button")].find((node) => node.textContent === "开始探查") as HTMLButtonElement;
+    act(() => {
+      startButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+    await flush();
+
+    const cancelButton = [...container.querySelectorAll("button")].find((node) => node.textContent === "取消探查") as HTMLButtonElement;
+    expect(cancelButton).toBeTruthy();
+
+    act(() => {
+      cancelButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    expect(cancelDiscoveryRun).toHaveBeenCalledWith(41);
   });
 });

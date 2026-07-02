@@ -43,12 +43,22 @@ function nextAfter(step: FlowNodeId | null): FlowNodeId | null {
   return FORWARD[i + 1];
 }
 
+function businessFailedStep(trace: DiscoveryNodeTraceEntry[]): FlowNodeId | null {
+  for (let i = trace.length - 1; i >= 0; i--) {
+    const entry = trace[i];
+    if (entry.step === "explorer" && entry.summary?.success === false) {
+      return "explorer";
+    }
+  }
+  return null;
+}
+
 export function computeNodeStates(run: DiscoveryRun): Record<FlowNodeId, NodeState> {
   const states = Object.fromEntries(FLOW_NODES.map((n) => [n.id, "pending"])) as Record<FlowNodeId, NodeState>;
   const done = new Set(run.node_trace.map((e) => e.step));
   for (const id of FORWARD) if (done.has(id)) states[id] = "done";
 
-  if (run.status === "completed") return states;
+  if (run.status === "completed" || run.status === "cancelled") return states;
 
   const last = lastStep(run.node_trace);
   // Retry re-run: the last trace step is a rewrite target (dsl_writer/validator) AND it
@@ -59,6 +69,11 @@ export function computeNodeStates(run: DiscoveryRun): Record<FlowNodeId, NodeSta
   const running: FlowNodeId | null = isRetryRetarget ? last : nextAfter(last);
 
   if (run.status === "failed") {
+    const failedStep = businessFailedStep(run.node_trace);
+    if (failedStep) {
+      states[failedStep] = "failed";
+      return states;
+    }
     if (running) states[running] = "failed";
     return states;
   }

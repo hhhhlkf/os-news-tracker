@@ -12,16 +12,20 @@ from html.parser import HTMLParser
 
 from langchain_core.tools import tool
 
+from app.discovery.cancel import ensure_not_cancelled
+
 
 @tool
 def fetch_page(url: str, render_js: bool = False) -> dict:
     """抓取页面，返回 status/title/links。render_js=True 用 Playwright。"""
     import httpx
+    ensure_not_cancelled()
     if render_js:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as pw:
             b = pw.chromium.launch(headless=True)
             p = b.new_page()
+            ensure_not_cancelled()
             p.goto(url, wait_until="networkidle")
             html = p.content()
             title = p.title()
@@ -68,6 +72,7 @@ def fetch_page(url: str, render_js: bool = False) -> dict:
 def capture_network(url: str) -> list:
     """Playwright 抓页面加载时的 JSON XHR/Fetch 响应。"""
     from playwright.sync_api import sync_playwright
+    ensure_not_cancelled()
     caps: list = []
     with sync_playwright() as pw:
         b = pw.chromium.launch(headless=True)
@@ -97,6 +102,7 @@ def capture_network(url: str) -> list:
 
         p.on("response", on_resp)
         try:
+            ensure_not_cancelled()
             p.goto(url, wait_until="networkidle", timeout=45000)
         except Exception:
             pass
@@ -119,6 +125,7 @@ def _decode_json_lenient(text: str):
 def inspect_item(api_url: str, method: str = "GET", json_body: dict | None = None) -> dict:
     """看 API 返回的 item 结构。"""
     import httpx
+    ensure_not_cancelled()
     r = httpx.request(method, api_url, json=json_body, timeout=15)
     try:
         sample = r.json()
@@ -133,6 +140,7 @@ def test_url_template(template: str, id_field: str, sample_items: list[dict]) ->
     import httpx
     results = []
     for it in sample_items[:5]:  # 最多验证 5 个样本
+        ensure_not_cancelled()
         url = template.replace("{id}", str(it.get(id_field, "")))
         try:
             r = httpx.get(url, timeout=15, follow_redirects=True)
@@ -141,6 +149,39 @@ def test_url_template(template: str, id_field: str, sample_items: list[dict]) ->
             results.append({"url": url, "status": r.status_code, "is_article_page": is_article})
         except Exception as e:
             results.append({"url": url, "status": 0, "is_article_page": False, "error": str(e)})
+    return {"results": results}
+
+
+@tool
+def test_path_join(base_url: str, path_field: str, sample_items: list[dict]) -> dict:
+    """用 base_url + path_field 的真实值逐个请求验证。"""
+    import httpx
+
+    results = []
+    for it in sample_items[:5]:
+        ensure_not_cancelled()
+        raw = it.get("raw") if isinstance(it.get("raw"), dict) else {}
+        sample_value = raw.get(path_field)
+        if sample_value is None:
+            sample_value = it.get(path_field)
+        url = urljoin(base_url, str(sample_value or ""))
+        try:
+            r = httpx.get(url, timeout=15, follow_redirects=True)
+            is_article = r.status_code == 200 and "<title>" in r.text
+            results.append({
+                "sample_value": sample_value,
+                "url": url,
+                "status": r.status_code,
+                "is_article_page": is_article,
+            })
+        except Exception as e:
+            results.append({
+                "sample_value": sample_value,
+                "url": url,
+                "status": 0,
+                "is_article_page": False,
+                "error": str(e),
+            })
     return {"results": results}
 
 
@@ -164,6 +205,7 @@ def probe_url_patterns(base_url: str, id_value: str, patterns: list[str] | None 
     candidates = patterns if patterns is not None else _DEFAULT_URL_PATTERNS
     results: list = []
     for pat in candidates:
+        ensure_not_cancelled()
         path = pat.replace("{id}", str(id_value))
         if not path.startswith("/"):
             path = "/" + path
@@ -188,4 +230,4 @@ def probe_url_patterns(base_url: str, id_value: str, patterns: list[str] | None 
     return results
 
 
-TOOLS = [fetch_page, capture_network, inspect_item, test_url_template, probe_url_patterns]
+TOOLS = [fetch_page, capture_network, inspect_item, test_url_template, test_path_join, probe_url_patterns]

@@ -294,7 +294,7 @@ export interface DiscoveryNodeTraceEntry {
 export interface DiscoveryRun {
   id: number;
   site_url: string;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | "cancelled";
   resulting_method_id: number | null;
   llm_token_usage: number;
   node_trace: DiscoveryNodeTraceEntry[];

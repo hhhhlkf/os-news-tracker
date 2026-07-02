@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.discovery.dsl import DslRecipe
+from app.discovery.cancel import request_cancel
 from app.discovery.graph import check_existing_method, start_discovery_run
 from app.discovery.ingester import CrawlOutputIngester
 from app.discovery.interpreter import DslInterpreter
@@ -67,6 +68,36 @@ def get_discovery_run(run_id: int, db: Session = Depends(get_db)):
     r = db.get(SiteDiscoveryRun, run_id)
     if not r:
         raise HTTPException(404, "run not found")
+    current_step = r.node_trace[-1]["step"] if r.node_trace else None
+    return {"id": r.id, "site_url": r.site_url, "status": r.status,
+            "resulting_method_id": r.resulting_method_id, "llm_token_usage": r.llm_token_usage,
+            "node_trace": r.node_trace, "retry_count": r.retry_count,
+            "current_step": current_step,
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+            "ended_at": r.ended_at.isoformat() if r.ended_at else None,
+            "error_message": r.error_message}
+
+
+@router.post("/runs/{run_id}/cancel")
+def cancel_discovery_run(run_id: int, db: Session = Depends(get_db)):
+    """手动取消生成命：停止后续节点/LLM/API 调用，并把状态标为 cancelled。"""
+    r = db.get(SiteDiscoveryRun, run_id)
+    if not r:
+        raise HTTPException(404, "run not found")
+    if r.status != "running":
+        current_step = r.node_trace[-1]["step"] if r.node_trace else None
+        return {"id": r.id, "site_url": r.site_url, "status": r.status,
+                "resulting_method_id": r.resulting_method_id, "llm_token_usage": r.llm_token_usage,
+                "node_trace": r.node_trace, "retry_count": r.retry_count,
+                "current_step": current_step,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "ended_at": r.ended_at.isoformat() if r.ended_at else None,
+                "error_message": r.error_message}
+    request_cancel(run_id)
+    r.status = "cancelled"
+    r.error_message = "已手动取消"
+    r.ended_at = datetime.now(timezone.utc)
+    db.commit()
     current_step = r.node_trace[-1]["step"] if r.node_trace else None
     return {"id": r.id, "site_url": r.site_url, "status": r.status,
             "resulting_method_id": r.resulting_method_id, "llm_token_usage": r.llm_token_usage,

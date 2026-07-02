@@ -101,6 +101,19 @@ def test_get_discovery_run_with_trace(client, session):
     assert body["current_step"] == "explorer"  # 最后一步 = 当前步骤
 
 
+def test_cancel_discovery_run_marks_cancelled(client, session):
+    from app.models import SiteDiscoveryRun
+    run = SiteDiscoveryRun(site_url="https://x.com", status="running")
+    session.add(run); session.commit()
+    r = client.post(f"/discovery/runs/{run.id}/cancel")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "cancelled"
+    assert body["error_message"] == "已手动取消"
+    session.refresh(run)
+    assert run.status == "cancelled"
+
+
 def test_discovery_fetch_endpoint(client, session):
     """按已存 method 跑运行命（mock run_method）→ 200。"""
     from app.enums import SourceType

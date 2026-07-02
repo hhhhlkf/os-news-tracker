@@ -41,6 +41,20 @@ describe("computeNodeStates", () => {
     expect(s["validator"]).toBe("failed"); // 推断的进行中节点
     expect(s["explorer"]).toBe("done");
   });
+  it("explorer summary.success=false 且最终失败 → explorer 标 failed", () => {
+    const s = computeNodeStates(baseRun({
+      status: "failed",
+      node_trace: [
+        { step: "fetch_homepage", status: "done", ts: "t" },
+        { step: "capture_network", status: "done", ts: "t" },
+        { step: "explorer", status: "done", ts: "t", summary: { success: false, source_type: "unknown" } },
+      ],
+      current_step: "explorer",
+      error_message: "boom",
+    }));
+    expect(s["explorer"]).toBe("failed");
+    expect(s["validator"]).toBe("pending");
+  });
   it("重试：auditor 出现两次 → 写配方重新进行中", () => {
     const t = trace(["fetch_homepage", "capture_network", "explorer", "validator",
       "dsl_writer", "auditor", "dsl_writer"]);

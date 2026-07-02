@@ -39,10 +39,9 @@ function NodeBox({ data }: { data: { label: string; id: string; kind: "det" | "a
       <Handle id="left-out" type="source" position={Position.Left} style={handleStyle} />
       <div style={{
         width: 132, padding: "8px 10px", textAlign: "center",
-        background: s.fill, border: `2px solid ${s.stroke}`, borderRadius: radius,
+        background: s.fill, borderWidth: 2, borderStyle: s.dash ? "dashed" : "solid", borderColor: s.stroke, borderRadius: radius,
         color: s.color, fontSize: 13, fontWeight: 700,
         boxShadow: data.state === "running" ? "0 0 0 4px rgba(23,92,211,0.15)" : undefined,
-        borderStyle: s.dash ? "dashed" : "solid",
       }}>
         <div>{data.label}</div>
         <div style={{ fontSize: 9, fontFamily: "JetBrains Mono, monospace", opacity: 0.7 }}>{data.id}</div>

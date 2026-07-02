@@ -379,6 +379,14 @@ export async function getDiscoveryRun(runId: number): Promise<DiscoveryRun> {
   return expectOk<DiscoveryRun>(r, "failed to load discovery run");
 }
 
+export async function cancelDiscoveryRun(runId: number): Promise<DiscoveryRun> {
+  const r = await fetch(`${DISCOVERY_BASE}/runs/${runId}/cancel`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return expectOk<DiscoveryRun>(r, "failed to cancel discovery run");
+}
+
 export async function listDiscoveryRuns(limit = 20): Promise<DiscoveryRunSummary[]> {
   const r = await fetch(`${DISCOVERY_BASE}/runs?limit=${limit}`, { headers: authHeaders() });
   return expectOk<DiscoveryRunSummary[]>(r, "failed to load discovery runs");

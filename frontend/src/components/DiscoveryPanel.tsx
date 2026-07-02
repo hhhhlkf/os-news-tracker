@@ -1,7 +1,7 @@
 // frontend/src/components/DiscoveryPanel.tsx
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ApiError, getDiscoveryRun, startDiscoveryRun, suggestDiscoveryName } from "../api/client";
+import { ApiError, cancelDiscoveryRun, getDiscoveryRun, startDiscoveryRun, suggestDiscoveryName } from "../api/client";
 import { DiscoveryFlowChart } from "./DiscoveryFlowChart";
 import { DiscoveryNodeDetail } from "./DiscoveryNodeDetail";
 import { DiscoveryLogPanel } from "./DiscoveryLogPanel";
@@ -25,6 +25,16 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
     refetchInterval: (q) => (q.state.data?.status === "running" ? 1500 : false),
   });
   const logs = useDiscoveryLogs(runId, runId != null && runQuery.data?.status === "running");
+  const cancelMut = useMutation({
+    mutationFn: (id: number) => cancelDiscoveryRun(id),
+    onSuccess: () => {
+      setError(null);
+      runQuery.refetch();
+    },
+    onError: (e) => {
+      setError(e instanceof ApiError ? e.message : "取消探查失败");
+    },
+  });
 
   const startMut = useMutation({
     mutationFn: (vars: { url: string; name?: string; force: boolean }) =>
@@ -54,9 +64,11 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
   const running = runQuery.data?.status === "running";
   const completed = runQuery.data?.status === "completed";
   const failed = runQuery.data?.status === "failed";
+  const cancelled = runQuery.data?.status === "cancelled";
   const startPending = startMut.isPending;
   const startBusy = running || startPending || startLocked || startLockRef.current;
   const startDisabled = !url || startBusy;
+  const cancelBusy = cancelMut.isPending;
 
   function startRun(force: boolean) {
     if (!url || running || startMut.isPending || startLockRef.current) return;
@@ -85,11 +97,11 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
         {runQuery.data && (
           <div style={{
             fontSize: 12, fontWeight: 700, borderRadius: 999, padding: "3px 11px",
-            color: running ? "#175cd3" : completed ? "#059669" : "#dc2626",
-            background: running ? "#eff6ff" : completed ? "#ecfdf3" : "#fef2f2",
-            border: `1px solid ${running ? "#b9d4ff" : completed ? "#a3e0c4" : "#fca5a5"}`,
+            color: running ? "#175cd3" : completed ? "#059669" : cancelled ? "#b54708" : "#dc2626",
+            background: running ? "#eff6ff" : completed ? "#ecfdf3" : cancelled ? "#fffaeb" : "#fef2f2",
+            border: `1px solid ${running ? "#b9d4ff" : completed ? "#a3e0c4" : cancelled ? "#fedf89" : "#fca5a5"}`,
           }}>
-            {running ? `探查中 · 第 ${attemptCount(runQuery.data.node_trace)} / 3 轮` : completed ? "探查完成" : "探查失败"}
+            {running ? `探查中 · 第 ${attemptCount(runQuery.data.node_trace)} / 3 轮` : completed ? "探查完成" : cancelled ? "已取消" : "探查失败"}
           </div>
         )}
       </div>
@@ -106,6 +118,16 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
         </div>
         <button type="button" disabled={startDisabled} onClick={() => startRun(false)}
           style={startDisabled ? btnDisabled : btnPrimary}>{running ? "探查中…" : startBusy ? "启动中…" : "开始探查"}</button>
+        {running && runId != null && (
+          <button
+            type="button"
+            disabled={cancelBusy}
+            onClick={() => cancelMut.mutate(runId)}
+            style={cancelBusy ? btnDisabled : btnDanger}
+          >
+            {cancelBusy ? "取消中…" : "取消探查"}
+          </button>
+        )}
       </div>
 
       {dup && (
@@ -118,27 +140,48 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
       )}
 
       {runQuery.data && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div style={{ border: "1px solid #eaecf0", borderRadius: 10, background: "#f8fafc", padding: 10 }}>
+        <div
+          data-testid="discovery-layout-grid"
+          style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 14, alignItems: "stretch" }}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, minHeight: WORKSPACE_HEIGHT, height: WORKSPACE_HEIGHT }}>
+            <div style={{ border: "1px solid #eaecf0", borderRadius: 10, background: "#f8fafc", padding: 10, flex: 1, minHeight: 0 }}>
               <DiscoveryFlowChart run={runQuery.data} onSelectNode={setSelectedNode} selectedNode={selectedNode} />
             </div>
-            {selectedNode && <DiscoveryNodeDetail nodeId={selectedNode} entry={selectedEntry} />}
-            {completed && (
-              <div style={{ border: "1px solid #a3e0c4", background: "#ecfdf3", color: "#059669", borderRadius: 8, padding: "10px 12px", fontSize: 13 }}>
-                探查完成 · 已存入爬取方式库 <a style={{ color: "#175cd3", cursor: "pointer", marginLeft: 8 }} onClick={() => runQuery.data?.resulting_method_id && onMethodAdded?.(runQuery.data.resulting_method_id)}>查看新方式 →</a>
-              </div>
-            )}
-            {failed && (
-              <div style={{ border: "1px solid #fca5a5", background: "#fef2f2", color: "#b42318", borderRadius: 8, padding: "10px 12px", fontSize: 13 }}>
-                探查失败：{runQuery.data.error_message ?? "未知错误"}
-                <button type="button" disabled={startDisabled} style={{ ...(startDisabled ? btnDisabled : btnPrimary), marginLeft: 12 }} onClick={() => startRun(false)}>
-                  {startBusy ? "启动中…" : "重新探查"}
-                </button>
-              </div>
-            )}
+            <div style={{ minHeight: 0, height: 210, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
+              {selectedNode ? (
+                <DiscoveryNodeDetail nodeId={selectedNode} entry={selectedEntry} />
+              ) : (
+                <div style={{ border: "1px dashed #d0d5dd", borderRadius: 10, background: "#fcfcfd", color: "#667085", padding: "16px 18px", fontSize: 13 }}>
+                  点击流程图节点查看该步骤的摘要、证据和当前状态。
+                </div>
+              )}
+              {completed && (
+                <div style={{ border: "1px solid #a3e0c4", background: "#ecfdf3", color: "#059669", borderRadius: 8, padding: "10px 12px", fontSize: 13 }}>
+                  探查完成 · 已存入爬取方式库 <a style={{ color: "#175cd3", cursor: "pointer", marginLeft: 8 }} onClick={() => runQuery.data?.resulting_method_id && onMethodAdded?.(runQuery.data.resulting_method_id)}>查看新方式 →</a>
+                </div>
+              )}
+              {failed && (
+                <div style={{ border: "1px solid #fca5a5", background: "#fef2f2", color: "#b42318", borderRadius: 8, padding: "10px 12px", fontSize: 13 }}>
+                  探查失败：{runQuery.data.error_message ?? "未知错误"}
+                  <button type="button" disabled={startDisabled} style={{ ...(startDisabled ? btnDisabled : btnPrimary), marginLeft: 12 }} onClick={() => startRun(false)}>
+                    {startBusy ? "启动中…" : "重新探查"}
+                  </button>
+                </div>
+              )}
+              {cancelled && (
+                <div style={{ border: "1px solid #fedf89", background: "#fffaeb", color: "#b54708", borderRadius: 8, padding: "10px 12px", fontSize: 13 }}>
+                  探查已取消：{runQuery.data.error_message ?? "已停止后续调用"}
+                  <button type="button" disabled={startDisabled} style={{ ...(startDisabled ? btnDisabled : btnPrimary), marginLeft: 12 }} onClick={() => startRun(false)}>
+                    {startBusy ? "启动中…" : "重新探查"}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
-          <DiscoveryLogPanel logs={logs} />
+          <div style={{ minHeight: WORKSPACE_HEIGHT, height: WORKSPACE_HEIGHT }}>
+            <DiscoveryLogPanel logs={logs} />
+          </div>
         </div>
       )}
       {error && <div style={{ color: "#b42318", fontSize: 13, marginTop: 10 }}>{error}</div>}
@@ -152,4 +195,6 @@ const inputBase: CSSProperties = {
 };
 const btnPrimary: CSSProperties = { border: "none", borderRadius: 999, padding: "9px 16px", background: "#175cd3", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" };
 const btnDisabled: CSSProperties = { ...btnPrimary, background: "#98a2b3", cursor: "not-allowed" };
+const btnDanger: CSSProperties = { ...btnPrimary, background: "#dc2626" };
 const btnGhost: CSSProperties = { border: "1px solid #d0d5dd", background: "#fff", borderRadius: 8, padding: "9px 11px", fontSize: 12, color: "#475467", cursor: "pointer" };
+const WORKSPACE_HEIGHT = 760;

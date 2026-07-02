@@ -10,7 +10,7 @@ export function DiscoveryLogPanel({ logs }: { logs: NewsRunLogEntry[] }) {
   return (
     <div style={{ background: "#0b1220", borderRadius: 10, padding: "12px 14px",
       fontFamily: "JetBrains Mono, ui-monospace, monospace", fontSize: 12, lineHeight: 1.7, color: "#d0d5dd",
-      display: "flex", flexDirection: "column", minHeight: 280 }}>
+      display: "flex", flexDirection: "column", minHeight: 280, width: "100%", minWidth: 0, height: "100%" }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
         <span style={{ color: "#f8fafc", fontWeight: 700, fontSize: 13 }}>实时日志</span>
         <span style={{ color: "#98a2b3", fontSize: 11 }}>轮询 /news-run/logs</span>
