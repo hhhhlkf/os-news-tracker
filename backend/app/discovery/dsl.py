@@ -118,6 +118,7 @@ class DslRecipe(BaseModel):
 
 # 变量替换正则：匹配 {{var}} 或 {{obj.field}}
 _VAR_RE = re.compile(r"\{\{(\w+(?:\.\w+)?)\}\}")
+_PATHISH_TEMPLATE_RE = re.compile(r"\{item\.(path|href)\}")
 
 
 def render_vars(text: str, ctx: dict) -> str:
@@ -156,9 +157,21 @@ def eval_condition(cond: dict, ctx: dict) -> bool:
     else:
         return False
     expected = c.value
-    return {"!=": actual != expected, "==": actual == expected,
-            ">=": actual >= expected, ">": actual > expected,
-            "<=": actual <= expected, "<": actual < expected}.get(c.op, False)
+    if c.op == "!=":
+        return actual != expected
+    if c.op == "==":
+        return actual == expected
+    if actual is None or expected is None:
+        return False
+    if c.op == ">=":
+        return actual >= expected
+    if c.op == ">":
+        return actual > expected
+    if c.op == "<=":
+        return actual <= expected
+    if c.op == "<":
+        return actual < expected
+    return False
 
 
 def validate_semantics(recipe: DslRecipe) -> list[str]:
@@ -188,6 +201,19 @@ def validate_semantics(recipe: DslRecipe) -> list[str]:
             )
             if not has_url:
                 errors.append(f"action {i}: extract.fields 须含 url 字段或 template:{{item.}}")
+            url_spec = a.fields.get("url")
+            if isinstance(url_spec, str) and url_spec.startswith("template:"):
+                tmpl = url_spec.removeprefix("template:")
+                if (
+                    tmpl.startswith(("http://", "https://"))
+                    and _PATHISH_TEMPLATE_RE.search(tmpl)
+                    and "?" not in tmpl
+                    and "#" not in tmpl
+                    and not re.search(r"/\{item\.(path|href)\}", tmpl)
+                ):
+                    errors.append(
+                        f"action {i}: url template 疑似错误，相对路径字段前缺少 '/' 分隔符"
+                    )
         if isinstance(a, (GotoAction, ClickAction, WaitForAction)) and not has_browser:
             errors.append(f"action {i}: {a.op} 须在 goto 之后")
     return errors

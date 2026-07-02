@@ -33,6 +33,7 @@ const BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 const CRAWL_BASE = `${BASE}/crawl-sources`;
 const LEGACY_CRAWL_BASE = `${BASE}/sources/agent`;
 const DISCOVERY_BASE = `${BASE}/discovery`;
+const SUGGEST_NAME_TIMEOUT_MS = 12000;
 
 export class ApiError extends Error {
   status: number;
@@ -88,6 +89,21 @@ async function expectOk<T>(response: Response, fallbackMessage: string): Promise
     throw new ApiError(response.status, message, body);
   }
   return response.json() as Promise<T>;
+}
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit | undefined, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiError(408, `请求超时（>${Math.floor(timeoutMs / 1000)}s）`);
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 }
 
 async function fetchJsonWithFallback<T>(
@@ -393,11 +409,11 @@ export async function listDiscoveryRuns(limit = 20): Promise<DiscoveryRunSummary
 }
 
 export async function suggestDiscoveryName(url: string): Promise<SuggestNameResponse> {
-  const r = await fetch(`${DISCOVERY_BASE}/suggest-name`, {
+  const r = await fetchWithTimeout(`${DISCOVERY_BASE}/suggest-name`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ url }),
-  });
+  }, SUGGEST_NAME_TIMEOUT_MS);
   return expectOk<SuggestNameResponse>(r, "failed to suggest name");
 }
 

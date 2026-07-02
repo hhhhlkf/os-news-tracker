@@ -110,6 +110,7 @@ class ExplorationSampleItem(BaseModel):
     raw: dict | str | None = None
     id: str | None = None
     title: str | None = None
+    raw_url: str | None = None
     url: str | None = None
     published_at: str | None = None
 
@@ -314,6 +315,10 @@ EXPLORER_SYSTEM_PROMPT = """# 角色
 # 最终回答规则（最高优先级）
 - 你的最终回复不是系统最终结果，后端会再做结构化整理。
 - 最终回复请用简洁中文陈述证据，不要输出 JSON，不要代码块。
+- 最终回复控制在 8 行以内，尽量用短句/短 bullet，不要写长段落。
+- 不要输出表格，不要逐条展开样本，不要复述文章正文或 textContent/content/body。
+- 只保留决策必需信息：source_type、list_url、列表 path/selector、关键字段、分页线索、URL 候选、未确认项。
+- 每类信息最多给 1~2 个代表性例子，不要罗列全部样本或全部接口。
 - 只陈述有工具证据支持的结论；没有证据就明确写"未确认"。
 - 优先说明：候选 source_type、候选 list_url、可能的列表 path/selector、字段映射、分页线索、URL 候选、剩余不确定点。
 
@@ -330,26 +335,39 @@ def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
     ensure_not_cancelled()
     llm = llm or _make_llm()
     from app.discovery.tools import TOOLS
-    from langgraph.prebuilt import create_react_agent
-    agent = create_react_agent(llm, TOOLS, prompt=EXPLORER_SYSTEM_PROMPT)
-    result = agent.invoke({
-        "messages": [("user", _explorer_input_message(state))],
-    })
-    ensure_not_cancelled()
-    agent_output = _extract_final_ai_content(result)
+    selected_tools = _select_explorer_tools(state, TOOLS)
     synth_raw = ""
     parse_error = None
-    deterministic_exploration = (
-        _derive_exploration_from_state(state)
-        or _derive_exploration_from_result(state, result)
-    )
+    deterministic_candidates = _derive_exploration_candidates_from_state(state)
+    try:
+        result = _run_explorer_tool_loop(
+            llm=llm,
+            tools=selected_tools,
+            user_message=_explorer_input_message(state),
+            max_rounds=3,
+        )
+        ensure_not_cancelled()
+    except Exception as e:
+        if not _is_react_tool_sequence_error(e):
+            raise
+        parse_error = str(e)
+        exploration = _pick_best_deterministic_candidate(deterministic_candidates) or _unknown_exploration()
+        return {
+            "exploration": ExplorationResult(**exploration).model_dump(),
+            "explorer_agent_output": "",
+            "explorer_synthesis_output": synth_raw,
+            "explorer_parse_error": parse_error,
+        }
+    agent_output = _extract_final_ai_content(result)
+    deterministic_candidates.extend(_derive_exploration_candidates_from_result(state, result))
     try:
         synth_raw, exploration = _synthesize_exploration(
             site_url=state["site_url"],
             result=result,
-            deterministic_exploration=deterministic_exploration,
+            deterministic_candidates=deterministic_candidates,
         )
-        exploration = _apply_exploration_constraints(exploration, deterministic_exploration)
+        matched_hint = _match_deterministic_candidate(exploration, deterministic_candidates)
+        exploration = _apply_exploration_constraints(exploration, matched_hint)
     except Exception as e:
         parse_error = str(e)
         exploration = _unknown_exploration()
@@ -361,6 +379,30 @@ def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
     }
 
 
+def _select_explorer_tools(state: DiscoveryState, tools: list) -> list:
+    """已有高质量网络证据时收紧工具集，避免重复探测。"""
+    tool_map = {tool.name: tool for tool in tools}
+    caps = state.get("network_captures") or []
+    has_high_quality_json_capture = any(
+        isinstance(cap.get("parsed_json"), dict)
+        and _derive_json_api_exploration(
+            site_url=state["site_url"],
+            api_url=cap.get("api_url"),
+            method=cap.get("method") or "GET",
+            json_body=cap.get("request_json_body"),
+            payload=cap.get("parsed_json"),
+            evidence_tool="capture_network",
+            evidence_note="tool selection probe",
+            verification="captured_network_response",
+        )
+        for cap in caps
+    )
+    if not has_high_quality_json_capture:
+        return tools
+    preferred = ["test_url_template", "test_path_join", "probe_url_patterns"]
+    return [tool_map[name] for name in preferred if name in tool_map]
+
+
 def _extract_final_ai_content(result: dict) -> str:
     """从 ReAct 结果里取最后一条 AIMessage 的文本内容。"""
     from langchain_core.messages import AIMessage
@@ -370,14 +412,157 @@ def _extract_final_ai_content(result: dict) -> str:
     return ""
 
 
-def _derive_exploration_from_state(state: DiscoveryState) -> dict | None:
-    """从已有确定性证据直接拼 exploration，减少对 LLM 结构化稳定性的依赖。"""
+def _run_explorer_tool_loop(*, llm, tools: list, user_message: str, max_rounds: int = 6) -> dict:
+    """手工执行 explorer 的 tool loop，避免黑盒 ReAct 在 provider 侧组装错消息序列。"""
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+    tool_map = {tool.name: tool for tool in tools}
+    bound_llm = llm.bind_tools(tools) if hasattr(llm, "bind_tools") else llm
+    full_messages: list = [
+        SystemMessage(content=EXPLORER_SYSTEM_PROMPT),
+        HumanMessage(content=user_message),
+    ]
+    model_messages: list = list(full_messages)
+
+    for round_idx in range(max_rounds):
+        ensure_not_cancelled()
+        raw_response = bound_llm.invoke(model_messages)
+        ai_msg = raw_response if isinstance(raw_response, AIMessage) else AIMessage(content=str(raw_response))
+        tool_calls = []
+        for tool_idx, call in enumerate(getattr(ai_msg, "tool_calls", None) or []):
+            tool_calls.append({
+                "id": call.get("id") or f"tool_call_{round_idx}_{tool_idx}",
+                "name": call.get("name"),
+                "args": call.get("args") or {},
+            })
+        if tool_calls != list(getattr(ai_msg, "tool_calls", None) or []):
+            ai_msg = ai_msg.model_copy(update={"tool_calls": tool_calls})
+        full_messages.append(ai_msg)
+        model_messages.append(_compact_ai_message_for_model(ai_msg))
+        if not tool_calls:
+            break
+        for call in tool_calls:
+            ensure_not_cancelled()
+            tool_name = call.get("name")
+            if tool_name not in tool_map:
+                raise ValueError(f"unknown explorer tool: {tool_name}")
+            tool_result = tool_map[tool_name].invoke(call.get("args") or {})
+            summarized = _summarize_explorer_tool_result(tool_name, tool_result)
+            content = json.dumps(summarized, ensure_ascii=False)
+            tool_msg = ToolMessage(
+                content=content,
+                tool_call_id=call["id"],
+                name=tool_name,
+            )
+            full_messages.append(tool_msg)
+            model_messages.append(tool_msg)
+    return {"messages": full_messages}
+
+
+def _compact_ai_message_for_model(ai_msg):
+    content = _truncate_text(getattr(ai_msg, "content", ""), 600)
+    tool_calls = getattr(ai_msg, "tool_calls", None) or []
+    if tool_calls != list(getattr(ai_msg, "tool_calls", None) or []):
+        tool_calls = list(tool_calls)
+    return ai_msg.model_copy(update={"content": content, "tool_calls": tool_calls})
+
+
+def _summarize_explorer_tool_result(tool_name: str, tool_result: object) -> object:
+    if not isinstance(tool_result, (dict, list)):
+        return _truncate_text(str(tool_result), 600)
+    if tool_name == "inspect_item" and isinstance(tool_result, dict):
+        sample = tool_result.get("sample")
+        return {
+            "status": tool_result.get("status"),
+            "sample_preview": _compact_explorer_value(sample, depth=3),
+        }
+    if tool_name == "capture_network" and isinstance(tool_result, list):
+        caps = []
+        for cap in tool_result[:3]:
+            if isinstance(cap, dict):
+                caps.append({
+                    "api_url": cap.get("api_url"),
+                    "method": cap.get("method"),
+                    "status": cap.get("status"),
+                    "request_json_body": _compact_explorer_value(cap.get("request_json_body"), depth=2),
+                    "parsed_json_preview": _compact_explorer_value(cap.get("parsed_json"), depth=2),
+                })
+        return caps
+    if tool_name in {"test_url_template", "test_path_join"} and isinstance(tool_result, dict):
+        results = tool_result.get("results") or []
+        valid = sum(1 for item in results if isinstance(item, dict) and item.get("is_article_page"))
+        return {
+            "validated": f"{valid}/{len(results)}",
+            "results_preview": _compact_explorer_value(results[:3], depth=2),
+        }
+    if tool_name == "probe_url_patterns" and isinstance(tool_result, list):
+        hits = [item for item in tool_result if isinstance(item, dict) and item.get("is_article_page")]
+        return {
+            "hits": len(hits),
+            "results_preview": _compact_explorer_value(tool_result[:4], depth=2),
+        }
+    if tool_name == "fetch_page" and isinstance(tool_result, dict):
+        return {
+            "url": tool_result.get("url"),
+            "status": tool_result.get("status"),
+            "title": _truncate_text(tool_result.get("title"), 120),
+            "links_sample": _compact_explorer_value((tool_result.get("links") or [])[:10], depth=1),
+            "html_preview": _truncate_text(tool_result.get("html"), 800),
+        }
+    return _compact_explorer_value(tool_result, depth=3)
+
+
+def _compact_explorer_value(value: object, *, depth: int = 2) -> object:
+    skip_keys = {"textContent", "content", "body", "html", "markdown"}
+    if depth <= 0:
+        if isinstance(value, dict):
+            compact: dict = {}
+            for idx, (key, item) in enumerate(value.items()):
+                if idx >= 6:
+                    break
+                if key in skip_keys:
+                    continue
+                compact[key] = _compact_explorer_value(item, depth=0)
+            return compact
+        if isinstance(value, list):
+            return [_compact_explorer_value(item, depth=0) for item in value[:3]]
+        if isinstance(value, str):
+            return _truncate_text(value, 120)
+        return value
+    if isinstance(value, dict):
+        compact: dict = {}
+        for idx, (key, item) in enumerate(value.items()):
+            if idx >= 8:
+                break
+            if key in skip_keys:
+                continue
+            compact[key] = _compact_explorer_value(item, depth=depth - 1)
+        return compact
+    if isinstance(value, list):
+        return [_compact_explorer_value(item, depth=depth - 1) for item in value[:4]]
+    if isinstance(value, str):
+        return _truncate_text(value, 160)
+    return value
+
+
+def _is_react_tool_sequence_error(exc: Exception) -> bool:
+    text = str(exc)
+    return (
+        "tool_calls" in text
+        and "tool_call_id" in text
+        and "tool messages" in text
+    )
+
+
+def _derive_exploration_candidates_from_state(state: DiscoveryState) -> list[dict]:
+    """从已有确定性证据构造候选池；不在这里预选唯一主候选。"""
+    candidates: list[dict] = []
     homepage = state.get("homepage") or {}
     html = homepage.get("html")
     if isinstance(html, str):
         feed_exploration = _derive_feed_exploration_from_html(site_url=state["site_url"], html=html)
         if feed_exploration:
-            return feed_exploration
+            candidates.append(feed_exploration)
     caps = state.get("network_captures") or []
     for cap in caps:
         parsed = cap.get("parsed_json")
@@ -392,8 +577,8 @@ def _derive_exploration_from_state(state: DiscoveryState) -> dict | None:
             verification="captured_network_response",
         )
         if exploration:
-            return exploration
-    return None
+            candidates.append(exploration)
+    return candidates
 
 
 def _derive_feed_exploration_from_html(*, site_url: str, html: str) -> dict | None:
@@ -478,8 +663,9 @@ def _derive_json_api_exploration(
     ).model_dump()
 
 
-def _derive_exploration_from_result(state: DiscoveryState, result: dict) -> dict | None:
-    """从 ReAct 工具轨迹里提炼确定性 exploration。"""
+def _derive_exploration_candidates_from_result(state: DiscoveryState, result: dict) -> list[dict]:
+    """从 ReAct 工具轨迹里提炼候选池。"""
+    candidates: list[dict] = []
     for event in _iter_tool_events(result):
         if event["name"] != "inspect_item":
             continue
@@ -496,7 +682,27 @@ def _derive_exploration_from_result(state: DiscoveryState, result: dict) -> dict
             verification="inspect_item_response",
         )
         if exploration:
-            return exploration
+            candidates.append(exploration)
+    return candidates
+
+
+def _pick_best_deterministic_candidate(candidates: list[dict]) -> dict | None:
+    if not candidates:
+        return None
+    ranked = sorted(candidates, key=_deterministic_candidate_score, reverse=True)
+    return ranked[0]
+
+
+def _match_deterministic_candidate(exploration: dict, candidates: list[dict]) -> dict | None:
+    if not candidates:
+        return None
+    list_url = exploration.get("list_url")
+    source_type = exploration.get("source_type")
+    for candidate in candidates:
+        if candidate.get("list_url") == list_url and candidate.get("source_type") == source_type:
+            return candidate
+    if len(candidates) == 1:
+        return candidates[0]
     return None
 
 
@@ -553,6 +759,36 @@ def _parse_tool_message_content(content: object) -> object:
         return ast.literal_eval(text)
     except Exception:
         return None
+
+
+def _deterministic_candidate_score(candidate: dict) -> int:
+    score = 0
+    fields = candidate.get("fields") or {}
+    list_url = (candidate.get("list_url") or "").lower()
+    fetch = candidate.get("fetch") or {}
+    json_body = fetch.get("json_body") if isinstance(fetch, dict) else None
+    sample_items = candidate.get("sample_items") or []
+
+    if candidate.get("source_type") in ("rss", "atom"):
+        score += 5
+    if fields.get("title"):
+        score += 4
+    if fields.get("url"):
+        score += 4
+    elif fields.get("id"):
+        score += 2
+    if fields.get("published_at"):
+        score += 2
+    if sample_items:
+        score += 1
+
+    if any(token in list_url for token in ("tags", "archives", "stats", "count")):
+        score -= 6
+    if isinstance(json_body, dict) and json_body.get("want") == "archives":
+        score -= 6
+    if all(not fields.get(key) for key in ("title", "url", "id")):
+        score -= 4
+    return score
 
 
 def _find_best_json_items_path(payload: object) -> tuple[str, list[dict]] | None:
@@ -620,6 +856,7 @@ def _build_sample_items(items: list[dict], site_url: str) -> list[dict]:
         raw_url = item.get(url_field) if url_field else None
         sample_items.append({
             "id": item.get("id") or item.get("no") or item.get("slug") or item.get("uuid"),
+            "raw_url": str(raw_url) if raw_url is not None else None,
             "url": urljoin(site_url, str(raw_url)) if raw_url else None,
             "title": item.get("title") or item.get("name") or item.get("subject"),
             "published_at": (
@@ -630,9 +867,61 @@ def _build_sample_items(items: list[dict], site_url: str) -> list[dict]:
                 or item.get("created_at")
                 or item.get("time")
             ),
-            "raw": item,
+            "raw": _sanitize_sample_raw(item),
         })
     return sample_items
+
+
+def _sanitize_sample_raw(item: dict) -> dict:
+    """裁剪 sample raw，只保留探查真正需要的少数字段。"""
+    keep_keys = {
+        "id",
+        "no",
+        "slug",
+        "uuid",
+        "title",
+        "name",
+        "subject",
+        "url",
+        "link",
+        "href",
+        "path",
+        "date",
+        "published_at",
+        "pubDate",
+        "publishTime",
+        "created_at",
+        "time",
+        "summary",
+        "description",
+        "desc",
+        "brief",
+        "articleName",
+        "author",
+    }
+    sanitized: dict = {}
+    for key, value in item.items():
+        if key not in keep_keys:
+            continue
+        if isinstance(value, str):
+            sanitized[key] = _truncate_text(value, 160)
+        elif isinstance(value, list):
+            clipped = value[:6]
+            sanitized[key] = [
+                _truncate_text(v, 120) if isinstance(v, str) else v
+                for v in clipped
+            ]
+        elif isinstance(value, dict):
+            inner: dict = {}
+            for inner_key, inner_value in list(value.items())[:8]:
+                if isinstance(inner_value, str):
+                    inner[inner_key] = _truncate_text(inner_value, 120)
+                else:
+                    inner[inner_key] = inner_value
+            sanitized[key] = inner
+        else:
+            sanitized[key] = value
+    return sanitized
 
 
 def _explorer_input_message(state: DiscoveryState) -> str:
@@ -673,6 +962,20 @@ def _truncate_text(text: str | None, limit: int = 500) -> str:
     return text if len(text) <= limit else text[:limit] + "...[truncated]"
 
 
+def _format_log_json_text(text: str | None) -> str | None:
+    """Pretty-print JSON for log panels; fall back to full raw text."""
+    if not text:
+        return None
+    cleaned = str(text).strip()
+    if not cleaned:
+        return None
+    try:
+        parsed = json.loads(cleaned)
+    except (json.JSONDecodeError, TypeError):
+        return cleaned
+    return json.dumps(parsed, ensure_ascii=False, indent=2)
+
+
 def _explorer_evidence_payload(result: dict) -> list[dict]:
     """从 ReAct 轨迹提炼证据，供第二阶段结构化整理使用。"""
     from langchain_core.messages import AIMessage, ToolMessage
@@ -697,7 +1000,7 @@ def _explorer_evidence_payload(result: dict) -> list[dict]:
     return payload[-12:]
 
 
-def _synthesize_exploration(*, site_url: str, result: dict, deterministic_exploration: dict | None) -> tuple[str, dict]:
+def _synthesize_exploration(*, site_url: str, result: dict, deterministic_candidates: list[dict]) -> tuple[str, dict]:
     """第二阶段：根据 ReAct 证据整理结构化 exploration JSON。"""
     from app.llm.client import LlmClient
 
@@ -711,6 +1014,8 @@ def _synthesize_exploration(*, site_url: str, result: dict, deterministic_explor
         "2. 所有字符串必须是合法 JSON 字符串；\n"
         "3. 如果证据不足，如实返回 source_type=unknown, success=false；\n"
         "4. 尽量保留证据中已经确认的字段和值。\n"
+        "4.1 下面会提供一个程序提取出的候选池，它们只是候选，不是最终答案；由你来选择最像文章列表的那个。\n"
+        "4.2 若候选像 tags/archives/count 统计接口，而不是文章列表，不要选它。\n"
         "5. 若 success=true 且 source_type=json_api，必须同时给出：list_url、format_locator.value（json path）、"
         "fields.title、至少 1 条 sample_items，以及 fields.url 或 fields.id 或 sample_items 中的 path/url。\n"
         "6. 若 success=true 且 source_type=rss/atom，必须给出 list_url 且 format_locator.kind=feed_entries。\n"
@@ -723,7 +1028,7 @@ def _synthesize_exploration(*, site_url: str, result: dict, deterministic_explor
         '  "format_locator": {"kind": "json_path | feed_entries | html_selector | unknown", "value": "string"},\n'
         '  "fields": {"id": null, "title": null, "url": null, "published_at": null, "summary": null, "content": null},\n'
         '  "html_selectors": {"item_selector": null, "link_selector": null, "title_selector": null, "date_selector": null},\n'
-        '  "sample_items": [],\n'
+        '  "sample_items": [{"id": null, "title": null, "raw_url": null, "url": null, "published_at": null, "raw": null}],\n'
         '  "url_candidates": [],\n'
         '  "pagination": {"type": "none | page_param | offset_limit | cursor | next_url | html_next | unknown", "page_param": null, "size_param": null, "offset_param": null, "limit_param": null, "cursor_param": null, "next_path": null, "has_more_path": null, "start": 1, "size": null, "notes": ""},\n'
         '  "evidence": [],\n'
@@ -731,7 +1036,7 @@ def _synthesize_exploration(*, site_url: str, result: dict, deterministic_explor
         '  "success": true\n'
         "}\n\n"
         f"站点 URL: {site_url}\n"
-        f"程序已提取的确定性候选（优先保留已确认字段）:\n{json.dumps(deterministic_exploration or {}, ensure_ascii=False)}\n\n"
+        f"程序提取的候选池（供你自行选择，不要机械接受）:\n{json.dumps(deterministic_candidates, ensure_ascii=False)}\n\n"
         f"ReAct 证据轨迹:\n{json.dumps(evidence, ensure_ascii=False)}\n"
     )
     raw = LlmClient().complete(
@@ -960,7 +1265,8 @@ explorer 只给了候选，最终的 UrlRule 由你产出。
   "sample_items": [
     {
       "id": "真实 id/slug/no；没有则 null",
-      "url": "真实 URL；没有则 null",
+      "raw_url": "原始链接字段值；可能是相对路径如 /xx/yy，也可能是完整 URL；没有则 null",
+      "url": "补全后的可访问 URL；没有则 null",
       "title": "真实标题；没有则 null",
       "raw": "来自 exploration 的原始样本片段"
     }
@@ -970,14 +1276,14 @@ explorer 只给了候选，最终的 UrlRule 由你产出。
 }
 
 已有 URL 字段的例子：
-{"mode": "existing_url", "template": null, "base_url": null, "path_field": null, "id_field": null, "url_field": "url", "sample_items": [...], "confidence": "high", "reason": "exploration.fields.url=link，sample_items 已有真实详情页链接"}
+{"mode": "existing_url", "template": null, "base_url": null, "path_field": null, "id_field": null, "url_field": "url", "sample_items": [...], "confidence": "high", "reason": "exploration.fields.url=link，sample_items.raw_url 本身就是完整详情页链接"}
 
 相对路径字段的例子：
-{"mode": "path_join", "template": null, "base_url": "https://www.openeuler.org", "path_field": "path", "id_field": null, "url_field": null, "sample_items": [...], "confidence": "high", "reason": "sample_items.raw.path 是相对路径，需与站点根 URL 拼接"}
+{"mode": "path_join", "template": null, "base_url": "https://www.openeuler.org", "path_field": "path", "id_field": null, "url_field": null, "sample_items": [...], "confidence": "high", "reason": "sample_items.raw_url 或 sample_items.raw.path 是相对路径，需与站点根 URL 拼接"}
 
 # 质量约束
-- 如果 exploration.fields.url 或 sample_items.url 已有真实详情页链接，优先 mode=existing_url，不要强推 template。
-- 如果 raw 样本里字段值像 /xx/yy 这种相对路径，优先 mode=path_join，不要伪装成 template + {id}。
+- 如果 exploration.fields.url 对应的 sample_items.raw_url 本身就是完整链接，优先 mode=existing_url，不要强推 template。
+- 如果 sample_items.raw_url 或 raw 样本里的字段值像 /xx/yy 这种相对路径，优先 mode=path_join，不要伪装成 template + {id}。
 - template 必须使用 {id} 占位符，不要写 {item.no}。
 - sample_items 必须来自 exploration.sample_items，严禁编造。
 - sample_items 数量 3~5 个；不足则给已有数量并说明。
@@ -1155,8 +1461,8 @@ max_iters 必须 1~20。
 4. extract.fields 必须产出 title 和 url：
    - title 从 exploration.fields.title 或 html title_selector 来。
    - 如果 url_rule.mode=existing_url：url 直接用 url_rule.url_field（裸字段名），不要拼模板。
-   - 如果 url_rule.mode=path_join：url 用 template:{base_url}{item.<path_field>}。
-     例如 base_url=https://www.openeuler.org、path_field=path，则 DSL 写 template:https://www.openeuler.org{item.path}。
+   - 如果 url_rule.mode=path_join：url 用 template:{base_url}/{item.<path_field>}。
+     例如 base_url=https://www.openeuler.org、path_field=path，则 DSL 写 template:https://www.openeuler.org/{item.path}。
    - 如果 url_rule.mode=template：url 用 template:，并把 {id} 转成 {item.<id_field>}。
      例如 url_rule.template=https://x.com/blog/{id}、id_field=no，则 DSL 写 template:https://x.com/blog/{item.no}。
    - 如果 HTML 链接来自 link_selector：url 用 attr:href，并确保 extract 的 from（item selector）能定位到含链接的元素。
@@ -1187,7 +1493,52 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
     if url_rule.get("mode") == "path_join" and url_rule.get("base_url") and url_rule.get("path_field"):
         fields = dict(exploration.get("fields") or {})
         path_field = url_rule["path_field"]
-        fields["url"] = f"template:{url_rule['base_url']}{{item.{path_field}}}"
+        base_url = str(url_rule["base_url"]).rstrip("/")
+        fields["url"] = f"template:{base_url}/{{item.{path_field}}}"
+        pagination = exploration.get("pagination") or {}
+        fetch_cfg = exploration.get("fetch") or {}
+        format_value = (exploration.get("format_locator") or {}).get("value", "obj.records")
+        if pagination.get("type") == "page_param" and pagination.get("page_param"):
+            page_param = pagination["page_param"]
+            start = pagination.get("start", 1) or 1
+            loop_json_body = dict(fetch_cfg.get("json_body") or {})
+            loop_json_body[page_param] = f"{{{{{page_param}}}}}"
+            actions = [
+                {"op": "set", "var": page_param, "value": start},
+                {
+                    "op": "loop",
+                    "until": {"path": format_value, "op": "==", "value": []},
+                    "max_iters": 10,
+                    "body": [
+                        {
+                            "op": "fetch",
+                            "mode": "json",
+                            "url": exploration.get("list_url") or state["site_url"],
+                            "method": fetch_cfg.get("method", "GET"),
+                            "headers": fetch_cfg.get("headers", {}),
+                            "query": fetch_cfg.get("query", {}),
+                            "json_body": loop_json_body,
+                            "as": "last_fetch",
+                        },
+                        {
+                            "op": "extract",
+                            "from": format_value,
+                            "fields": {k: v for k, v in fields.items() if v is not None},
+                            "into": "items",
+                            "merge": True,
+                        },
+                    ],
+                    "on_each": [{"op": "set", "var": page_param, "expr": f"{{{{{page_param}}}}} + 1"}],
+                },
+                {"op": "dedup_by", "field": "url"},
+            ]
+            recipe_dict = {
+                "recipe_type": "dsl",
+                "entry_url": state["site_url"],
+                "actions": actions,
+                "notes": ["deterministic path_join recipe", "deterministic page_param loop"],
+            }
+            return {"dsl_recipe": DslRecipe(**recipe_dict).model_dump(), "token_used": state.get("token_used", 0) + 1000}
         recipe_dict = {
             "recipe_type": "dsl",
             "entry_url": state["site_url"],
@@ -1363,6 +1714,8 @@ def auditor(state: DiscoveryState, llm=None, test_fn=None) -> DiscoveryState:
     errors = validate_semantics(recipe)  # 静态审：结构合理性
     # 动态审：实跑配方拿真实产出（测试可注入 mock，生产真跑）
     test_result = test_fn(recipe) if test_fn is not None else _run_recipe_for_audit(recipe)
+    if test_result.get("error"):
+        errors = [*errors, f"runtime error: {test_result['error']}"]
     items = test_result.get("items", [])
     discovered_count = test_result.get("stats", {}).get("discovered_count", len(items))
     # LLM 审：看真实抓到的条目，判价值/全面性/反爬/翻页
@@ -1657,7 +2010,7 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
 
 def _append_explorer_generation_logs(*, append_run_log, run_id: int, source_label: str, update: dict) -> None:
     """把 explorer 两阶段生成内容写入日志面板，便于前端排查。"""
-    raw = _truncate_text(update.get("explorer_agent_output"), 600)
+    raw = _truncate_text((update.get("explorer_agent_output") or "").strip(), 1800)
     if raw:
         append_run_log(
             "探查",
@@ -1666,7 +2019,7 @@ def _append_explorer_generation_logs(*, append_run_log, run_id: int, source_labe
             run_id=run_id,
             step="explorer_raw",
         )
-    synth = _truncate_text(update.get("explorer_synthesis_output"), 600)
+    synth = _format_log_json_text(update.get("explorer_synthesis_output"))
     if synth:
         append_run_log(
             "探查",

@@ -103,10 +103,10 @@ def capture_network(url: str) -> list:
         p.on("response", on_resp)
         try:
             ensure_not_cancelled()
-            p.goto(url, wait_until="networkidle", timeout=45000)
+            p.goto(url, wait_until="networkidle", timeout=15000)
         except Exception:
             pass
-        p.wait_for_timeout(3000)
+        p.wait_for_timeout(1000)
         b.close()
     return caps
 

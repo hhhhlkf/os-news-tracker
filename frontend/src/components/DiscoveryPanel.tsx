@@ -11,6 +11,7 @@ import { attemptCount, type FlowNodeId } from "../discovery/flowState";
 export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: number) => void }) {
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
+  const [nameError, setNameError] = useState<string | null>(null);
   const [runId, setRunId] = useState<number | null>(null);
   const [dup, setDup] = useState<{ method_id: number; domain: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -57,8 +58,17 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
 
   const nameMut = useMutation({
     mutationFn: (u: string) => suggestDiscoveryName(u),
-    onSuccess: (r) => setName(r.name),
-    onError: () => {},
+    onSuccess: (r) => {
+      setName(r.name);
+      setNameError(null);
+    },
+    onError: (e) => {
+      const message =
+        e instanceof Error && e.message
+          ? e.message
+          : "自动命名失败，请稍后重试";
+      setNameError(message);
+    },
   });
 
   const running = runQuery.data?.status === "running";
@@ -108,13 +118,23 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
         <input placeholder="站点 URL，如 openanolis.cn/blog" value={url}
-          onChange={(e) => setUrl(e.target.value)} style={{ ...inputBase, flex: "1 1 260px", minWidth: 200 }} />
+          onChange={(e) => {
+            setUrl(e.target.value);
+            setNameError(null);
+          }} style={{ ...inputBase, flex: "1 1 260px", minWidth: 200 }} />
         <div style={{ display: "flex", gap: 6, flex: "1 1 210px", minWidth: 190 }}>
           <input placeholder="名称（选填）" value={name}
-            onChange={(e) => setName(e.target.value)} style={{ ...inputBase, flex: 1 }} />
-          <button type="button" onClick={() => url && nameMut.mutate(url)}
+            onChange={(e) => {
+              setName(e.target.value);
+              setNameError(null);
+            }} style={{ ...inputBase, flex: 1 }} />
+          <button type="button" onClick={() => {
+            if (!url) return;
+            setNameError(null);
+            nameMut.mutate(url);
+          }}
             disabled={!url || nameMut.isPending}
-            style={btnGhost}>✨ 自动</button>
+            style={btnGhost}>{nameMut.isPending ? "命名中…" : "✨ 自动"}</button>
         </div>
         <button type="button" disabled={startDisabled} onClick={() => startRun(false)}
           style={startDisabled ? btnDisabled : btnPrimary}>{running ? "探查中…" : startBusy ? "启动中…" : "开始探查"}</button>
@@ -184,6 +204,7 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
           </div>
         </div>
       )}
+      {nameError && <div style={{ color: "#b42318", fontSize: 13, marginTop: 10 }}>{nameError}</div>}
       {error && <div style={{ color: "#b42318", fontSize: 13, marginTop: 10 }}>{error}</div>}
     </section>
   );

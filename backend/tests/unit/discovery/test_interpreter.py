@@ -1,5 +1,7 @@
 """DslInterpreter 单元测试 — mock fetch_fn，验证 fetch/extract/set/dedup 原语。"""
 
+import json
+
 from app.discovery.interpreter import DslInterpreter
 from app.discovery.dsl import DslRecipe
 
@@ -110,3 +112,42 @@ def test_goto_wait_click_extract():
     out = DslInterpreter(browser_fn=fake_browser).run(recipe)
     assert calls == ["goto", "wait_for", "click", "extract"]
     assert len(out["items"]) == 2
+
+
+def test_fetch_preserves_non_string_json_body_values(monkeypatch):
+    captured = {}
+
+    class _Resp:
+        def json(self):
+            return {"ok": True}
+
+    def fake_request(method, url, headers=None, json=None, timeout=30):
+        captured["method"] = method
+        captured["url"] = url
+        captured["json"] = json
+        return _Resp()
+
+    monkeypatch.setattr("httpx.request", fake_request)
+    recipe = DslRecipe(entry_url="https://x.com", actions=[
+        {"op": "fetch", "mode": "json", "url": "https://x.com/api", "method": "POST",
+         "json_body": {"category": "blog", "page": 1, "pageSize": 12}},
+    ])
+    DslInterpreter().run(recipe)
+    assert captured["json"] == {"category": "blog", "page": 1, "pageSize": 12}
+
+
+def test_fetch_json_uses_lenient_decoder(monkeypatch):
+    class _Resp:
+        text = '{"obj":{"records":[{"title":"A"}]}}{"extra":true}'
+
+        def json(self):
+            raise json.JSONDecodeError("Extra data", self.text, 33)
+
+    monkeypatch.setattr("httpx.request", lambda *args, **kwargs: _Resp())
+    recipe = DslRecipe(entry_url="https://x.com", actions=[
+        {"op": "fetch", "mode": "json", "url": "https://x.com/api"},
+        {"op": "extract", "from": "obj.records", "fields": {"title": "title", "url": "template:https://x.com/{item.title}"}},
+    ])
+    out = DslInterpreter().run(recipe)
+    assert len(out["items"]) == 1
+    assert out["items"][0]["title"] == "A"

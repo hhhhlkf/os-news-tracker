@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Callable
 
@@ -97,20 +98,38 @@ class DslInterpreter:
 
         url = render_vars(action.url, ctx)  # 变量替换（如 {{page}}）
         headers = {k: render_vars(v, ctx) for k, v in action.headers.items()}
-        body = (
-            {k: render_vars(v, ctx) for k, v in (action.json_body or {}).items()}
-            if action.json_body
-            else None
-        )
+        body = self._render_json_like(action.json_body, ctx) if action.json_body is not None else None
         r = httpx.request(action.method, url, headers=headers, json=body, timeout=30)
         if action.mode == "json":
-            ctx["last_fetch"] = r.json()
+            try:
+                ctx["last_fetch"] = r.json()
+            except Exception:
+                ctx["last_fetch"] = self._decode_json_lenient(r.text)
         elif action.mode == "feed":
             import feedparser
 
             ctx["last_fetch"] = {"feed": feedparser.parse(r.text)}
         else:
             ctx["last_fetch"] = {"html": r.text}
+
+    def _render_json_like(self, value: Any, ctx: dict[str, Any]) -> Any:
+        """递归渲染 JSON 载荷中的字符串变量，保留 int/bool/null 等原始类型。"""
+        if isinstance(value, str):
+            return render_vars(value, ctx)
+        if isinstance(value, list):
+            return [self._render_json_like(v, ctx) for v in value]
+        if isinstance(value, dict):
+            return {k: self._render_json_like(v, ctx) for k, v in value.items()}
+        return value
+
+    def _decode_json_lenient(self, text: str) -> Any:
+        """按标准 JSON 解析；若响应拼接了多个 JSON，则只取第一个对象。"""
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            decoder = json.JSONDecoder()
+            obj, _ = decoder.raw_decode(text)
+            return obj
 
     def _extract(self, action: ExtractAction, ctx: dict[str, Any]) -> None:
         """提取字段，merge=True 追加（翻页），False 覆盖。"""

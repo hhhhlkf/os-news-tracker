@@ -98,3 +98,8 @@ def test_eval_condition_var():
     ctx = {"vars": {"page": 3}}
     assert eval_condition({"var": "page", "op": ">", "value": 2}, ctx) is True
     assert eval_condition({"var": "page", "op": ">", "value": 5}, ctx) is False
+
+
+def test_eval_condition_missing_path_with_order_comparator_returns_false():
+    ctx = {"last_fetch": None}
+    assert eval_condition({"path": "obj.records", "op": ">=", "value": []}, ctx) is False

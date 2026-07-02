@@ -5,6 +5,8 @@
 
 from datetime import datetime, timezone
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, HttpUrl
 from sqlalchemy import select
@@ -20,6 +22,8 @@ from app.llm.client import LlmClient
 from app.models import CrawlMethod, CrawlMethodDomain, SiteDiscoveryRun
 
 router = APIRouter(prefix="/discovery", tags=["discovery"])
+logger = logging.getLogger(__name__)
+SUGGEST_NAME_LLM_TIMEOUT_SECONDS = 5.0
 MAX_SUGGEST_NAME_LENGTH = 20
 
 
@@ -225,7 +229,11 @@ def _suggest_name_with_llm(site_url: str, domain: str, title: str | None) -> str
         f"域名: {domain}\n"
         f"页面标题: {title or '(无标题)'}\n"
     )
-    result = LlmClient().complete(prompt, temperature=0.1)
+    result = LlmClient().complete(
+        prompt,
+        temperature=0.1,
+        timeout=SUGGEST_NAME_LLM_TIMEOUT_SECONDS,
+    )
     return _normalize_site_name(result)
 
 
@@ -238,19 +246,35 @@ def suggest_name(body: SuggestNameRequest):
     domain = urlparse(site_url).netloc.removeprefix("www.")
     title = None
     try:
+        logger.info("suggest-name title fetch start url=%s", site_url)
         resp = httpx.get(site_url, timeout=8.0, follow_redirects=True,
                          headers={"User-Agent": "os-news-tracker/discovery"})
         if resp.status_code < 400:
             title = _extract_title(resp.text)
+        logger.info(
+            "suggest-name title fetch done url=%s status=%s title=%s",
+            site_url,
+            resp.status_code,
+            (title or "")[:80],
+        )
     except Exception:
-        pass
+        logger.exception("suggest-name title fetch failed url=%s", site_url)
 
     try:
+        logger.info(
+            "suggest-name llm start url=%s domain=%s has_title=%s timeout=%s",
+            site_url,
+            domain,
+            bool(title),
+            SUGGEST_NAME_LLM_TIMEOUT_SECONDS,
+        )
         llm_name = _suggest_name_with_llm(site_url, domain, title)
         if llm_name:
+            logger.info("suggest-name llm success url=%s name=%s", site_url, llm_name)
             return {"name": llm_name}
     except Exception:
-        pass
+        logger.exception("suggest-name llm failed url=%s", site_url)
 
     fallback = _normalize_site_name(title) or _normalize_site_name(domain) or domain[:MAX_SUGGEST_NAME_LENGTH]
+    logger.info("suggest-name fallback url=%s name=%s", site_url, fallback)
     return {"name": fallback}

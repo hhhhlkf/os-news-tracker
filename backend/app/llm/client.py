@@ -28,6 +28,7 @@ class LlmClient:
         *,
         temperature: float = 0.2,
         response_format: dict | None = None,
+        timeout: float | None = None,
     ) -> str:
         key = self._key(prompt, temperature=temperature, response_format=response_format)
         if key in self._cache:
@@ -39,12 +40,53 @@ class LlmClient:
         }
         if response_format is not None:
             payload["response_format"] = response_format
-        resp = self._http.post(
-            f"{self._settings.llm_base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {self._settings.llm_api_key}"},
-            json=payload,
-        )
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
+        try:
+            content = self._post_complete(payload, timeout=timeout)
+        except Exception as exc:
+            if response_format is not None and self._should_retry_without_response_format(exc):
+                retry_payload = dict(payload)
+                retry_payload.pop("response_format", None)
+                content = self._post_complete(retry_payload, timeout=timeout)
+            else:
+                raise
         self._cache[key] = content
         return content
+
+    def _post_complete(self, payload: dict, *, timeout: float | None = None) -> str:
+        import httpx
+
+        try:
+            request_kwargs = {
+                "headers": {"Authorization": f"Bearer {self._settings.llm_api_key}"},
+                "json": payload,
+            }
+            if timeout is not None:
+                request_kwargs["timeout"] = timeout
+            resp = self._http.post(
+                f"{self._settings.llm_base_url}/chat/completions",
+                **request_kwargs,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = self._response_error_text(getattr(exc, "response", None))
+            if detail:
+                raise RuntimeError(f"{exc} · response_body={detail}") from exc
+            raise
+        return resp.json()["choices"][0]["message"]["content"]
+
+    def _should_retry_without_response_format(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        return "response_format" in text and (
+            "unavailable" in text
+            or "unsupported" in text
+            or "invalid_request_error" in text
+        )
+
+    def _response_error_text(self, response) -> str | None:
+        if response is None:
+            return None
+        text = getattr(response, "text", None)
+        if not text:
+            return None
+        text = str(text).strip()
+        return text[:500] + ("...[truncated]" if len(text) > 500 else "")

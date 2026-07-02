@@ -340,4 +340,28 @@ describe("DiscoveryPanel", () => {
 
     expect(cancelDiscoveryRun).toHaveBeenCalledWith(41);
   });
+
+  it("shows a visible error when auto naming fails", async () => {
+    suggestDiscoveryName.mockRejectedValue(new Error("自动命名超时"));
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <DiscoveryPanel />
+        </QueryClientProvider>,
+      );
+    });
+    await flush();
+
+    changeInput(container.querySelector("input[placeholder='站点 URL，如 openanolis.cn/blog']")!, "https://example.com");
+    await flush();
+
+    const autoButton = [...container.querySelectorAll("button")].find((node) => node.textContent === "✨ 自动") as HTMLButtonElement;
+    act(() => {
+      autoButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    expect(container.textContent).toContain("自动命名超时");
+  });
 });

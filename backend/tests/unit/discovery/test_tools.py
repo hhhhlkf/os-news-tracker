@@ -69,6 +69,8 @@ def test_inspect_item_tolerates_concatenated_json_response(monkeypatch):
 
 def test_capture_network_parses_json_responses(monkeypatch):
     """mock sync_playwright：验证 on_response 回调解析 JSON 并收集到 caps。"""
+    seen = {}
+
     class FakeReq:
         method = "GET"
     class FakeResp:
@@ -86,10 +88,11 @@ def test_capture_network_parses_json_responses(monkeypatch):
             if event == "response":
                 self._handler = handler
         def goto(self, *a, **k):
+            seen["goto_kwargs"] = k
             if self._handler:
                 self._handler(FakeResp("https://x.com/api", '{"a": 1}'))
-        def wait_for_timeout(self, *a, **k):
-            pass
+        def wait_for_timeout(self, ms):
+            seen["wait_ms"] = ms
     class FakeBrowser:
         def new_page(self):
             return FakePage()
@@ -111,6 +114,8 @@ def test_capture_network_parses_json_responses(monkeypatch):
     assert out and out[0]["api_url"] == "https://x.com/api"
     assert out[0]["method"] == "GET"
     assert out[0]["parsed_json"] == {"a": 1}
+    assert seen["goto_kwargs"]["timeout"] == 15000
+    assert seen["wait_ms"] == 1000
 
 
 def test_probe_url_patterns_uses_default_candidates(monkeypatch):

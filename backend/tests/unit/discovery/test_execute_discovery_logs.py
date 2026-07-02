@@ -4,6 +4,7 @@ The frontend log panel (Task 9) polls /news-run/logs and filters by run_id.
 Per-step progress logs emitted inside the g.stream() loop must include run_id,
 otherwise the panel drops them and only shows the 3 "任务"-stage lines.
 """
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -153,6 +154,65 @@ def test_explorer_logs_include_generation_details():
     messages = [c["message"] for c in calls if c.get("run_id") == 99]
     assert any("原始输出" in m for m in messages)
     assert any("结构化整理" in m for m in messages)
+
+
+def test_explorer_logs_include_full_structured_json_without_truncation():
+    from app.discovery import graph as graph_mod
+
+    calls = []
+    long_payload = {
+        "source_type": "json_api",
+        "list_url": "https://www.openeuler.org/api-search/search/sort/blog",
+        "fetch": {
+            "method": "POST",
+            "headers": {},
+            "query": {},
+            "json_body": {"category": "blog", "pageNum": 1, "pageSize": 10},
+        },
+        "path": "obj.records",
+        "fields": {"url": "path", "title": "title", "published_at": "date"},
+        "sample_items": [{"url": "/blog/x", "title": "示例标题"}],
+        "success": True,
+    }
+    synth_json = json.dumps(long_payload, ensure_ascii=False)
+
+    def capture_append(stage, message, *, source=None, level="info", **fields):
+        calls.append({"stage": stage, "message": message, "source": source,
+                      "level": level, **fields})
+        return {}
+
+    class _GraphWithLongExplorerSynth(_FakeGraph):
+        def __init__(self):
+            self._chunks = [
+                {"explorer": {
+                    "exploration": long_payload,
+                    "explorer_agent_output": "原始输出",
+                    "explorer_synthesis_output": synth_json,
+                }},
+            ]
+
+        def get_state(self, config):
+            return SimpleNamespace(values={"verdict": "failed", "method_id": None, "token_used": 0})
+
+    fake_session = _FakeSession()
+    with patch("langgraph.checkpoint.postgres.PostgresSaver.from_conn_string",
+               lambda *a, **k: _FakeCheckpointer()), \
+         patch.object(graph_mod, "_to_psycopg_conn_string", return_value="postgresql://x"), \
+         patch.object(graph_mod, "build_graph", return_value=_GraphWithLongExplorerSynth()), \
+         patch("app.db.SessionLocal", return_value=fake_session), \
+         patch("app.run_logs.append_run_log", side_effect=capture_append):
+        graph_mod._execute_discovery(
+            run_id=100, site_url="https://x.test", force=False, name=None,
+        )
+
+    structured = next(
+        c["message"] for c in calls
+        if c.get("run_id") == 100 and "结构化整理" in c["message"]
+    )
+    assert "...[truncated]" not in structured
+    assert "api-search/search/sort/blog" in structured
+    assert "obj.records" in structured
+    assert "示例标题" in structured
 
 
 def test_explorer_logs_include_parse_failure_reason():

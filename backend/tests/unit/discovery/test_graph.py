@@ -104,7 +104,38 @@ def test_dsl_writer_path_join_shortcut_produces_template_url():
     )
     out = dsl_writer(state)
     extract = next(a for a in out["dsl_recipe"]["actions"] if a["op"] == "extract")
-    assert extract["fields"]["url"] == "template:https://www.openeuler.org{item.path}"
+    assert extract["fields"]["url"] == "template:https://www.openeuler.org/{item.path}"
+
+
+def test_dsl_writer_path_join_with_page_pagination_adds_loop():
+    from app.discovery.graph import dsl_writer
+
+    state = _state(
+        site_url="https://www.openeuler.org",
+        exploration={
+            "list_url": "https://www.openeuler.org/api-search/search/sort/blog",
+            "fetch": {
+                "method": "POST",
+                "headers": {"Content-Type": "application/json"},
+                "query": {},
+                "json_body": {"category": "blog", "lang": "zh", "page": 1, "pageSize": 12},
+            },
+            "format_locator": {"kind": "json_path", "value": "obj.records"},
+            "fields": {"title": "title", "published_at": "date", "summary": "summary", "content": "textContent"},
+            "pagination": {"type": "page_param", "page_param": "page", "size_param": "pageSize", "start": 1, "size": 12},
+        },
+        url_rule={"mode": "path_join", "base_url": "https://www.openeuler.org", "path_field": "path"},
+    )
+    out = dsl_writer(state)
+    actions = out["dsl_recipe"]["actions"]
+    assert actions[0]["op"] == "set"
+    assert actions[0]["var"] == "page"
+    loop = next(a for a in actions if a["op"] == "loop")
+    fetch = next(a for a in loop["body"] if a["op"] == "fetch")
+    extract = next(a for a in loop["body"] if a["op"] == "extract")
+    assert fetch["json_body"]["page"] == "{{page}}"
+    assert extract["merge"] is True
+    assert extract["fields"]["url"] == "template:https://www.openeuler.org/{item.path}"
 
 
 def test_dsl_writer_increments_token_usage():
@@ -170,6 +201,7 @@ _EXPLORATION_JSON_API = {
             "raw": {"id": "1", "title": "A", "url": "https://x.com/a", "published_at": "2026-07-01"},
             "id": "1",
             "title": "A",
+            "raw_url": "https://x.com/a",
             "url": "https://x.com/a",
             "published_at": "2026-07-01",
         }
@@ -292,6 +324,65 @@ def test_auditor_flags_antibot_content():
     assert out["audit_result"]["llm_verdict"]["is_real_content"] is False
 
 
+def test_auditor_rejects_malformed_path_join_template_before_llm():
+    from app.discovery.graph import auditor
+
+    recipe_dict = {
+        "entry_url": "https://www.openeuler.openatom.cn/zh/interaction/blog-list/",
+        "actions": [
+            {
+                "op": "fetch",
+                "mode": "json",
+                "url": "https://www.openeuler.openatom.cn/api-search/search/sort/blog",
+                "method": "POST",
+                "json_body": {"category": "blog", "lang": "zh", "page": 1, "pageSize": 12},
+            },
+            {
+                "op": "extract",
+                "from": "obj.records",
+                "fields": {
+                    "title": "title",
+                    "url": "template:https://www.openeuler.openatom.cn{item.path}",
+                    "published_at": "date",
+                },
+            },
+            {"op": "dedup_by", "field": "url"},
+        ],
+    }
+    state = _state(dsl_recipe=recipe_dict, attempt=0)
+    out = auditor(
+        state,
+        llm=_MockChat(returns=_AUDIT_PASS),
+        test_fn=lambda recipe: {"items": [{"title": "A", "url": "https://ok"}], "stats": {"discovered_count": 1}},
+    )
+    assert out["audit_result"]["passed"] is False
+    assert any("url template" in err.lower() or "path_join" in err.lower() for err in out["audit_result"]["errors"])
+    assert out["attempt"] == 1
+
+
+def test_auditor_surfaces_runtime_execution_error():
+    from app.discovery.graph import auditor
+
+    state = _state(
+        dsl_recipe={
+            "entry_url": "https://x.com",
+            "actions": [{"op": "fetch", "mode": "json", "url": "https://x.com/api"}],
+        },
+        attempt=0,
+    )
+    out = auditor(
+        state,
+        llm=_MockChat(returns=_AUDIT_FAIL_ANTIBOT),
+        test_fn=lambda recipe: {
+            "items": [],
+            "stats": {"discovered_count": 0},
+            "error": "TypeError expected string or bytes-like object, got 'int'",
+        },
+    )
+    assert out["audit_result"]["passed"] is False
+    assert any("runtime error" in err.lower() or "typeerror" in err.lower() for err in out["audit_result"]["errors"])
+
+
 # --- explorer worker ---
 
 def test_explorer_uses_second_stage_to_structure_freeform_agent_output(monkeypatch):
@@ -299,20 +390,16 @@ def test_explorer_uses_second_stage_to_structure_freeform_agent_output(monkeypat
     from langchain_core.messages import AIMessage
     from app.discovery import graph as graph_mod
 
-    class _FakeAgent:
-        def invoke(self, args):
-            return {"messages": [AIMessage(content="已发现一个 JSON API，字段看起来完整，建议后续整理。")]}
+    def fake_run_loop(*, llm, tools, user_message, max_rounds=6):
+        assert "请探查站点 https://x.com" in user_message
+        return {"messages": [AIMessage(content="已发现一个 JSON API，字段看起来完整，建议后续整理。")]}
 
-    def fake_create_react_agent(llm, tools, prompt=None, **kw):
-        assert prompt == graph_mod.EXPLORER_SYSTEM_PROMPT  # 确认系统 prompt 传进去了
-        return _FakeAgent()
-
-    def fake_synthesize_exploration(*, site_url, result, deterministic_exploration):
+    def fake_synthesize_exploration(*, site_url, result, deterministic_candidates):
         assert site_url == "https://x.com"
-        assert deterministic_exploration is None
+        assert deterministic_candidates == []
         return json.dumps(_EXPLORATION_JSON_API, ensure_ascii=False), _EXPLORATION_JSON_API
 
-    monkeypatch.setattr("langgraph.prebuilt.create_react_agent", fake_create_react_agent)
+    monkeypatch.setattr(graph_mod, "_run_explorer_tool_loop", fake_run_loop)
     monkeypatch.setattr(graph_mod, "_synthesize_exploration", fake_synthesize_exploration)
     out = graph_mod.explorer(_state(site_url="https://x.com"), llm=_MockChat())
     assert out["exploration"]["source_type"] == "json_api"
@@ -326,12 +413,11 @@ def test_explorer_returns_unknown_json_when_synthesis_fails_without_deterministi
     from langchain_core.messages import AIMessage
     from app.discovery import graph as graph_mod
 
-    class _FakeAgent:
-        def invoke(self, args):
-            return {"messages": [AIMessage(content="抱歉，我无法探查该站点。")]}
-
-    monkeypatch.setattr("langgraph.prebuilt.create_react_agent",
-                        lambda llm, tools, prompt=None, **kw: _FakeAgent())
+    monkeypatch.setattr(
+        graph_mod,
+        "_run_explorer_tool_loop",
+        lambda **kwargs: {"messages": [AIMessage(content="抱歉，我无法探查该站点。")]},
+    )
     monkeypatch.setattr(
         graph_mod,
         "_synthesize_exploration",
@@ -348,15 +434,11 @@ def test_explorer_passes_existing_network_captures_to_agent(monkeypatch):
 
     seen = {}
 
-    class _FakeAgent:
-        def invoke(self, args):
-            seen["args"] = args
-            return {"messages": []}
+    def fake_run_loop(*, llm, tools, user_message, max_rounds=6):
+        seen["user_message"] = user_message
+        return {"messages": []}
 
-    monkeypatch.setattr(
-        "langgraph.prebuilt.create_react_agent",
-        lambda llm, tools, prompt=None, **kw: _FakeAgent(),
-    )
+    monkeypatch.setattr(graph_mod, "_run_explorer_tool_loop", fake_run_loop)
     graph_mod.explorer(_state(
         site_url="https://x.com",
         network_captures=[{
@@ -367,23 +449,97 @@ def test_explorer_passes_existing_network_captures_to_agent(monkeypatch):
         }],
         homepage={"title": "Example Site", "links": ["https://x.com/a"]},
     ), llm=_MockChat())
-    user_msg = seen["args"]["messages"][0][1]
+    user_msg = seen["user_message"]
     assert "https://x.com/api/list" in user_msg
     assert "records" in user_msg
     assert "category" in user_msg
+
+
+def test_explorer_uses_shorter_tool_loop_rounds_and_selected_tools(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from app.discovery import graph as graph_mod
+
+    seen = {}
+
+    def fake_run_loop(*, llm, tools, user_message, max_rounds=6):
+        seen["tool_names"] = [tool.name for tool in tools]
+        seen["max_rounds"] = max_rounds
+        return {"messages": [AIMessage(content="已确认候选 API。")]}
+
+    monkeypatch.setattr(graph_mod, "_run_explorer_tool_loop", fake_run_loop)
+    monkeypatch.setattr(
+        graph_mod,
+        "_synthesize_exploration",
+        lambda **kwargs: (json.dumps(_EXPLORATION_JSON_API, ensure_ascii=False), _EXPLORATION_JSON_API),
+    )
+    graph_mod.explorer(_state(
+        site_url="https://www.openeuler.org",
+        network_captures=[{
+            "api_url": "https://www.openeuler.org/api-search/search/sort/blog",
+            "method": "POST",
+            "parsed_json": {"obj": {"records": [{"title": "A", "path": "/a", "date": "2026-07-01"}]}},
+            "request_json_body": {"category": "blog", "page": 1, "pageSize": 12},
+        }],
+    ), llm=_MockChat())
+    assert seen["max_rounds"] == 3
+    assert "capture_network" not in seen["tool_names"]
+    assert "fetch_page" not in seen["tool_names"]
+    assert "inspect_item" not in seen["tool_names"]
+
+
+def test_explorer_uses_deterministic_fallback_when_react_tool_sequence_breaks(monkeypatch):
+    from app.discovery import graph as graph_mod
+
+    monkeypatch.setattr(
+        graph_mod,
+        "_run_explorer_tool_loop",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError(
+            "Error code: 400 - {'error': {'message': \"An assistant message with 'tool_calls' "
+            "must be followed by tool messages responding to each 'tool_call_id'. "
+            "(insufficient tool messages following tool_calls message)\"}}"
+        )),
+    )
+    out = graph_mod.explorer(_state(
+        site_url="https://www.openeuler.org",
+        network_captures=[{
+            "api_url": "https://www.openeuler.org/api-search/search/sort/blog",
+            "method": "POST",
+            "parsed_json": {"obj": {"records": [{"title": "A", "path": "/a", "date": "2026-07-01"}]}},
+            "request_json_body": {"category": "blog", "page": 1, "pageSize": 12},
+        }],
+    ), llm=_MockChat())
+    assert out["exploration"]["source_type"] == "json_api"
+    assert out["exploration"]["success"] is True
+    assert out["exploration"]["list_url"] == "https://www.openeuler.org/api-search/search/sort/blog"
+    assert "tool_calls" in (out["explorer_parse_error"] or "")
+    assert out["exploration"]["sample_items"][0]["raw_url"] == "/a"
+
+
+def test_explorer_returns_unknown_when_react_tool_sequence_breaks_without_evidence(monkeypatch):
+    from app.discovery import graph as graph_mod
+
+    monkeypatch.setattr(
+        graph_mod,
+        "_run_explorer_tool_loop",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError(
+            "Error code: 400 - {'error': {'message': \"An assistant message with 'tool_calls' "
+            "must be followed by tool messages responding to each 'tool_call_id'.\"}}"
+        )),
+    )
+    out = graph_mod.explorer(_state(site_url="https://x.com"), llm=_MockChat())
+    assert out["exploration"]["source_type"] == "unknown"
+    assert out["exploration"]["success"] is False
+    assert "tool_calls" in (out["explorer_parse_error"] or "")
 
 
 def test_explorer_returns_unknown_when_synthesis_fails_even_with_deterministic_hint(monkeypatch):
     from langchain_core.messages import AIMessage
     from app.discovery import graph as graph_mod
 
-    class _FakeAgent:
-        def invoke(self, args):
-            return {"messages": [AIMessage(content="我看到了候选 API，但把最终结构化结果交给整理器。")]}
-
     monkeypatch.setattr(
-        "langgraph.prebuilt.create_react_agent",
-        lambda llm, tools, prompt=None, **kw: _FakeAgent(),
+        graph_mod,
+        "_run_explorer_tool_loop",
+        lambda **kwargs: {"messages": [AIMessage(content="我看到了候选 API，但把最终结构化结果交给整理器。")]},
     )
     monkeypatch.setattr(
         graph_mod,
@@ -410,56 +566,251 @@ def test_explorer_passes_inspect_item_hint_into_second_stage(monkeypatch):
 
     seen = {}
 
-    class _FakeAgent:
-        def invoke(self, args):
-            return {
-                "messages": [
-                    AIMessage(
-                        content="我先检查候选 API 的 item 结构。",
-                        tool_calls=[{
-                            "name": "inspect_item",
-                            "args": {
-                                "api_url": "https://www.openeuler.org/api-search/search/sort/blog",
-                                "method": "POST",
-                                "json_body": {"category": "blog", "page": 1, "pageSize": 12},
-                            },
-                            "id": "call_inspect_1",
-                        }],
-                    ),
-                    ToolMessage(
-                        name="inspect_item",
-                        tool_call_id="call_inspect_1",
-                        content=json.dumps({
-                            "status": 200,
-                            "sample": {
-                                "obj": {
-                                    "records": [
-                                        {"path": "/zh/blog/a", "title": "A", "date": "2026-07-01", "summary": "S1"},
-                                        {"path": "/zh/blog/b", "title": "B", "date": "2026-07-02", "summary": "S2"},
-                                    ]
-                                }
-                            },
-                        }, ensure_ascii=False),
-                    ),
-                    AIMessage(content="找到候选 API，等待结构化整理。"),
-                ]
-            }
-
-    def fake_synthesize_exploration(*, site_url, result, deterministic_exploration):
-        seen["deterministic_exploration"] = deterministic_exploration
+    def fake_synthesize_exploration(*, site_url, result, deterministic_candidates):
+        seen["deterministic_candidates"] = deterministic_candidates
         return json.dumps(_EXPLORATION_JSON_API, ensure_ascii=False), _EXPLORATION_JSON_API
 
     monkeypatch.setattr(
-        "langgraph.prebuilt.create_react_agent",
-        lambda llm, tools, prompt=None, **kw: _FakeAgent(),
+        graph_mod,
+        "_run_explorer_tool_loop",
+        lambda **kwargs: {
+            "messages": [
+                AIMessage(
+                    content="我先检查候选 API 的 item 结构。",
+                    tool_calls=[{
+                        "name": "inspect_item",
+                        "args": {
+                            "api_url": "https://www.openeuler.org/api-search/search/sort/blog",
+                            "method": "POST",
+                            "json_body": {"category": "blog", "page": 1, "pageSize": 12},
+                        },
+                        "id": "call_inspect_1",
+                    }],
+                ),
+                ToolMessage(
+                    name="inspect_item",
+                    tool_call_id="call_inspect_1",
+                    content=json.dumps({
+                        "status": 200,
+                        "sample": {
+                            "obj": {
+                                "records": [
+                                    {"path": "/zh/blog/a", "title": "A", "date": "2026-07-01", "summary": "S1"},
+                                    {"path": "/zh/blog/b", "title": "B", "date": "2026-07-02", "summary": "S2"},
+                                ]
+                            }
+                        },
+                    }, ensure_ascii=False),
+                ),
+                AIMessage(content="找到候选 API，等待结构化整理。"),
+            ]
+        },
     )
     monkeypatch.setattr(graph_mod, "_synthesize_exploration", fake_synthesize_exploration)
     out = graph_mod.explorer(_state(site_url="https://x.com"), llm=_MockChat())
     assert out["exploration"]["source_type"] == "json_api"
     assert out["exploration"]["success"] is True
-    assert seen["deterministic_exploration"]["list_url"] == "https://www.openeuler.org/api-search/search/sort/blog"
-    assert seen["deterministic_exploration"]["fetch"]["method"] == "POST"
-    assert seen["deterministic_exploration"]["format_locator"]["value"] == "obj.records"
+    assert len(seen["deterministic_candidates"]) == 1
+    assert seen["deterministic_candidates"][0]["list_url"] == "https://www.openeuler.org/api-search/search/sort/blog"
+    assert seen["deterministic_candidates"][0]["fetch"]["method"] == "POST"
+    assert seen["deterministic_candidates"][0]["format_locator"]["value"] == "obj.records"
+
+
+def test_explorer_passes_candidate_pool_instead_of_single_preselected_hint(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from app.discovery import graph as graph_mod
+
+    seen = {}
+
+    def fake_synthesize_exploration(*, site_url, result, deterministic_candidates):
+        seen["deterministic_candidates"] = deterministic_candidates
+        return json.dumps(_EXPLORATION_JSON_API, ensure_ascii=False), _EXPLORATION_JSON_API
+
+    monkeypatch.setattr(
+        graph_mod,
+        "_run_explorer_tool_loop",
+        lambda **kwargs: {"messages": [AIMessage(content="我看到了多个候选 API，接下来由整理阶段判断。")]},
+    )
+    monkeypatch.setattr(graph_mod, "_synthesize_exploration", fake_synthesize_exploration)
+    graph_mod.explorer(_state(
+        site_url="https://www.openeuler.org",
+        network_captures=[
+            {
+                "api_url": "https://www.openeuler.org/api-search/search/tags",
+                "method": "POST",
+                "request_json_body": {"lang": "zh", "category": "blog", "want": "archives", "condition": {}},
+                "parsed_json": {"obj": {"totalNum": [{"key": "2026-06", "count": 12}, {"key": "2026-05", "count": 8}]}},
+            },
+            {
+                "api_url": "https://www.openeuler.org/api-search/search/sort/blog",
+                "method": "POST",
+                "request_json_body": {"category": "blog", "page": 1, "pageSize": 12},
+                "parsed_json": {"obj": {"records": [{"path": "/zh/blog/a", "title": "A", "date": "2026-07-01"}]}},
+            },
+        ],
+    ), llm=_MockChat())
+    urls = [candidate["list_url"] for candidate in seen["deterministic_candidates"]]
+    assert "https://www.openeuler.org/api-search/search/tags" in urls
+    assert "https://www.openeuler.org/api-search/search/sort/blog" in urls
+
+
+def test_run_explorer_tool_loop_appends_tool_messages(monkeypatch):
+    from langchain_core.messages import AIMessage, ToolMessage
+    from app.discovery import graph as graph_mod
+
+    class _ToolLoopLlm:
+        def __init__(self):
+            self.calls = []
+            self._responses = [
+                AIMessage(
+                    content="先调用工具。",
+                    tool_calls=[{
+                        "name": "inspect_item",
+                        "args": {"api_url": "https://x.com/api", "method": "GET", "json_body": None},
+                        "id": "call_1",
+                    }],
+                ),
+                AIMessage(content="工具结果已收到。"),
+            ]
+
+        def bind_tools(self, tools):
+            return self
+
+        def invoke(self, messages):
+            self.calls.append(messages)
+            return self._responses.pop(0)
+
+    class _FakeTool:
+        name = "inspect_item"
+
+        def invoke(self, args):
+            return {"status": 200, "sample": {"items": [{"title": "A"}]}}
+
+    llm = _ToolLoopLlm()
+    result = graph_mod._run_explorer_tool_loop(
+        llm=llm,
+        tools=[_FakeTool()],
+        user_message="请探查",
+        max_rounds=4,
+    )
+    tool_msgs = [msg for msg in result["messages"] if isinstance(msg, ToolMessage)]
+    assert len(tool_msgs) == 1
+    assert tool_msgs[0].tool_call_id == "call_1"
+    assert "sample" in tool_msgs[0].content
+    assert any(isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None) for msg in result["messages"])
+
+
+def test_run_explorer_tool_loop_summarizes_tool_payload_for_followup_model_call(monkeypatch):
+    from langchain_core.messages import AIMessage, ToolMessage
+    from app.discovery import graph as graph_mod
+
+    long_text = "X" * 2000
+
+    class _ToolLoopLlm:
+        def __init__(self):
+            self.calls = []
+            self._responses = [
+                AIMessage(
+                    content="先调用 inspect_item。",
+                    tool_calls=[{
+                        "name": "inspect_item",
+                        "args": {"api_url": "https://x.com/api", "method": "GET", "json_body": None},
+                        "id": "call_1",
+                    }],
+                ),
+                AIMessage(content="收到摘要，给出结论。"),
+            ]
+
+        def bind_tools(self, tools):
+            return self
+
+        def invoke(self, messages):
+            self.calls.append(messages)
+            return self._responses.pop(0)
+
+    class _FakeTool:
+        name = "inspect_item"
+
+        def invoke(self, args):
+            return {
+                "status": 200,
+                "sample": {
+                    "obj": {
+                        "records": [
+                            {"title": "A", "path": "/a", "textContent": long_text, "summary": "short"},
+                        ]
+                    }
+                },
+            }
+
+    llm = _ToolLoopLlm()
+    result = graph_mod._run_explorer_tool_loop(
+        llm=llm,
+        tools=[_FakeTool()],
+        user_message="请探查",
+        max_rounds=3,
+    )
+    second_call_msgs = llm.calls[1]
+    tool_msg = next(msg for msg in second_call_msgs if isinstance(msg, ToolMessage))
+    assert "textContent" not in tool_msg.content
+    assert "/a" in tool_msg.content
+    assert "title" in tool_msg.content
+    assert len(tool_msg.content) < 1200
+    stored_tool_msg = next(msg for msg in result["messages"] if isinstance(msg, ToolMessage))
+    assert stored_tool_msg.content == tool_msg.content
+
+
+def test_run_explorer_tool_loop_preserves_reasoning_content_for_followup_model_call():
+    from langchain_core.messages import AIMessage
+    from app.discovery import graph as graph_mod
+
+    class _ToolLoopLlm:
+        def __init__(self):
+            self.calls = []
+            self._responses = [
+                AIMessage(
+                    content="先调用工具。",
+                    additional_kwargs={"reasoning_content": "hidden-thought"},
+                    tool_calls=[{
+                        "name": "inspect_item",
+                        "args": {"api_url": "https://x.com/api", "method": "GET", "json_body": None},
+                        "id": "call_1",
+                    }],
+                ),
+                AIMessage(content="工具结果已收到。"),
+            ]
+
+        def bind_tools(self, tools):
+            return self
+
+        def invoke(self, messages):
+            self.calls.append(messages)
+            return self._responses.pop(0)
+
+    class _FakeTool:
+        name = "inspect_item"
+
+        def invoke(self, args):
+            return {"status": 200, "sample": {"items": [{"title": "A"}]}}
+
+    llm = _ToolLoopLlm()
+    graph_mod._run_explorer_tool_loop(
+        llm=llm,
+        tools=[_FakeTool()],
+        user_message="请探查",
+        max_rounds=3,
+    )
+    second_call_msgs = llm.calls[1]
+    ai_msg = next(msg for msg in second_call_msgs if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None))
+    assert ai_msg.additional_kwargs.get("reasoning_content") == "hidden-thought"
+
+
+def test_explorer_prompt_requires_short_final_answer():
+    from app.discovery.graph import EXPLORER_SYSTEM_PROMPT
+
+    assert "最终回复控制在 8 行以内" in EXPLORER_SYSTEM_PROMPT
+    assert "不要输出表格" in EXPLORER_SYSTEM_PROMPT
+    assert "不要复述文章正文" in EXPLORER_SYSTEM_PROMPT
 
 
 def test_apply_exploration_constraints_fills_hollow_synth_from_hint():
@@ -586,6 +937,7 @@ def test_explorer_applies_constraints_after_hollow_synthesis(monkeypatch):
     assert out["exploration"]["format_locator"]["value"] == "obj.records"
     assert out["exploration"]["fields"]["url"] == "path"
     assert out["exploration"]["sample_items"][0]["title"] == "A"
+    assert out["exploration"]["sample_items"][0]["raw_url"] == "/zh/blog/a"
 
 
 def test_explorer_returns_unknown_when_synthesis_returns_unknown_despite_network_hint(monkeypatch):
@@ -627,6 +979,48 @@ def test_explorer_returns_unknown_when_synthesis_returns_unknown_despite_network
     ), llm=_MockChat())
     assert out["exploration"]["source_type"] == "unknown"
     assert out["exploration"]["success"] is False
+
+
+def test_build_sample_items_truncates_long_raw_content():
+    from app.discovery.graph import _build_sample_items
+
+    long_text = "A" * 1200
+    samples = _build_sample_items([
+        {
+            "title": "Example",
+            "path": "/post/1",
+            "date": "2026-07-02",
+            "textContent": long_text,
+            "summary": "S" * 300,
+        }
+    ], "https://x.com")
+    raw = samples[0]["raw"]
+    assert raw["summary"].endswith("...[truncated]")
+    assert len(raw["summary"]) < 200
+    assert "textContent" not in raw
+
+
+def test_build_sample_items_raw_keeps_only_relevant_fields():
+    from app.discovery.graph import _build_sample_items
+
+    samples = _build_sample_items([
+        {
+            "title": "Example",
+            "path": "/post/1",
+            "date": "2026-07-02",
+            "summary": "short summary",
+            "articleName": "post-1.md",
+            "author": ["openEuler"],
+            "tags": ["tag1", "tag2"],
+            "category": "blog",
+            "lang": "zh",
+            "type": "blog",
+            "archives": "2026-07",
+            "textContent": "very long body",
+        }
+    ], "https://x.com")
+    raw = samples[0]["raw"]
+    assert set(raw.keys()) == {"title", "path", "date", "summary", "articleName", "author"}
 
 
 # --- validator worker ---
