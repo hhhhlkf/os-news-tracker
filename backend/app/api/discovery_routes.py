@@ -9,7 +9,7 @@ import logging
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, HttpUrl
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -197,6 +197,11 @@ def delete_method(method_id: int, db: Session = Depends(get_db)):
     m = db.get(CrawlMethod, method_id)
     if not m:
         raise HTTPException(404, "method not found")
+    db.execute(
+        update(SiteDiscoveryRun)
+        .where(SiteDiscoveryRun.resulting_method_id == method_id)
+        .values(resulting_method_id=None)
+    )
     db.query(CrawlMethodDomain).filter_by(method_id=method_id).delete()  # 级联清映射
     db.delete(m); db.commit()
 

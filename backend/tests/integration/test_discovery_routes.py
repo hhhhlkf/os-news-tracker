@@ -223,15 +223,19 @@ def test_patch_method_disable(client, session):
 
 
 def test_delete_method_cascades_domain(client, session):
-    from app.models import CrawlMethodDomain
+    from app.models import CrawlMethodDomain, SiteDiscoveryRun
     m = _make_crawl_method(session, domain="x.com")
     session.add(CrawlMethodDomain(domain="x.com", method_id=m.id))
+    run = SiteDiscoveryRun(site_url="https://x.com", status="completed", resulting_method_id=m.id)
+    session.add(run)
     session.commit()
     mid = m.id
     r = client.delete(f"/discovery/methods/{mid}")
     assert r.status_code == 204
     assert session.get(CrawlMethod, mid) is None
     assert session.query(CrawlMethodDomain).filter_by(method_id=mid).count() == 0
+    session.refresh(run)
+    assert run.resulting_method_id is None
 
 
 class _MockEnricher:
