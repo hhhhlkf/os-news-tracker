@@ -259,7 +259,7 @@ def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
     from langgraph.prebuilt import create_react_agent
     agent = create_react_agent(llm, TOOLS, prompt=EXPLORER_SYSTEM_PROMPT)
     result = agent.invoke({
-        "messages": [("user", f"请探查站点 {state['site_url']} 的文章列表数据源和 item 结构。")],
+        "messages": [("user", _explorer_input_message(state))],
     })
     # 取最后一条 AIMessage 的内容，按 prompt 要求是 JSON
     final_content = _extract_final_ai_content(result)
@@ -273,6 +273,37 @@ def _extract_final_ai_content(result: dict) -> str:
         if isinstance(msg, AIMessage) and msg.content:
             return msg.content
     return ""
+
+
+def _explorer_input_message(state: DiscoveryState) -> str:
+    """为 explorer 组装上下文，把已抓到的首页/网络证据直接带给 agent。"""
+    lines = [f"请探查站点 {state['site_url']} 的文章列表数据源和 item 结构。"]
+    homepage = state.get("homepage") or {}
+    if homepage:
+        lines.append("已知首页证据：")
+        lines.append(json.dumps({
+            "title": homepage.get("title"),
+            "status": homepage.get("status"),
+            "links_sample": (homepage.get("links") or [])[:10],
+        }, ensure_ascii=False))
+    caps = state.get("network_captures") or []
+    if caps:
+        lines.append("已抓到的网络请求证据（优先复用这些结果，必要时再调用 inspect_item 做二次请求）：")
+        summarized = []
+        for cap in caps[:6]:
+            parsed = cap.get("parsed_json")
+            preview = parsed
+            if isinstance(parsed, dict):
+                preview = dict(list(parsed.items())[:6])
+            summarized.append({
+                "api_url": cap.get("api_url"),
+                "method": cap.get("method"),
+                "status": cap.get("status"),
+                "request_json_body": cap.get("request_json_body"),
+                "parsed_json_preview": preview,
+            })
+        lines.append(json.dumps(summarized, ensure_ascii=False))
+    return "\n".join(lines)
 
 
 def _parse_json_or_fallback(content: str) -> dict:

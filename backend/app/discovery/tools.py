@@ -78,10 +78,18 @@ def capture_network(url: str) -> list:
             try:
                 body = resp.text()
                 if body and len(body) < 500000:
+                    post_data = getattr(resp.request, "post_data", None)
+                    request_json_body = None
+                    if post_data:
+                        try:
+                            request_json_body = json.loads(post_data)
+                        except Exception:
+                            request_json_body = None
                     caps.append({
                         "api_url": resp.url,
                         "method": resp.request.method,
                         "status": resp.status,
+                        "request_json_body": request_json_body,
                         "parsed_json": json.loads(body),
                     })
             except Exception:
@@ -97,12 +105,26 @@ def capture_network(url: str) -> list:
     return caps
 
 
+def _decode_json_lenient(text: str):
+    """按标准 JSON 解析；若响应拼接了多个 JSON，则只取第一个对象。"""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        obj, _ = decoder.raw_decode(text)
+        return obj
+
+
 @tool
 def inspect_item(api_url: str, method: str = "GET", json_body: dict | None = None) -> dict:
     """看 API 返回的 item 结构。"""
     import httpx
     r = httpx.request(method, api_url, json=json_body, timeout=15)
-    return {"status": r.status_code, "sample": r.json()}
+    try:
+        sample = r.json()
+    except Exception:
+        sample = _decode_json_lenient(r.text)
+    return {"status": r.status_code, "sample": sample}
 
 
 @tool

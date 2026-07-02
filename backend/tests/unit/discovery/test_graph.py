@@ -205,6 +205,36 @@ def test_explorer_falls_back_when_output_not_json(monkeypatch):
     assert out["exploration"]["success"] is False
 
 
+def test_explorer_passes_existing_network_captures_to_agent(monkeypatch):
+    from app.discovery import graph as graph_mod
+
+    seen = {}
+
+    class _FakeAgent:
+        def invoke(self, args):
+            seen["args"] = args
+            return {"messages": []}
+
+    monkeypatch.setattr(
+        "langgraph.prebuilt.create_react_agent",
+        lambda llm, tools, prompt=None, **kw: _FakeAgent(),
+    )
+    graph_mod.explorer(_state(
+        site_url="https://x.com",
+        network_captures=[{
+            "api_url": "https://x.com/api/list",
+            "method": "POST",
+            "parsed_json": {"obj": {"records": [{"id": "1", "title": "A"}]}},
+            "request_json_body": {"category": "blog", "page": 1, "pageSize": 12},
+        }],
+        homepage={"title": "Example Site", "links": ["https://x.com/a"]},
+    ), llm=_MockChat())
+    user_msg = seen["args"]["messages"][0][1]
+    assert "https://x.com/api/list" in user_msg
+    assert "records" in user_msg
+    assert "category" in user_msg
+
+
 # --- validator worker ---
 
 def _fake_tool(ret):

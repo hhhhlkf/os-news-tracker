@@ -49,6 +49,24 @@ def test_inspect_item_returns_sample(monkeypatch):
     assert out["sample"] == {"id": "1", "title": "A"}
 
 
+def test_inspect_item_tolerates_concatenated_json_response(monkeypatch):
+    class FakeResp:
+        status_code = 200
+        text = (
+            '{"status":200,"msg":"ok","obj":{"records":[{"id":"1"}]}}'
+            '{"status":201,"msg":"查询失败"}'
+        )
+
+        def json(self):
+            raise ValueError("Extra data: line 1 column 57 (char 56)")
+
+    monkeypatch.setattr("httpx.request", lambda *a, **k: FakeResp())
+    out = inspect_item.invoke({"api_url": "https://x.com/api/1", "method": "POST"})
+    assert out["status"] == 200
+    assert out["sample"]["status"] == 200
+    assert out["sample"]["obj"]["records"][0]["id"] == "1"
+
+
 def test_capture_network_parses_json_responses(monkeypatch):
     """mock sync_playwright：验证 on_response 回调解析 JSON 并收集到 caps。"""
     class FakeReq:
