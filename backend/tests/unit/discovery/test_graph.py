@@ -462,6 +462,132 @@ def test_explorer_passes_inspect_item_hint_into_second_stage(monkeypatch):
     assert seen["deterministic_exploration"]["format_locator"]["value"] == "obj.records"
 
 
+def test_apply_exploration_constraints_fills_hollow_synth_from_hint():
+    from app.discovery.graph import _apply_exploration_constraints
+
+    hollow = {
+        "source_type": "json_api",
+        "list_url": "https://www.openeuler.org/api-search/search/sort/blog",
+        "fetch": {"method": "POST", "headers": {}, "query": {}, "json_body": None},
+        "format_locator": {"kind": "json_path", "value": "unknown"},
+        "fields": {"id": None, "title": None, "url": None, "published_at": None, "summary": None, "content": None},
+        "html_selectors": {"item_selector": None, "link_selector": None, "title_selector": None, "date_selector": None},
+        "sample_items": [],
+        "url_candidates": [],
+        "pagination": {"type": "unknown", "page_param": None, "size_param": None, "offset_param": None,
+                       "limit_param": None, "cursor_param": None, "next_path": None, "has_more_path": None,
+                       "start": 1, "size": None, "notes": ""},
+        "evidence": [],
+        "notes": [],
+        "success": True,
+    }
+    hint = {
+        "source_type": "json_api",
+        "list_url": "https://www.openeuler.org/api-search/search/sort/blog",
+        "fetch": {"method": "POST", "headers": {}, "query": {}, "json_body": {"category": "blog", "page": 1, "pageSize": 12}},
+        "format_locator": {"kind": "json_path", "value": "obj.records"},
+        "fields": {"id": None, "title": "title", "url": "path", "published_at": "date", "summary": "summary", "content": "textContent"},
+        "html_selectors": {"item_selector": None, "link_selector": None, "title_selector": None, "date_selector": None},
+        "sample_items": [{
+            "id": None, "title": "A", "url": "https://www.openeuler.org/zh/blog/a", "published_at": "2026-07-01",
+            "raw": {"path": "/zh/blog/a", "title": "A", "date": "2026-07-01"},
+        }],
+        "url_candidates": [{"mode": "unknown", "url_field": "path", "id_field": None, "template": None, "verification": "hint"}],
+        "pagination": {"type": "unknown", "page_param": None, "size_param": None, "offset_param": None,
+                       "limit_param": None, "cursor_param": None, "next_path": None, "has_more_path": None,
+                       "start": 1, "size": None, "notes": ""},
+        "evidence": [],
+        "notes": [],
+        "success": True,
+    }
+    out = _apply_exploration_constraints(hollow, hint)
+    assert out["success"] is True
+    assert out["format_locator"]["value"] == "obj.records"
+    assert out["fields"]["title"] == "title"
+    assert out["fields"]["url"] == "path"
+    assert out["fetch"]["json_body"]["pageSize"] == 12
+    assert len(out["sample_items"]) == 1
+
+
+def test_apply_exploration_constraints_marks_failure_when_still_incomplete():
+    from app.discovery.graph import _apply_exploration_constraints
+
+    hollow = {
+        "source_type": "json_api",
+        "list_url": "https://x.com/api",
+        "fetch": {"method": "GET", "headers": {}, "query": {}, "json_body": None},
+        "format_locator": {"kind": "json_path", "value": "unknown"},
+        "fields": {"id": None, "title": None, "url": None, "published_at": None, "summary": None, "content": None},
+        "html_selectors": {"item_selector": None, "link_selector": None, "title_selector": None, "date_selector": None},
+        "sample_items": [],
+        "url_candidates": [],
+        "pagination": {"type": "unknown", "page_param": None, "size_param": None, "offset_param": None,
+                       "limit_param": None, "cursor_param": None, "next_path": None, "has_more_path": None,
+                       "start": 1, "size": None, "notes": ""},
+        "evidence": [],
+        "notes": [],
+        "success": True,
+    }
+    out = _apply_exploration_constraints(hollow, None)
+    assert out["success"] is False
+    assert any("constraint failed" in n for n in out["notes"])
+
+
+def test_explorer_applies_constraints_after_hollow_synthesis(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from app.discovery import graph as graph_mod
+
+    hollow = {
+        "source_type": "json_api",
+        "list_url": "https://www.openeuler.org/api-search/search/sort/blog",
+        "fetch": {"method": "POST", "headers": {}, "query": {}, "json_body": None},
+        "format_locator": {"kind": "json_path", "value": "unknown"},
+        "fields": {"id": None, "title": None, "url": None, "published_at": None, "summary": None, "content": None},
+        "html_selectors": {"item_selector": None, "link_selector": None, "title_selector": None, "date_selector": None},
+        "sample_items": [],
+        "url_candidates": [],
+        "pagination": {"type": "unknown", "page_param": None, "size_param": None, "offset_param": None,
+                       "limit_param": None, "cursor_param": None, "next_path": None, "has_more_path": None,
+                       "start": 1, "size": None, "notes": ""},
+        "evidence": [],
+        "notes": [],
+        "success": True,
+    }
+
+    class _FakeAgent:
+        def invoke(self, args):
+            return {"messages": [AIMessage(content="已确认 sort/blog API。")]}
+
+    monkeypatch.setattr(
+        "langgraph.prebuilt.create_react_agent",
+        lambda llm, tools, prompt=None, **kw: _FakeAgent(),
+    )
+    monkeypatch.setattr(
+        graph_mod,
+        "_synthesize_exploration",
+        lambda **kwargs: (json.dumps(hollow, ensure_ascii=False), hollow),
+    )
+    out = graph_mod.explorer(_state(
+        site_url="https://www.openeuler.org",
+        network_captures=[{
+            "api_url": "https://www.openeuler.org/api-search/search/sort/blog",
+            "method": "POST",
+            "request_json_body": {"category": "blog", "page": 1, "pageSize": 12},
+            "parsed_json": {
+                "obj": {
+                    "records": [
+                        {"path": "/zh/blog/a", "title": "A", "date": "2026-07-01", "summary": "S1"},
+                    ]
+                }
+            },
+        }],
+    ), llm=_MockChat())
+    assert out["exploration"]["success"] is True
+    assert out["exploration"]["format_locator"]["value"] == "obj.records"
+    assert out["exploration"]["fields"]["url"] == "path"
+    assert out["exploration"]["sample_items"][0]["title"] == "A"
+
+
 def test_explorer_returns_unknown_when_synthesis_returns_unknown_despite_network_hint(monkeypatch):
     from langchain_core.messages import AIMessage
     from app.discovery import graph as graph_mod

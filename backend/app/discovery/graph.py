@@ -349,6 +349,7 @@ def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
             result=result,
             deterministic_exploration=deterministic_exploration,
         )
+        exploration = _apply_exploration_constraints(exploration, deterministic_exploration)
     except Exception as e:
         parse_error = str(e)
         exploration = _unknown_exploration()
@@ -709,7 +710,11 @@ def _synthesize_exploration(*, site_url: str, result: dict, deterministic_explor
         "1. 只输出 JSON object，不要解释，不要 Markdown；\n"
         "2. 所有字符串必须是合法 JSON 字符串；\n"
         "3. 如果证据不足，如实返回 source_type=unknown, success=false；\n"
-        "4. 尽量保留证据中已经确认的字段和值。\n\n"
+        "4. 尽量保留证据中已经确认的字段和值。\n"
+        "5. 若 success=true 且 source_type=json_api，必须同时给出：list_url、format_locator.value（json path）、"
+        "fields.title、至少 1 条 sample_items，以及 fields.url 或 fields.id 或 sample_items 中的 path/url。\n"
+        "6. 若 success=true 且 source_type=rss/atom，必须给出 list_url 且 format_locator.kind=feed_entries。\n"
+        "7. 若 success=true 且 source_type=html，必须给出 html_selectors 四项和 sample_items。\n\n"
         "输出 schema：\n"
         "{\n"
         '  "source_type": "json_api | rss | atom | html | unknown",\n'
@@ -736,6 +741,110 @@ def _synthesize_exploration(*, site_url: str, result: dict, deterministic_explor
     )
     parsed = _parse_strict_exploration_output(raw)
     return raw, parsed
+
+
+def _exploration_value_empty(value: object) -> bool:
+    if value in (None, "", [], {}):
+        return True
+    if isinstance(value, str) and value.strip().lower() == "unknown":
+        return True
+    return False
+
+
+def _fill_exploration_gaps(exploration: dict, hint: dict | None) -> dict:
+    """从 deterministic hint 补全 synth 遗漏的空字段，不覆盖 synth 已有非空值。"""
+    if not hint or not exploration.get("success"):
+        return ExplorationResult(**exploration).model_dump()
+    out = ExplorationResult(**exploration).model_dump()
+    hint_obj = ExplorationResult(**hint).model_dump()
+    for key in ("source_type", "list_url"):
+        if _exploration_value_empty(out.get(key)) and not _exploration_value_empty(hint_obj.get(key)):
+            out[key] = hint_obj[key]
+    for key in ("fetch", "format_locator", "fields", "html_selectors", "pagination"):
+        merged = dict(out.get(key) or {})
+        for sub_key, value in (hint_obj.get(key) or {}).items():
+            if _exploration_value_empty(merged.get(sub_key)) and not _exploration_value_empty(value):
+                merged[sub_key] = value
+        out[key] = merged
+    for key in ("sample_items", "url_candidates", "evidence"):
+        if not out.get(key) and hint_obj.get(key):
+            out[key] = hint_obj[key]
+    if not out.get("notes") and hint_obj.get("notes"):
+        out["notes"] = hint_obj["notes"]
+    return ExplorationResult(**out).model_dump()
+
+
+def _sample_has_url_clue(sample: dict) -> bool:
+    if sample.get("url") or sample.get("id"):
+        return True
+    raw = sample.get("raw")
+    if not isinstance(raw, dict):
+        return False
+    return bool(raw.get("url") or raw.get("link") or raw.get("href") or raw.get("path") or raw.get("id"))
+
+
+def _exploration_constraint_errors(exploration: dict) -> list[str]:
+    """success=true 时按 source_type 检查关键字段是否齐全。"""
+    if not exploration.get("success"):
+        return []
+    source_type = exploration.get("source_type") or "unknown"
+    if source_type == "unknown":
+        return ["success=true but source_type=unknown"]
+
+    if source_type == "json_api":
+        errors: list[str] = []
+        if _exploration_value_empty(exploration.get("list_url")):
+            errors.append("missing list_url")
+        format_locator = exploration.get("format_locator") or {}
+        value = format_locator.get("value")
+        if _exploration_value_empty(value) or value == "unknown":
+            errors.append("missing format_locator.value")
+        fields = exploration.get("fields") or {}
+        if _exploration_value_empty(fields.get("title")):
+            errors.append("missing fields.title")
+        samples = exploration.get("sample_items") or []
+        if not samples:
+            errors.append("missing sample_items")
+        has_url_clue = bool(fields.get("url") or fields.get("id"))
+        if not has_url_clue:
+            has_url_clue = any(_sample_has_url_clue(s) for s in samples)
+        if not has_url_clue:
+            errors.append("missing url/path/id clue for validator")
+        return errors
+
+    if source_type in ("rss", "atom"):
+        errors = []
+        if _exploration_value_empty(exploration.get("list_url")):
+            errors.append("missing list_url")
+        format_locator = exploration.get("format_locator") or {}
+        if format_locator.get("kind") != "feed_entries":
+            errors.append("format_locator.kind must be feed_entries")
+        return errors
+
+    if source_type == "html":
+        errors = []
+        selectors = exploration.get("html_selectors") or {}
+        for key in ("item_selector", "link_selector", "title_selector", "date_selector"):
+            if _exploration_value_empty(selectors.get(key)):
+                errors.append(f"missing html_selectors.{key}")
+        if not exploration.get("sample_items"):
+            errors.append("missing sample_items")
+        return errors
+
+    return []
+
+
+def _apply_exploration_constraints(exploration: dict, hint: dict | None) -> dict:
+    """补全空字段后做硬性校验；不满足则降 success=false 并记录原因。"""
+    filled = _fill_exploration_gaps(exploration, hint)
+    errors = _exploration_constraint_errors(filled)
+    if not errors:
+        return filled
+    notes = list(filled.get("notes") or [])
+    notes.extend(f"constraint failed: {err}" for err in errors)
+    filled["success"] = False
+    filled["notes"] = notes
+    return ExplorationResult(**filled).model_dump()
 
 
 def _parse_strict_exploration_output(content: str) -> dict:
