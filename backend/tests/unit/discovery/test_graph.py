@@ -294,28 +294,35 @@ def test_auditor_flags_antibot_content():
 
 # --- explorer worker ---
 
-def test_explorer_parses_structured_json_output(monkeypatch):
-    """explorer 把 ReAct 最终消息内容解析成结构化 exploration dict。"""
+def test_explorer_uses_second_stage_to_structure_freeform_agent_output(monkeypatch):
+    """explorer 允许第一阶段输出自由文本，并交给第二阶段整理。"""
     from langchain_core.messages import AIMessage
     from app.discovery import graph as graph_mod
 
     class _FakeAgent:
         def invoke(self, args):
-            return {"messages": [AIMessage(content=json.dumps(_EXPLORATION_JSON_API, ensure_ascii=False))]}
+            return {"messages": [AIMessage(content="已发现一个 JSON API，字段看起来完整，建议后续整理。")]}
 
     def fake_create_react_agent(llm, tools, prompt=None, **kw):
         assert prompt == graph_mod.EXPLORER_SYSTEM_PROMPT  # 确认系统 prompt 传进去了
         return _FakeAgent()
 
+    def fake_synthesize_exploration(*, site_url, result, deterministic_exploration):
+        assert site_url == "https://x.com"
+        assert deterministic_exploration is None
+        return json.dumps(_EXPLORATION_JSON_API, ensure_ascii=False), _EXPLORATION_JSON_API
+
     monkeypatch.setattr("langgraph.prebuilt.create_react_agent", fake_create_react_agent)
+    monkeypatch.setattr(graph_mod, "_synthesize_exploration", fake_synthesize_exploration)
     out = graph_mod.explorer(_state(site_url="https://x.com"), llm=_MockChat())
     assert out["exploration"]["source_type"] == "json_api"
     assert out["exploration"]["list_url"] == "https://x.com/api"
     assert out["exploration"]["success"] is True
+    assert out["explorer_parse_error"] is None
 
 
-def test_explorer_falls_back_when_output_not_json(monkeypatch):
-    """explorer 最终消息不是严格 JSON 时，不再尝试自由文本解析。"""
+def test_explorer_returns_unknown_json_when_synthesis_fails_without_deterministic_evidence(monkeypatch):
+    """第二阶段失败且无确定性证据时，explorer 仍返回合法 unknown 结果。"""
     from langchain_core.messages import AIMessage
     from app.discovery import graph as graph_mod
 
@@ -325,10 +332,15 @@ def test_explorer_falls_back_when_output_not_json(monkeypatch):
 
     monkeypatch.setattr("langgraph.prebuilt.create_react_agent",
                         lambda llm, tools, prompt=None, **kw: _FakeAgent())
+    monkeypatch.setattr(
+        graph_mod,
+        "_synthesize_exploration",
+        lambda **kwargs: (_ for _ in ()).throw(ValueError("second stage failed")),
+    )
     out = graph_mod.explorer(_state(site_url="https://x.com"), llm=_MockChat())
     assert out["exploration"]["source_type"] == "unknown"
     assert out["exploration"]["success"] is False
-    assert out["explorer_parse_error"] is not None
+    assert out["explorer_parse_error"] == "second stage failed"
 
 
 def test_explorer_passes_existing_network_captures_to_agent(monkeypatch):
@@ -361,13 +373,67 @@ def test_explorer_passes_existing_network_captures_to_agent(monkeypatch):
     assert "category" in user_msg
 
 
-def test_explorer_falls_back_to_first_stage_json_when_synthesis_fails(monkeypatch):
+def test_explorer_falls_back_to_deterministic_exploration_when_synthesis_fails(monkeypatch):
     from langchain_core.messages import AIMessage
     from app.discovery import graph as graph_mod
 
     class _FakeAgent:
         def invoke(self, args):
-            return {"messages": [AIMessage(content=json.dumps(_EXPLORATION_JSON_API, ensure_ascii=False))]}
+            return {"messages": [AIMessage(content="我看到了候选 API，但把最终结构化结果交给整理器。")]}
+
+    monkeypatch.setattr(
+        "langgraph.prebuilt.create_react_agent",
+        lambda llm, tools, prompt=None, **kw: _FakeAgent(),
+    )
+    monkeypatch.setattr(
+        graph_mod,
+        "_synthesize_exploration",
+        lambda **kwargs: (_ for _ in ()).throw(ValueError("second stage failed")),
+    )
+    out = graph_mod.explorer(_state(site_url="https://x.com"), llm=_MockChat())
+    assert out["exploration"]["source_type"] == "unknown"
+    assert out["exploration"]["success"] is False
+    assert out["explorer_parse_error"] == "second stage failed"
+
+
+def test_explorer_uses_inspect_item_evidence_for_deterministic_fallback(monkeypatch):
+    from langchain_core.messages import AIMessage, ToolMessage
+    from app.discovery import graph as graph_mod
+
+    class _FakeAgent:
+        def invoke(self, args):
+            return {
+                "messages": [
+                    AIMessage(
+                        content="我先检查候选 API 的 item 结构。",
+                        tool_calls=[{
+                            "name": "inspect_item",
+                            "args": {
+                                "api_url": "https://www.openeuler.org/api-search/search/sort/blog",
+                                "method": "POST",
+                                "json_body": {"category": "blog", "page": 1, "pageSize": 12},
+                            },
+                            "id": "call_inspect_1",
+                        }],
+                    ),
+                    ToolMessage(
+                        name="inspect_item",
+                        tool_call_id="call_inspect_1",
+                        content=json.dumps({
+                            "status": 200,
+                            "sample": {
+                                "obj": {
+                                    "records": [
+                                        {"path": "/zh/blog/a", "title": "A", "date": "2026-07-01", "summary": "S1"},
+                                        {"path": "/zh/blog/b", "title": "B", "date": "2026-07-02", "summary": "S2"},
+                                    ]
+                                }
+                            },
+                        }, ensure_ascii=False),
+                    ),
+                    AIMessage(content="找到候选 API，等待结构化整理。"),
+                ]
+            }
 
     monkeypatch.setattr(
         "langgraph.prebuilt.create_react_agent",
@@ -381,45 +447,31 @@ def test_explorer_falls_back_to_first_stage_json_when_synthesis_fails(monkeypatc
     out = graph_mod.explorer(_state(site_url="https://x.com"), llm=_MockChat())
     assert out["exploration"]["source_type"] == "json_api"
     assert out["exploration"]["success"] is True
-    assert out["exploration"]["list_url"] == "https://x.com/api"
-    assert out["explorer_agent_output"].startswith("{")
-    assert out["explorer_parse_error"] == "second stage failed"
+    assert out["exploration"]["list_url"] == "https://www.openeuler.org/api-search/search/sort/blog"
+    assert out["exploration"]["fetch"]["method"] == "POST"
+    assert out["exploration"]["fetch"]["json_body"]["category"] == "blog"
+    assert out["exploration"]["format_locator"]["value"] == "obj.records"
 
 
-def test_explorer_rejects_freeform_agent_output_before_second_stage(monkeypatch):
+def test_explorer_prefers_deterministic_network_capture_when_synthesis_returns_unknown(monkeypatch):
     from langchain_core.messages import AIMessage
     from app.discovery import graph as graph_mod
 
     class _FakeAgent:
         def invoke(self, args):
-            return {"messages": [AIMessage(content=(
-                "我已经分析完成，结果如下：\n"
-                "```json\n"
-                + json.dumps(_EXPLORATION_JSON_API, ensure_ascii=False) +
-                "\n```"
-            ))]}
+            return {"messages": [AIMessage(content="capture_network 已经给了主要证据，我没有更多补充。")]}
 
     monkeypatch.setattr(
         "langgraph.prebuilt.create_react_agent",
         lambda llm, tools, prompt=None, **kw: _FakeAgent(),
     )
-    out = graph_mod.explorer(_state(site_url="https://x.com"), llm=_MockChat())
-    assert out["exploration"]["source_type"] == "unknown"
-    assert out["exploration"]["success"] is False
-    assert out["explorer_parse_error"].startswith("strict exploration json parse failed:")
-
-
-def test_explorer_uses_network_capture_fallback_when_first_stage_json_is_invalid(monkeypatch):
-    from langchain_core.messages import AIMessage
-    from app.discovery import graph as graph_mod
-
-    class _FakeAgent:
-        def invoke(self, args):
-            return {"messages": [AIMessage(content='{"source_type":"json_api"')]}
-
     monkeypatch.setattr(
-        "langgraph.prebuilt.create_react_agent",
-        lambda llm, tools, prompt=None, **kw: _FakeAgent(),
+        graph_mod,
+        "_synthesize_exploration",
+        lambda **kwargs: (
+            json.dumps({"source_type": "unknown", "success": False}, ensure_ascii=False),
+            {"source_type": "unknown", "success": False},
+        ),
     )
     out = graph_mod.explorer(_state(
         site_url="https://www.openeuler.org",
