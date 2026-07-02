@@ -7,17 +7,51 @@ import { DiscoveryFlowChart } from "./DiscoveryFlowChart";
 import { DiscoveryNodeDetail } from "./DiscoveryNodeDetail";
 import { DiscoveryLogPanel } from "./DiscoveryLogPanel";
 import { useDiscoveryLogs } from "../hooks/useDiscoveryLogs";
-import { attemptCount, type FlowNodeId } from "../discovery/flowState";
+import { currentAttemptRound, type FlowNodeId } from "../discovery/flowState";
+
+const DISCOVERY_PANEL_STORAGE_KEY = "os-news-tracker.discovery-panel";
+
+interface DiscoveryPanelPersistedState {
+  url?: string;
+  name?: string;
+  runId?: number | null;
+  selectedNode?: FlowNodeId | null;
+  expanded?: boolean;
+}
+
+function readDiscoveryPanelState(): DiscoveryPanelPersistedState {
+  if (typeof window === "undefined" || !window.localStorage) return {};
+  try {
+    const raw = window.localStorage.getItem(DISCOVERY_PANEL_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as DiscoveryPanelPersistedState;
+    return {
+      url: typeof parsed.url === "string" ? parsed.url : undefined,
+      name: typeof parsed.name === "string" ? parsed.name : undefined,
+      runId: typeof parsed.runId === "number" ? parsed.runId : null,
+      selectedNode: typeof parsed.selectedNode === "string" ? parsed.selectedNode : null,
+      expanded: typeof parsed.expanded === "boolean" ? parsed.expanded : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function writeDiscoveryPanelState(state: DiscoveryPanelPersistedState): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  window.localStorage.setItem(DISCOVERY_PANEL_STORAGE_KEY, JSON.stringify(state));
+}
 
 export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: number) => void }) {
-  const [url, setUrl] = useState("");
-  const [name, setName] = useState("");
+  const [persistedState] = useState<DiscoveryPanelPersistedState>(() => readDiscoveryPanelState());
+  const [url, setUrl] = useState(persistedState.url ?? "");
+  const [name, setName] = useState(persistedState.name ?? "");
   const [nameError, setNameError] = useState<string | null>(null);
-  const [runId, setRunId] = useState<number | null>(null);
+  const [runId, setRunId] = useState<number | null>(persistedState.runId ?? null);
   const [dup, setDup] = useState<{ method_id: number; domain: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selectedNode, setSelectedNode] = useState<FlowNodeId | null>(null);
-  const [expanded, setExpanded] = useState(true);
+  const [selectedNode, setSelectedNode] = useState<FlowNodeId | null>(persistedState.selectedNode ?? null);
+  const [expanded, setExpanded] = useState(persistedState.expanded ?? true);
   const [startLocked, setStartLocked] = useState(false);
   const startLockRef = useRef(false);
 
@@ -100,6 +134,23 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
     }
   }, [completed, runQuery.data?.resulting_method_id, onMethodAdded]);
 
+  useEffect(() => {
+    writeDiscoveryPanelState({
+      url,
+      name,
+      runId,
+      selectedNode,
+      expanded,
+    });
+  }, [url, name, runId, selectedNode, expanded]);
+
+  useEffect(() => {
+    if (!(runQuery.error instanceof ApiError) || runQuery.error.status !== 404 || runId == null) {
+      return;
+    }
+    setRunId(null);
+  }, [runId, runQuery.error]);
+
   const displayRun: DiscoveryRun = runQuery.data ?? {
     id: 0,
     site_url: url || "",
@@ -127,7 +178,7 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
               background: running ? "#eff6ff" : completed ? "#ecfdf3" : cancelled ? "#fffaeb" : "#fef2f2",
               border: `1px solid ${running ? "#b9d4ff" : completed ? "#a3e0c4" : cancelled ? "#fedf89" : "#fca5a5"}`,
             }}>
-              {running ? `探查中 · 第 ${attemptCount(runQuery.data.node_trace)} / 3 轮` : completed ? "探查完成" : cancelled ? "已取消" : "探查失败"}
+              {running ? `探查中 · 第 ${currentAttemptRound(runQuery.data)} / 3 轮` : completed ? "探查完成" : cancelled ? "已取消" : "探查失败"}
             </div>
           )}
         </div>
