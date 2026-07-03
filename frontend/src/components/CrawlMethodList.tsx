@@ -155,15 +155,18 @@ function MethodRow({ m, selected, state, onToggle, onOpen, highlight }: {
   onToggle: (enabled: boolean) => void; onOpen: () => void; highlight: boolean;
 }) {
   const disabled = m.status === "disabled";
+  const primaryLabel = m.source_name?.trim() || m.domain;
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12, border: `1px solid ${selected ? "#b9d4ff" : highlight ? "#175cd3" : "#eaecf0"}`,
       borderRadius: 9, padding: "9px 11px", background: selected ? "#f8fbff" : highlight ? "#eff6ff" : "#fff" }}>
       <input type="checkbox" checked={selected} disabled={disabled} onChange={(e) => onToggle(e.target.checked)} />
       <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={onOpen}>
         <div style={{ fontSize: 14, fontWeight: 700, color: disabled ? "#98a2b3" : "#101828" }}>
-          {m.domain} <span style={badge(m.status)}>{m.status}</span>
+          {primaryLabel} <span style={badge(m.status)}>{m.status}</span>
         </div>
-        <div style={{ fontSize: 12, color: "#667085", wordBreak: "break-all" }}>{m.entry_url}</div>
+        <div style={{ fontSize: 12, color: "#667085", wordBreak: "break-all" }}>
+          {m.domain !== primaryLabel ? `${m.domain} · ` : ""}{m.entry_url}
+        </div>
       </div>
       <div style={{ fontSize: 12, color: "#475467", textAlign: "right", minWidth: 150 }}>
         {state?.kind === "running" && <span style={{ color: "#175cd3" }}>抓取中…</span>}

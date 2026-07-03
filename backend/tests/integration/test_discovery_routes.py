@@ -193,11 +193,14 @@ def _make_crawl_method(session, domain="x.com", **overrides):
 
 
 def test_list_methods(client, session):
-    _make_crawl_method(session, domain="x.com")
+    m = _make_crawl_method(session, domain="x.com")
+    from app.models import Source
+    source = session.get(Source, m.source_id)
+    source.name = "LangChain Blog"
     session.commit()
     r = client.get("/discovery/methods")
     assert r.status_code == 200
-    assert any(m["domain"] == "x.com" for m in r.json())
+    assert any(m["domain"] == "x.com" and m["source_name"] == "LangChain Blog" for m in r.json())
 
 
 def test_get_method_detail(client, session):
@@ -205,11 +208,15 @@ def test_get_method_detail(client, session):
         session, domain="x.com",
         dsl_recipe={"recipe_type": "dsl", "entry_url": "https://x.com", "actions": []},
     )
+    from app.models import Source
+    source = session.get(Source, m.source_id)
+    source.name = "LangChain Blog"
     session.commit()
     r = client.get(f"/discovery/methods/{m.id}")
     assert r.status_code == 200
     assert r.json()["dsl_recipe"]["recipe_type"] == "dsl"
     assert r.json()["last_run_status"] is None
+    assert r.json()["source_name"] == "LangChain Blog"
 
 
 def test_patch_method_disable(client, session):

@@ -163,7 +163,9 @@ class MethodPatch(BaseModel):
 def list_methods(db: Session = Depends(get_db)):
     """列出所有已发现的爬取方式（摘要，不含完整 DSL Recipe）。"""
     ms = db.scalars(select(CrawlMethod).order_by(CrawlMethod.id.desc())).all()
+    from app.models import Source
     return [{"id": m.id, "domain": m.domain, "entry_url": m.entry_url, "status": m.status,
+             "source_name": (db.get(Source, m.source_id).name if db.get(Source, m.source_id) else m.domain),
              "signature": m.signature, "last_run_at": m.last_run_at.isoformat() if m.last_run_at else None,
              "last_run_status": m.last_run_status} for m in ms]
 
@@ -171,10 +173,13 @@ def list_methods(db: Session = Depends(get_db)):
 @router.get("/methods/{method_id}")
 def get_method(method_id: int, db: Session = Depends(get_db)):
     """单方法详情，含完整 DSL Recipe（前端可展示/编辑）。"""
+    from app.models import Source
     m = db.get(CrawlMethod, method_id)
     if not m:
         raise HTTPException(404, "method not found")
+    source = db.get(Source, m.source_id)
     return {"id": m.id, "domain": m.domain, "entry_url": m.entry_url, "status": m.status,
+            "source_name": source.name if source else m.domain,
             "dsl_recipe": m.dsl_recipe, "signature": m.signature,
             "last_run_at": m.last_run_at.isoformat() if m.last_run_at else None,
             "last_run_status": m.last_run_status}
