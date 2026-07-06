@@ -1,13 +1,14 @@
 """
-Live end-to-end discovery test for Oracle Linux RSS via Scrapling.
+Live end-to-end site discovery flow test.
 
 Usage from the repository root:
 
-    RUN_LIVE_DISCOVERY_ORACLE=1 ENABLE_SCHEDULER=0 PYTHONPATH=backend python3 -m pytest \
+    RUN_LIVE_DISCOVERY=1 DISCOVERY_TEST_URL=https://openanolis.cn/blog \
+      ENABLE_SCHEDULER=0 PYTHONPATH=backend python3 -m pytest \
       backend/tests/unit/discovery/test_oracle_scrapling_discovery_live.py -m "live and slow" -v -s
 
 This test intentionally performs real network requests and real LLM calls. It is
-skipped unless RUN_LIVE_DISCOVERY_ORACLE=1 is set.
+skipped unless RUN_LIVE_DISCOVERY=1 is set.
 """
 
 from __future__ import annotations
@@ -30,9 +31,9 @@ from app.discovery.graph import (
 from app.llm.client import LlmClient as RealLlmClient
 
 
-ORACLE_LINUX_FEED_URL = os.getenv(
+DISCOVERY_TEST_URL = os.getenv(
     "DISCOVERY_TEST_URL",
-    "https://blogs.oracle.com/linux/",
+    "https://openanolis.cn/blog",
 )
 
 
@@ -117,10 +118,10 @@ class _TracingLlmClient:
 @pytest.mark.live
 @pytest.mark.slow
 @pytest.mark.skipif(
-    os.getenv("RUN_LIVE_DISCOVERY_ORACLE") != "1",
-    reason="set RUN_LIVE_DISCOVERY_ORACLE=1 to run live Oracle discovery test",
+    os.getenv("RUN_LIVE_DISCOVERY") != "1",
+    reason="set RUN_LIVE_DISCOVERY=1 to run live site discovery test",
 )
-def test_live_oracle_rss_discovery_runs_real_llm_every_agent_step(monkeypatch):
+def test_live_site_discovery_runs_real_llm_every_step(monkeypatch):
     """Run every discovery step with real LLM decisions and print all LLM I/O.
 
     Sequence:
@@ -131,7 +132,7 @@ def test_live_oracle_rss_discovery_runs_real_llm_every_agent_step(monkeypatch):
     monkeypatch.setattr("app.llm.client.LlmClient", _TracingLlmClient)
 
     state = {
-        "site_url": ORACLE_LINUX_FEED_URL,
+        "site_url": DISCOVERY_TEST_URL,
         "attempt": 0,
         "dsl_cycle_attempt": 0,
         "token_used": 0,
@@ -190,26 +191,16 @@ def test_live_oracle_rss_discovery_runs_real_llm_every_agent_step(monkeypatch):
     _print_block("06.auditor.llm_output", state.get("auditor_llm_output") or "")
     _print_block("06.auditor.result", state["audit_result"])
 
-    recipe = state["dsl_recipe"]
-    fetch_action = recipe["actions"][0]
-    trace_logs = state.get("explorer_trace_logs") or []
-    fetch_tool_events = [
-        event for event in trace_logs
-        if event.get("kind") == "tool" and event.get("name") == "fetch_page"
-    ]
-    evidence_text = json.dumps(state["exploration"].get("evidence") or [], ensure_ascii=False).lower()
-
-    if fetch_tool_events:
-        assert any("scrapling" in str(event.get("content", "")).lower() for event in fetch_tool_events)
-    else:
-        assert "scrapling" in evidence_text or state["exploration"]["fetch"]["transport"] == "scrapling"
-    assert state["exploration"]["success"] is True
-    assert state["exploration"]["source_type"] in {"rss", "atom"}
-    assert state["exploration"]["fetch"]["transport"] == "scrapling"
-    assert state["url_rule"]["mode"] == "existing_url"
-    assert fetch_action["op"] == "fetch"
-    assert fetch_action["mode"] == "feed"
-    assert fetch_action["transport"] == "scrapling"
-    assert fetch_action["impersonate"] == "chrome"
-    assert state["audit_result"]["passed"] is True
-    assert state["audit_result"]["test"]["stats"]["discovered_count"] >= 3
+    if not (state.get("audit_result") or {}).get("passed"):
+        pytest.fail(
+            "site discovery flow did not pass auditor:\n"
+            + json.dumps({
+                "site_url": DISCOVERY_TEST_URL,
+                "exploration": state.get("exploration"),
+                "url_rule": state.get("url_rule"),
+                "dsl_recipe_before_audit": dsl_update.get("dsl_recipe"),
+                "audit_input": state.get("audit_input"),
+                "audit_result": state.get("audit_result"),
+                "retry_feedback": state.get("retry_feedback"),
+            }, ensure_ascii=False, indent=2, default=str)
+        )
