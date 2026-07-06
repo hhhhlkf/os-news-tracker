@@ -562,14 +562,17 @@ def _invoke_tool_node(tool, args: dict, *, call_id: str | None = None) -> object
 
     node = ToolNode([tool], handle_tool_errors=False)
     tool_call_id = call_id or f"{tool.name}_call"
-    outputs = node.invoke([
-        {
-            "name": tool.name,
-            "args": args or {},
-            "id": tool_call_id,
-            "type": "tool_call",
-        }
-    ])
+    outputs = node.invoke(
+        [
+            {
+                "name": tool.name,
+                "args": args or {},
+                "id": tool_call_id,
+                "type": "tool_call",
+            }
+        ],
+        runtime=None,
+    )
     if not outputs:
         return None
     return _tool_message_to_value(outputs[0])
@@ -589,7 +592,7 @@ def _invoke_tool_node_messages(tools: list, tool_calls: list[dict]) -> list:
         }
         for call in tool_calls
     ]
-    return node.invoke(normalized_calls)
+    return node.invoke(normalized_calls, runtime=None)
 
 
 def _extract_final_ai_content(result: dict) -> str:
