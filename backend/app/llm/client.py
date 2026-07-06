@@ -1,5 +1,6 @@
 import hashlib
 import json as jsonlib
+import time
 
 from app.config import get_settings
 
@@ -41,16 +42,29 @@ class LlmClient:
         if response_format is not None:
             payload["response_format"] = response_format
         try:
-            content = self._post_complete(payload, timeout=timeout)
+            content = self._retry_post_complete(payload, timeout=timeout)
         except Exception as exc:
             if response_format is not None and self._should_retry_without_response_format(exc):
                 retry_payload = dict(payload)
                 retry_payload.pop("response_format", None)
-                content = self._post_complete(retry_payload, timeout=timeout)
+                content = self._retry_post_complete(retry_payload, timeout=timeout)
             else:
                 raise
         self._cache[key] = content
         return content
+
+    def _retry_post_complete(self, payload: dict, *, timeout: float | None = None) -> str:
+        last_exc: Exception | None = None
+        for attempt in range(4):
+            try:
+                return self._post_complete(payload, timeout=timeout)
+            except Exception as exc:
+                last_exc = exc
+                if not self._is_retryable_transient_error(exc) or attempt == 3:
+                    raise
+                time.sleep(1.0 * (attempt + 1))
+        assert last_exc is not None
+        raise last_exc
 
     def _post_complete(self, payload: dict, *, timeout: float | None = None) -> str:
         import httpx
@@ -81,6 +95,21 @@ class LlmClient:
             or "unsupported" in text
             or "invalid_request_error" in text
         )
+
+    def _is_retryable_transient_error(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        return any(token in text for token in (
+            " 500",
+            " 502",
+            " 503",
+            " 504",
+            "internalservererror",
+            "bad gateway",
+            "service unavailable",
+            "gateway timeout",
+            "api connection error",
+            "timeout",
+        ))
 
     def _response_error_text(self, response) -> str | None:
         if response is None:

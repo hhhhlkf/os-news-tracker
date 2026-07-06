@@ -2,7 +2,7 @@ services:
   db:
     image: postgres:16
     environment:
-      POSTGRES_DB: osnews
+      POSTGRES_DB: osnews_empty_test
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     volumes:
@@ -10,7 +10,7 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d osnews"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d osnews_empty_test"]
       interval: 2s
       timeout: 5s
       retries: 10
@@ -29,6 +29,7 @@ services:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/osnews_empty_test
       ENABLE_SCHEDULER: "0"
       RUN_STARTUP_BACKFILL: "0"
+      WATCHFILES_FORCE_POLLING: "true"
     depends_on:
       db:
         condition: service_healthy

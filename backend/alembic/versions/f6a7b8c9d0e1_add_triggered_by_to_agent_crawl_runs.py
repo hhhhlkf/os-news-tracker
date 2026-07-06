@@ -17,11 +17,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "agent_crawl_runs",
-        sa.Column("triggered_by", sa.String(length=100), nullable=True),
-    )
+    # `triggered_by` is already added in `e5f6a7b8c9d0`. Keep this revision as a
+    # no-op so fresh databases can migrate through the historical chain.
+    return None
 
 
 def downgrade() -> None:
-    op.drop_column("agent_crawl_runs", "triggered_by")
+    return None

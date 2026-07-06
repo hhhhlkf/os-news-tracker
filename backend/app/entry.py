@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 from app.api.main import create_app
 from app.db import SessionLocal
-from app.discovery.graph import reclaim_stale_runs
+from app.discovery.graph import STALE_RUN_TIMEOUT_SECONDS, reclaim_stale_runs
 from app.sources.registry import seed_sources_from_yaml
 
 logging.basicConfig(level=logging.INFO)
@@ -42,8 +42,8 @@ def _run_migrations() -> None:
 
 def _startup(app: FastAPI) -> None:
     _run_migrations()
-    # 回收上一进程遗留的 running run（进程崩/被 kill 后没人收，永久卡 running）
-    reclaim_stale_runs()
+    # 仅回收超时的 running run，避免开发态热重启时误伤刚启动的任务
+    reclaim_stale_runs(STALE_RUN_TIMEOUT_SECONDS)
     if _env_flag("RUN_SEED", "0"):
         seed_path = os.path.join(os.path.dirname(__file__), "sources", "seed_sources.yaml")
         session = SessionLocal()
