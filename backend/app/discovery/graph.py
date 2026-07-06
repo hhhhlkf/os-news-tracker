@@ -212,7 +212,7 @@ def fetch_homepage(state: DiscoveryState) -> DiscoveryState:
     """确定性节点：抓首页 html/links，零 LLM。"""
     ensure_not_cancelled()
     from app.discovery.tools import fetch_page
-    out = fetch_page.invoke({"url": state["site_url"], "render_js": False})
+    out = _invoke_tool_node(fetch_page, {"url": state["site_url"], "render_js": False})
     return {"homepage": out}
 
 
@@ -220,7 +220,7 @@ def capture_network(state: DiscoveryState) -> DiscoveryState:
     """确定性节点：Playwright 抓 XHR/JSON，零 LLM。"""
     ensure_not_cancelled()
     from app.discovery.tools import capture_network as _cap
-    caps = _cap.invoke({"url": state["site_url"]})
+    caps = _invoke_tool_node(_cap, {"url": state["site_url"]})
     return {"network_captures": caps}
 
 
@@ -543,6 +543,55 @@ def _select_explorer_tools(state: DiscoveryState, tools: list) -> list:
     return [tool_map[name] for name in preferred if name in tool_map]
 
 
+def _tool_message_content_to_value(content: object) -> object:
+    if isinstance(content, str):
+        try:
+            return json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            return content
+    return content
+
+
+def _tool_message_to_value(message: object) -> object:
+    return _tool_message_content_to_value(getattr(message, "content", None))
+
+
+def _invoke_tool_node(tool, args: dict, *, call_id: str | None = None) -> object:
+    """Execute a single LangChain tool through LangGraph ToolNode."""
+    from langgraph.prebuilt import ToolNode
+
+    node = ToolNode([tool], handle_tool_errors=False)
+    tool_call_id = call_id or f"{tool.name}_call"
+    outputs = node.invoke([
+        {
+            "name": tool.name,
+            "args": args or {},
+            "id": tool_call_id,
+            "type": "tool_call",
+        }
+    ])
+    if not outputs:
+        return None
+    return _tool_message_to_value(outputs[0])
+
+
+def _invoke_tool_node_messages(tools: list, tool_calls: list[dict]) -> list:
+    """Execute model-requested tool calls through LangGraph ToolNode."""
+    from langgraph.prebuilt import ToolNode
+
+    node = ToolNode(tools, handle_tool_errors=False)
+    normalized_calls = [
+        {
+            "name": call.get("name"),
+            "args": call.get("args") or {},
+            "id": call.get("id"),
+            "type": "tool_call",
+        }
+        for call in tool_calls
+    ]
+    return node.invoke(normalized_calls)
+
+
 def _extract_final_ai_content(result: dict) -> str:
     """从 ReAct 结果里取最后一条 AIMessage 的文本内容。"""
     from langchain_core.messages import AIMessage
@@ -553,7 +602,7 @@ def _extract_final_ai_content(result: dict) -> str:
 
 
 def _run_explorer_tool_loop(*, llm, tools: list, user_message: str, max_rounds: int = 6) -> dict:
-    """手工执行 explorer 的 tool loop，避免黑盒 ReAct 在 provider 侧组装错消息序列。"""
+    """Run explorer's model loop while executing tools through LangGraph ToolNode."""
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
     tool_map = {tool.name: tool for tool in tools}
@@ -594,16 +643,20 @@ def _run_explorer_tool_loop(*, llm, tools: list, user_message: str, max_rounds: 
         if not tool_calls:
             break
         for call in tool_calls:
-            ensure_not_cancelled()
             tool_name = call.get("name")
             if tool_name not in tool_map:
                 raise ValueError(f"unknown explorer tool: {tool_name}")
-            tool_result = tool_map[tool_name].invoke(call.get("args") or {})
+        ensure_not_cancelled()
+        raw_tool_messages = _invoke_tool_node_messages(tools, tool_calls)
+        for raw_tool_msg in raw_tool_messages:
+            ensure_not_cancelled()
+            tool_name = getattr(raw_tool_msg, "name", None)
+            tool_result = _tool_message_to_value(raw_tool_msg)
             summarized = _summarize_explorer_tool_result(tool_name, tool_result)
             content = json.dumps(summarized, ensure_ascii=False)
             tool_msg = ToolMessage(
                 content=content,
-                tool_call_id=call["id"],
+                tool_call_id=getattr(raw_tool_msg, "tool_call_id", None),
                 name=tool_name,
             )
             full_messages.append(tool_msg)
@@ -1826,7 +1879,7 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
         selectors = exploration.get("html_selectors") or {}
         item_selector = selectors.get("item_selector")
         if item_selector:
-            probe = probe_html_entries.invoke({
+            probe = _invoke_tool_node(probe_html_entries, {
                 "url": exploration.get("list_url") or state["site_url"],
                 "item_selector": item_selector,
                 "link_selector": selectors.get("link_selector"),
@@ -1901,7 +1954,7 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
             }, "audit_result": None, "validator_llm_output": raw}
 
         if rule_obj.mode == "path_join" and rule_obj.base_url and rule_obj.path_field and rule_obj.sample_items:
-            test_out = test_path_join.invoke({
+            test_out = _invoke_tool_node(test_path_join, {
                 "base_url": rule_obj.base_url,
                 "path_field": rule_obj.path_field,
                 "sample_items": rule_obj.sample_items,
@@ -1925,7 +1978,7 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
                 }, "audit_result": None, "validator_llm_output": raw}
 
         if rule_obj.mode == "template" and rule_obj.template and rule_obj.sample_items:
-            test_out = test_url_template.invoke({
+            test_out = _invoke_tool_node(test_url_template, {
                 "template": rule_obj.template,
                 "id_field": "id",
                 "sample_items": rule_obj.sample_items,
@@ -1947,7 +2000,7 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
                     "validation_samples": results[:5],
                 }, "audit_result": None, "validator_llm_output": raw}
 
-        probe_out = probe_url_patterns.invoke({
+        probe_out = _invoke_tool_node(probe_url_patterns, {
             "base_url": state["site_url"],
             "id_value": _first_sample_id(rule_obj),
         })
