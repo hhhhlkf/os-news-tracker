@@ -219,6 +219,7 @@ This project uses **Subagent-Driven Development (SDD)**:
 - After making changes, run `git commit` to record them unless explicitly told not to commit.
 - Spec review must pass before code quality review begins
 - Do **not** update Agent Crawl related logic. Treat `backend/app/agent/` and `backend/app/fetchers/agent_crawl.py` as frozen unless the user explicitly asks to modify Agent Crawl.
+- When a specific site/link cannot be crawled or a generated discovery DSL fails, first check whether the relevant prompts under `backend/app/discovery/graph.py` failed to state the needed constraint clearly. Prefer clarifying prompt boundaries and output contracts before adding hard-coded logic. Only add deterministic hard-rule code after confirming the failure is structural and cannot be solved reliably through prompt clarification.
 - Do **not** proactively create or modify tests. Only add or change tests when the user explicitly asks for tests.
 - Do not follow TDD by default. Implement the requested code change directly, then run existing relevant checks when practical.
 - Existing tests may be used for verification, but do not write new tests just to satisfy a change.
