@@ -151,8 +151,10 @@ This project follows **Subagent-Driven Development (SDD)** via the Superpowers m
 - One commit per task; amend commits for fixes (clean history)
 - After making changes, run `git commit` to record them unless explicitly told not to commit.
 - Spec compliance review MUST pass before code quality review
-- TDD: red (failing test) → green (minimal implementation) → refactor
-- Pure logic (normalizer, dedup) is isolated and unit-tested without I/O
+- Do **not** proactively create or modify tests. Only add or change tests when the user explicitly asks for tests.
+- Do not follow TDD by default. Implement the requested code change directly, then run existing relevant checks when practical.
+- Existing tests may be used for verification, but do not write new tests just to satisfy a change.
+- Pure logic (normalizer, dedup) should stay isolated and easy to verify without I/O
 - Fetchers, extractors, and search are behind Protocols — testable with fixtures, swappable
 
 ## Code Conventions
