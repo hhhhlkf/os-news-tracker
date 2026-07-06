@@ -559,6 +559,7 @@ def _tool_message_to_value(message: object) -> object:
 def _invoke_tool_node(tool, args: dict, *, call_id: str | None = None) -> object:
     """Execute a single LangChain tool through LangGraph ToolNode."""
     from langgraph.prebuilt import ToolNode
+    from langgraph.runtime import DEFAULT_RUNTIME
 
     node = ToolNode([tool], handle_tool_errors=False)
     tool_call_id = call_id or f"{tool.name}_call"
@@ -571,7 +572,7 @@ def _invoke_tool_node(tool, args: dict, *, call_id: str | None = None) -> object
                 "type": "tool_call",
             }
         ],
-        runtime=None,
+        runtime=DEFAULT_RUNTIME,
     )
     if not outputs:
         return None
@@ -581,6 +582,7 @@ def _invoke_tool_node(tool, args: dict, *, call_id: str | None = None) -> object
 def _invoke_tool_node_messages(tools: list, tool_calls: list[dict]) -> list:
     """Execute model-requested tool calls through LangGraph ToolNode."""
     from langgraph.prebuilt import ToolNode
+    from langgraph.runtime import DEFAULT_RUNTIME
 
     node = ToolNode(tools, handle_tool_errors=False)
     normalized_calls = [
@@ -592,7 +594,7 @@ def _invoke_tool_node_messages(tools: list, tool_calls: list[dict]) -> list:
         }
         for call in tool_calls
     ]
-    return node.invoke(normalized_calls, runtime=None)
+    return node.invoke(normalized_calls, runtime=DEFAULT_RUNTIME)
 
 
 def _extract_final_ai_content(result: dict) -> str:
