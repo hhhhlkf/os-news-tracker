@@ -32,6 +32,19 @@ function flush() {
   });
 }
 
+function method(id: number, sourceName: string, status = "active") {
+  return {
+    id,
+    source_name: sourceName,
+    domain: `${sourceName.toLowerCase().replaceAll(" ", "-")}.example.com`,
+    entry_url: `https://${sourceName.toLowerCase().replaceAll(" ", "-")}.example.com/news`,
+    status,
+    signature: `sig-${id}`,
+    last_run_at: null,
+    last_run_status: null,
+  };
+}
+
 describe("CrawlMethodList", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -52,17 +65,7 @@ describe("CrawlMethodList", () => {
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
-    listDiscoveryMethods.mockResolvedValue([
-      {
-        id: 7,
-        domain: "example.com",
-        entry_url: "https://example.com/news",
-        status: "active",
-        signature: "sig",
-        last_run_at: null,
-        last_run_status: null,
-      },
-    ]);
+    listDiscoveryMethods.mockResolvedValue([method(7, "LangChain Blog")]);
     fetchDiscoveryMethod.mockResolvedValue({
       discovered_count: 2,
       stored_count: 1,
@@ -124,26 +127,7 @@ describe("CrawlMethodList", () => {
   });
 
   it("stops batch fetching when the user cancels the crawl", async () => {
-    listDiscoveryMethods.mockResolvedValue([
-      {
-        id: 7,
-        domain: "example.com",
-        entry_url: "https://example.com/news",
-        status: "active",
-        signature: "sig",
-        last_run_at: null,
-        last_run_status: null,
-      },
-      {
-        id: 8,
-        domain: "second.example.com",
-        entry_url: "https://second.example.com/news",
-        status: "active",
-        signature: "sig-2",
-        last_run_at: null,
-        last_run_status: null,
-      },
-    ]);
+    listDiscoveryMethods.mockResolvedValue([method(7, "LangChain Blog"), method(8, "Second Blog")]);
 
     let resolveFirst: ((value: { discovered_count: number; stored_count: number; items: []; stats: {}; message: string }) => void) | null = null;
     fetchDiscoveryMethod.mockImplementation((_id: number, _request?: unknown, signal?: AbortSignal) => {
@@ -174,7 +158,7 @@ describe("CrawlMethodList", () => {
 
     await flush();
 
-    const checkboxes = Array.from(container.querySelectorAll("input[type='checkbox']")) as HTMLInputElement[];
+    const checkboxes = Array.from(container.querySelectorAll("input[aria-label^='选择 ']")) as HTMLInputElement[];
     expect(checkboxes).toHaveLength(2);
 
     await act(async () => {
@@ -204,5 +188,94 @@ describe("CrawlMethodList", () => {
 
     expect(fetchDiscoveryMethod).toHaveBeenCalledTimes(1);
     expect(container.textContent).toContain("已取消");
+  });
+
+  it("renders source_name as the primary crawl method label when available", async () => {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CrawlMethodList runLimitState={runLimitState} />
+        </QueryClientProvider>,
+      );
+    });
+
+    await flush();
+
+    expect(container.textContent).toContain("LangChain Blog");
+    expect(container.textContent).toContain("langchain-blog.example.com");
+  });
+
+  it("paginates crawl methods and navigates between pages", async () => {
+    listDiscoveryMethods.mockResolvedValue(Array.from({ length: 12 }, (_, index) => method(index + 1, `Method ${index + 1}`)));
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CrawlMethodList runLimitState={runLimitState} />
+        </QueryClientProvider>,
+      );
+    });
+
+    await flush();
+
+    expect(container.textContent).toContain("第 1-10 条 / 共 12 条");
+    expect(container.textContent).toContain("Method 1");
+    expect(container.querySelector("input[aria-label='选择 Method 12']")).toBeNull();
+
+    const nextButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("下一页"),
+    );
+    expect(nextButton).toBeTruthy();
+
+    await act(async () => {
+      nextButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain("第 11-12 条 / 共 12 条");
+    expect(container.textContent).toContain("Method 12");
+    expect(container.querySelector("input[aria-label='选择 Method 1']")).toBeNull();
+  });
+
+  it("selects all enabled methods on the current page only", async () => {
+    listDiscoveryMethods.mockResolvedValue([
+      ...Array.from({ length: 10 }, (_, index) => method(index + 1, `Method ${index + 1}`)),
+      method(11, "Disabled Method", "disabled"),
+      method(12, "Enabled Method 12"),
+    ]);
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CrawlMethodList runLimitState={runLimitState} />
+        </QueryClientProvider>,
+      );
+    });
+
+    await flush();
+
+    const selectAll = container.querySelector("input[aria-label='全选当前页爬取方式']") as HTMLInputElement | null;
+    expect(selectAll).toBeTruthy();
+
+    await act(async () => {
+      selectAll?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain("已选 10 个");
+
+    const nextButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("下一页"),
+    );
+    await act(async () => {
+      nextButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain("已选 10 个");
+
+    const secondPageSelectAll = container.querySelector("input[aria-label='全选当前页爬取方式']") as HTMLInputElement | null;
+    await act(async () => {
+      secondPageSelectAll?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain("已选 11 个");
   });
 });

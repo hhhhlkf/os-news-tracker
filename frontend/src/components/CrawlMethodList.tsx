@@ -1,5 +1,5 @@
 // frontend/src/components/CrawlMethodList.tsx
-import { useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, fetchDiscoveryMethod, listDiscoveryMethods } from "../api/client";
 import type { CrawlMethod } from "../types";
@@ -13,6 +13,8 @@ type RowState =
   | { kind: "cancelled" }
   | { kind: "error"; msg: string };
 
+const PAGE_SIZE_OPTIONS = [10, 20, 50];
+
 export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
   onOpenMethod?: (id: number) => void;
   highlightId?: number | null;
@@ -24,10 +26,26 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
   const [summary, setSummary] = useState<string | null>(null);
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchCancelling, setBatchCancelling] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
   const abortRef = useRef<AbortController | null>(null);
   const cancelledRef = useRef(false);
 
   const list = useQuery({ queryKey: ["discovery-methods"], queryFn: listDiscoveryMethods });
+  const methods = useMemo(() => list.data ?? [], [list.data]);
+  const totalPages = Math.max(1, Math.ceil(methods.length / pageSize));
+  const pageStart = (page - 1) * pageSize;
+  const pageMethods = methods.slice(pageStart, pageStart + pageSize);
+  const selectablePageIds = pageMethods.filter((m) => m.status !== "disabled").map((m) => m.id);
+  const pageSelectedCount = selectablePageIds.filter((id) => selected.has(id)).length;
+  const allPageSelected = selectablePageIds.length > 0 && pageSelectedCount === selectablePageIds.length;
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
+
   const fetchMut = useMutation({
     mutationFn: ({ id, request, signal }: { id: number; request: ReturnType<typeof buildManualNewsRunRequest>; signal?: AbortSignal }) =>
       fetchDiscoveryMethod(id, request, signal),
@@ -99,6 +117,16 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
     setSelected((s) => { const n = new Set(s); enabled ? n.add(id) : n.delete(id); return n; });
   }
 
+  function toggleCurrentPage(enabled: boolean) {
+    setSelected((s) => {
+      const n = new Set(s);
+      for (const id of selectablePageIds) {
+        enabled ? n.add(id) : n.delete(id);
+      }
+      return n;
+    });
+  }
+
   return (
     <section style={{ background: "#fff", border: "1px solid #d0d5dd", borderRadius: 10, padding: 16, marginTop: 14 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
@@ -108,6 +136,16 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ fontSize: 12, color: "#475467" }}>已选 <b style={{ color: "#101828" }}>{selected.size}</b> 个</span>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "#475467", cursor: selectablePageIds.length === 0 ? "not-allowed" : "pointer" }}>
+            <input
+              type="checkbox"
+              aria-label="全选当前页爬取方式"
+              checked={allPageSelected}
+              disabled={selectablePageIds.length === 0 || batchRunning}
+              onChange={(e) => toggleCurrentPage(e.target.checked)}
+            />
+            全选本页
+          </label>
           <button type="button" style={btnPrimary} disabled={selected.size === 0 || batchRunning} onClick={batchFetch}>
             {batchRunning ? "抓取中…" : "抓取选中"}
           </button>
@@ -136,16 +174,45 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
             加载爬取方式失败，请稍后重试。
           </div>
         )}
-        {(list.data ?? []).map((m) => (
+        {pageMethods.map((m) => (
           <MethodRow key={m.id} m={m} selected={selected.has(m.id)} state={rowStates[m.id]}
             onToggle={(en) => toggle(m.id, en)} onOpen={() => onOpenMethod?.(m.id)} highlight={highlightId === m.id} />
         ))}
-        {list.data && list.data.length === 0 && (
+        {list.data && methods.length === 0 && (
           <div style={{ border: "1px dashed #d0d5dd", borderRadius: 8, padding: 16, color: "#667085", fontSize: 13 }}>
             还没有爬取方式。用上方"智能探查"为一个网站生成爬取方式。
           </div>
         )}
       </div>
+      {methods.length > 0 && (
+        <div style={pagerBar}>
+          <div style={{ color: "#667085" }}>
+            第 {pageStart + 1}-{Math.min(pageStart + pageSize, methods.length)} 条 / 共 {methods.length} 条
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              每页
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setPage(1);
+                }}
+                style={selectStyle}
+              >
+                {PAGE_SIZE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </label>
+            <button type="button" style={page <= 1 ? pagerButtonDisabled : pagerButton} disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+              上一页
+            </button>
+            <span style={{ minWidth: 56, textAlign: "center", color: "#475467" }}>{page} / {totalPages}</span>
+            <button type="button" style={page >= totalPages ? pagerButtonDisabled : pagerButton} disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>
+              下一页
+            </button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -159,7 +226,7 @@ function MethodRow({ m, selected, state, onToggle, onOpen, highlight }: {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12, border: `1px solid ${selected ? "#b9d4ff" : highlight ? "#175cd3" : "#eaecf0"}`,
       borderRadius: 9, padding: "9px 11px", background: selected ? "#f8fbff" : highlight ? "#eff6ff" : "#fff" }}>
-      <input type="checkbox" checked={selected} disabled={disabled} onChange={(e) => onToggle(e.target.checked)} />
+      <input type="checkbox" aria-label={`选择 ${primaryLabel}`} checked={selected} disabled={disabled} onChange={(e) => onToggle(e.target.checked)} />
       <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={onOpen}>
         <div style={{ fontSize: 14, fontWeight: 700, color: disabled ? "#98a2b3" : "#101828" }}>
           {primaryLabel} <span style={badge(m.status)}>{m.status}</span>
@@ -190,3 +257,38 @@ const btnPrimary: CSSProperties = { border: "none", borderRadius: 999, padding: 
 const btnDisabled: CSSProperties = { ...btnPrimary, background: "#98a2b3", cursor: "not-allowed" };
 const btnDanger: CSSProperties = { ...btnPrimary, background: "#dc2626" };
 const infoBox: CSSProperties = { border: "1px dashed #d0d5dd", borderRadius: 8, padding: 16, color: "#667085", fontSize: 13 };
+const pagerBar: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 12,
+  flexWrap: "wrap",
+  marginTop: 12,
+  paddingTop: 12,
+  borderTop: "1px solid #eaecf0",
+  fontSize: 12,
+};
+const pagerButton: CSSProperties = {
+  border: "1px solid #d0d5dd",
+  borderRadius: 8,
+  padding: "6px 10px",
+  background: "#fff",
+  color: "#344054",
+  fontSize: 12,
+  fontWeight: 700,
+  cursor: "pointer",
+};
+const pagerButtonDisabled: CSSProperties = {
+  ...pagerButton,
+  color: "#98a2b3",
+  background: "#f9fafb",
+  cursor: "not-allowed",
+};
+const selectStyle: CSSProperties = {
+  border: "1px solid #d0d5dd",
+  borderRadius: 8,
+  padding: "5px 8px",
+  background: "#fff",
+  color: "#344054",
+  fontSize: 12,
+};
