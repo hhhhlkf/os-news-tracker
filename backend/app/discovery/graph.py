@@ -12,7 +12,7 @@ import re
 import threading
 import time
 from typing import TypedDict
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urljoin, urlparse
 
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, END
@@ -2167,6 +2167,31 @@ def _fetch_transport_fields(fetch_cfg: dict) -> dict:
     return out
 
 
+def _fetch_url_and_query(list_url: str | None, fetch_cfg: dict) -> tuple[str, dict[str, str]]:
+    raw_url = str(list_url or "")
+    parsed = urlparse(raw_url)
+    url_query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    clean_url = parsed._replace(query="").geturl() if parsed.query else raw_url
+    merged_query = {**url_query, **(fetch_cfg.get("query") or {})}
+    return clean_url, {str(k): str(v) for k, v in merged_query.items()}
+
+
+def _url_field_from_rule(url_rule: dict) -> str | None:
+    mode = url_rule.get("mode")
+    if mode == "path_join" and url_rule.get("base_url") and url_rule.get("path_field"):
+        base_url = str(url_rule["base_url"]).rstrip("/")
+        return f"template:{base_url}/{{item.{url_rule['path_field']}}}"
+    if mode == "template" and url_rule.get("template"):
+        template = str(url_rule["template"])
+        id_field = url_rule.get("id_field") or "id"
+        template = template.replace("{id}", f"{{item.{id_field}}}")
+        template = template.replace(f"{{{id_field}}}", f"{{item.{id_field}}}")
+        return f"template:{template}"
+    if mode == "existing_url" and url_rule.get("url_field"):
+        return str(url_rule["url_field"])
+    return None
+
+
 def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
     """DslWriter worker：with_structured_output 强制产出合法 DSL Recipe（喂 site_url+url_rule+exploration）。"""
     ensure_not_cancelled()
@@ -2310,23 +2335,32 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
                 "notes": notes,
             }
             return finalize_recipe(recipe_dict)
-    if url_rule.get("mode") == "path_join" and url_rule.get("base_url") and url_rule.get("path_field"):
+    url_field = _url_field_from_rule(url_rule)
+    if (
+        exploration.get("source_type") == "json_api"
+        and url_field
+        and exploration.get("list_url")
+        and (exploration.get("format_locator") or {}).get("value")
+    ):
         fields = dict(exploration.get("fields") or {})
-        path_field = url_rule["path_field"]
-        base_url = str(url_rule["base_url"]).rstrip("/")
-        fields["url"] = f"template:{base_url}/{{item.{path_field}}}"
+        fields["url"] = url_field
         pagination = exploration.get("pagination") or {}
         fetch_cfg = exploration.get("fetch") or {}
         format_value = (exploration.get("format_locator") or {}).get("value", "obj.records")
+        fetch_url, base_query = _fetch_url_and_query(exploration.get("list_url"), fetch_cfg)
         if pagination.get("type") == "page_param" and pagination.get("page_param"):
             page_param = pagination["page_param"]
             start = pagination.get("start", 1) or 1
-            loop_query = dict(fetch_cfg.get("query") or {})
-            if page_param in loop_query:
-                loop_query[page_param] = f"{{{{{page_param}}}}}"
+            first_query = dict(base_query)
+            loop_query = dict(base_query)
+            first_json_body = dict(fetch_cfg.get("json_body") or {})
             loop_json_body = dict(fetch_cfg.get("json_body") or {})
-            if page_param in loop_json_body:
+            if page_param in first_json_body or page_param in loop_json_body:
+                first_json_body[page_param] = start
                 loop_json_body[page_param] = f"{{{{{page_param}}}}}"
+            else:
+                first_query[page_param] = str(start)
+                loop_query[page_param] = f"{{{{{page_param}}}}}"
             if pagination.get("has_more_path"):
                 until_condition = {
                     "path": pagination["has_more_path"],
@@ -2338,7 +2372,25 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
                 until_condition = {"path": format_value, "op": "==", "value": []}
                 pagination_note = "deterministic empty-page loop fallback"
             actions = [
-                {"op": "set", "var": page_param, "value": start},
+                {
+                    "op": "fetch",
+                    "mode": "json",
+                    "url": fetch_url,
+                    "method": fetch_cfg.get("method", "GET"),
+                    **_fetch_transport_fields(fetch_cfg),
+                    "headers": fetch_cfg.get("headers", {}),
+                    "query": first_query,
+                    "json_body": first_json_body or None,
+                    "as": "last_fetch",
+                },
+                {
+                    "op": "extract",
+                    "from": format_value,
+                    "fields": {k: v for k, v in fields.items() if v is not None},
+                    "into": "items",
+                    "merge": False,
+                },
+                {"op": "set", "var": page_param, "value": start + 1},
                 {
                     "op": "loop",
                     "until": until_condition,
@@ -2347,7 +2399,7 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
                         {
                             "op": "fetch",
                             "mode": "json",
-                            "url": exploration.get("list_url") or state["site_url"],
+                            "url": fetch_url,
                             "method": fetch_cfg.get("method", "GET"),
                             **_fetch_transport_fields(fetch_cfg),
                             "headers": fetch_cfg.get("headers", {}),
@@ -2362,8 +2414,9 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
                             "into": "items",
                             "merge": True,
                         },
+                        {"op": "set", "var": page_param, "expr": f"{{{{{page_param}}}}} + 1"},
                     ],
-                    "on_each": [{"op": "set", "var": page_param, "expr": f"{{{{{page_param}}}}} + 1"}],
+                    "on_each": [],
                 },
                 {"op": "dedup_by", "field": "url"},
             ]
@@ -2371,7 +2424,7 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
                 "recipe_type": "dsl",
                 "entry_url": state["site_url"],
                 "actions": actions,
-                "notes": ["deterministic path_join recipe", "deterministic page_param loop", pagination_note],
+                "notes": ["deterministic json_api recipe", "deterministic page_param loop", pagination_note],
             }
             return finalize_recipe(recipe_dict)
         recipe_dict = {
@@ -2381,11 +2434,11 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
                 {
                     "op": "fetch",
                     "mode": "json",
-                    "url": exploration.get("list_url") or state["site_url"],
+                    "url": fetch_url,
                     "method": fetch_cfg.get("method", "GET"),
                     **_fetch_transport_fields(fetch_cfg),
                     "headers": fetch_cfg.get("headers", {}),
-                    "query": fetch_cfg.get("query", {}),
+                    "query": base_query,
                     "json_body": fetch_cfg.get("json_body"),
                     "as": "last_fetch",
                 },
@@ -2398,7 +2451,7 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
                 },
                 {"op": "dedup_by", "field": "url"},
             ],
-            "notes": ["deterministic path_join recipe"],
+            "notes": ["deterministic json_api recipe"],
         }
         return finalize_recipe(recipe_dict)
     prompt = (DSL_WRITER_PROMPT
