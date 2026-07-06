@@ -16,10 +16,38 @@ from app.discovery.cancel import ensure_not_cancelled
 
 
 @tool
-def fetch_page(url: str, render_js: bool = False) -> dict:
-    """抓取页面，返回 status/title/links。render_js=True 用 Playwright。"""
+def fetch_page(
+    url: str,
+    render_js: bool = False,
+    transport: str = "httpx",
+    impersonate: str | None = None,
+    stealthy_headers: bool = True,
+) -> dict:
+    """抓取页面，返回 status/title/links。transport=scrapling 用浏览器指纹 HTTP 调取。"""
     import httpx
     ensure_not_cancelled()
+    if transport == "scrapling":
+        from scrapling.fetchers import Fetcher
+
+        page = Fetcher.get(
+            url,
+            stealthy_headers=stealthy_headers,
+            impersonate=impersonate or "chrome",
+        )
+        body = getattr(page, "body", b"")
+        if isinstance(body, bytes):
+            text = body.decode(getattr(page, "encoding", None) or "utf-8", errors="replace")
+        else:
+            text = str(getattr(page, "html_content", None) or body or "")
+        return _page_summary(
+            url=str(getattr(page, "url", None) or url),
+            status=int(getattr(page, "status", 0) or 0),
+            text=text,
+            content_type=(getattr(page, "headers", {}) or {}).get("content-type", ""),
+            transport="scrapling",
+            impersonate=impersonate or "chrome",
+            stealthy_headers=stealthy_headers,
+        )
     if render_js:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as pw:
@@ -31,8 +59,40 @@ def fetch_page(url: str, render_js: bool = False) -> dict:
             title = p.title()
             links = p.eval_on_selector_all("a[href]", "els=>els.map(e=>e.href)")
             b.close()
-            return {"url": url, "status": 200, "title": title, "links": links, "html": html[:2000]}
+            out = _page_summary(
+                url=url,
+                status=200,
+                text=html,
+                content_type="text/html",
+                transport="playwright",
+                impersonate=None,
+                stealthy_headers=False,
+            )
+            out["title"] = title
+            out["links"] = links[:100]
+            return out
     r = httpx.get(url, timeout=15, follow_redirects=True)
+    return _page_summary(
+        url=str(r.url),
+        status=r.status_code,
+        text=r.text,
+        content_type=(getattr(r, "headers", {}) or {}).get("content-type", ""),
+        transport="httpx",
+        impersonate=None,
+        stealthy_headers=False,
+    )
+
+
+def _page_summary(
+    *,
+    url: str,
+    status: int,
+    text: str,
+    content_type: str,
+    transport: str,
+    impersonate: str | None,
+    stealthy_headers: bool,
+) -> dict:
     # 轻量 HTML 解析：提取 <title> 和 <a href>，避免引入 BeautifulSoup
     class _TitleLinkParser(HTMLParser):
         def __init__(self):
@@ -58,13 +118,43 @@ def fetch_page(url: str, render_js: bool = False) -> dict:
                 self._in_title = False
 
     parser = _TitleLinkParser()
-    parser.feed(r.text)
-    return {
-        "url": str(r.url),
-        "status": r.status_code,
+    parser.feed(text)
+    out = {
+        "url": url,
+        "status": status,
+        "content_type": content_type,
+        "transport": transport,
+        "impersonate": impersonate,
+        "stealthy_headers": stealthy_headers,
         "title": parser.title.strip(),
         "links": parser.links[:100],
-        "html": r.text[:2000],
+        "html": text[:2000],
+    }
+    feed = _summarize_feed(text)
+    if feed:
+        out["feed"] = feed
+    return out
+
+
+def _summarize_feed(text: str) -> dict | None:
+    import feedparser
+
+    parsed = feedparser.parse(text)
+    if parsed.bozo and not parsed.entries:
+        return None
+    if not parsed.entries:
+        return None
+    samples = []
+    for entry in parsed.entries[:5]:
+        samples.append({
+            "title": str(entry.get("title") or "").strip(),
+            "url": str(entry.get("link") or "").strip(),
+            "published_at": str(entry.get("published") or entry.get("updated") or "").strip(),
+        })
+    return {
+        "title": str(parsed.feed.get("title") or "").strip(),
+        "item_count": len(parsed.entries),
+        "sample_items": samples,
     }
 
 
@@ -109,6 +199,60 @@ def capture_network(url: str) -> list:
         p.wait_for_timeout(1000)
         b.close()
     return caps
+
+
+@tool
+def probe_html_entries(
+    url: str,
+    item_selector: str,
+    link_selector: str | None = None,
+    title_selector: str | None = None,
+    date_selector: str | None = None,
+) -> dict:
+    """按给定 HTML selector 抽样探测文章条目，返回 title/url/date 样本。"""
+    from playwright.sync_api import sync_playwright
+
+    ensure_not_cancelled()
+    samples: list[dict] = []
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        elements = page.query_selector_all(item_selector)
+
+        def _pick(el, selector: str | None):
+            if selector in (None, "", "self"):
+                return el
+            return el.query_selector(selector)
+
+        for el in elements[:5]:
+            ensure_not_cancelled()
+            link_el = _pick(el, link_selector)
+            title_el = _pick(el, title_selector)
+            date_el = _pick(el, date_selector)
+            href = None
+            if link_el is not None:
+                href = link_el.evaluate("(node) => node.href || node.getAttribute('href') || ''")
+            title = ""
+            if title_el is not None:
+                title = (title_el.inner_text() or "").strip()
+            published_at = ""
+            if date_el is not None:
+                published_at = (date_el.inner_text() or "").strip()
+            samples.append({
+                "title": title,
+                "url": href or "",
+                "published_at": published_at,
+            })
+        browser.close()
+
+    valid = [sample for sample in samples if sample.get("title") and sample.get("url")]
+    return {
+        "count": len(samples),
+        "valid_count": len(valid),
+        "looks_like_article_list": len(valid) >= 2,
+        "samples": samples,
+    }
 
 
 def _decode_json_lenient(text: str):
@@ -230,4 +374,4 @@ def probe_url_patterns(base_url: str, id_value: str, patterns: list[str] | None 
     return results
 
 
-TOOLS = [fetch_page, capture_network, inspect_item, test_url_template, test_path_join, probe_url_patterns]
+TOOLS = [fetch_page, capture_network, inspect_item, probe_html_entries, test_url_template, test_path_join, probe_url_patterns]

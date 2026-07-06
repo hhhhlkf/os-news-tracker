@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class FetchAction(BaseModel):
@@ -19,6 +19,9 @@ class FetchAction(BaseModel):
     mode: Literal["json", "feed", "html"]  # 决定解析方式：json→dict, feed→feedparser, html→文本
     url: str
     method: str = "GET"
+    transport: Literal["httpx", "scrapling"] = "httpx"
+    impersonate: str | None = None
+    stealthy_headers: bool = True
     headers: dict[str, str] = Field(default_factory=dict)
     query: dict[str, str] = Field(default_factory=dict)
     json_body: dict[str, Any] | None = None  # POST 请求体（openEuler 类用）
@@ -87,6 +90,12 @@ class Condition(BaseModel):
     not_exists: str | None = None  # 页面 selector 消失
     op: str | None = None  # >= > <= < == != (exists/not_exists 时为 None)
     value: Any | None = None
+
+    @model_validator(mode="after")
+    def validate_target_presence(self) -> "Condition":
+        if any(v is not None for v in (self.count_of, self.var, self.path, self.exists, self.not_exists)):
+            return self
+        raise ValueError("condition must define one of count_of/var/path/exists/not_exists")
 
 
 class LoopAction(BaseModel):

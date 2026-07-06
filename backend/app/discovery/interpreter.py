@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, Callable
+from urllib.parse import urlencode
 
 from app.discovery.dsl import (
     Action,
@@ -23,6 +25,21 @@ from app.discovery.dsl import (
     WaitForAction,
     render_vars,
 )
+
+logger = logging.getLogger(__name__)
+
+
+class DslExecutionPartialError(RuntimeError):
+    """DSL 执行中途失败，但已抓到部分结果。"""
+
+    def __init__(self, message: str, *, items: list[dict], stats: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.items = items
+        self.stats = stats
+
+
+class _DslStopExecution(RuntimeError):
+    """达到条目上限后中止执行的内部信号。"""
 
 
 class DslInterpreter:
@@ -40,19 +57,32 @@ class DslInterpreter:
         self._browser_fn = browser_fn
         self._page = None  # Playwright 页面句柄（Task 6 用，懒加载）
 
-    def run(self, recipe: DslRecipe) -> dict[str, Any]:
+    def run(self, recipe: DslRecipe, *, max_items: int | None = None) -> dict[str, Any]:
         """执行整份 Recipe，返回约定 JSON 产出。"""
         ctx: dict[str, Any] = {
             "vars": {"entry_url": recipe.entry_url},
             "items": [],
             "last_fetch": None,
         }
-        for action in recipe.actions:
-            self._exec(action, ctx)
-        self._cleanup()
+        try:
+            for action in recipe.actions:
+                self._exec(action, ctx, max_items=max_items)
+                self._check_max_items(ctx, max_items)
+        except _DslStopExecution:
+            pass
+        except Exception as e:
+            if ctx["items"]:
+                raise DslExecutionPartialError(
+                    str(e),
+                    items=list(ctx["items"]),
+                    stats={"discovered_count": len(ctx["items"])},
+                ) from e
+            raise
+        finally:
+            self._cleanup()
         return {"items": ctx["items"], "stats": {"discovered_count": len(ctx["items"])}}
 
-    def _exec(self, action: Action, ctx: dict[str, Any]) -> None:
+    def _exec(self, action: Action, ctx: dict[str, Any], *, max_items: int | None = None) -> None:
         """按 action 类型分发到对应原语处理。"""
         if isinstance(action, FetchAction):
             self._fetch(action, ctx)
@@ -63,7 +93,7 @@ class DslInterpreter:
         elif isinstance(action, DedupByAction):
             self._dedup(action, ctx)
         elif isinstance(action, LoopAction):
-            self._loop(action, ctx)
+            self._loop(action, ctx, max_items=max_items)
         elif isinstance(action, (GotoAction, WaitForAction, ClickAction)):
             self._browser_action(action, ctx)
 
@@ -94,23 +124,94 @@ class DslInterpreter:
         if self._fetch_fn:
             self._fetch_fn(action, ctx)
             return  # 测试 mock 路径
-        import httpx
 
         url = render_vars(action.url, ctx)  # 变量替换（如 {{page}}）
         headers = {k: render_vars(v, ctx) for k, v in action.headers.items()}
+        params = {k: render_vars(v, ctx) for k, v in action.query.items()}
         body = self._render_json_like(action.json_body, ctx) if action.json_body is not None else None
-        r = httpx.request(action.method, url, headers=headers, json=body, timeout=30)
+        r = self._request(action, url, headers=headers, params=params, body=body, ctx=ctx)
+        text = self._response_text(r)
         if action.mode == "json":
             try:
                 ctx["last_fetch"] = r.json()
             except Exception:
-                ctx["last_fetch"] = self._decode_json_lenient(r.text)
+                ctx["last_fetch"] = self._decode_json_lenient(text)
         elif action.mode == "feed":
             import feedparser
 
-            ctx["last_fetch"] = {"feed": feedparser.parse(r.text)}
+            ctx["last_fetch"] = {"feed": feedparser.parse(text)}
         else:
-            ctx["last_fetch"] = {"html": r.text}
+            ctx["last_fetch"] = {"html": text}
+            self._load_html_page_for_extract(url, params=params)
+
+    def _request(
+        self,
+        action: FetchAction,
+        url: str,
+        *,
+        headers: dict[str, str],
+        params: dict[str, str],
+        body: Any,
+        ctx: dict[str, Any],
+    ) -> Any:
+        if action.transport == "scrapling":
+            if action.method.upper() != "GET":
+                raise RuntimeError("scrapling transport currently supports GET fetch actions only")
+            from scrapling.fetchers import Fetcher
+
+            return Fetcher.get(
+                url,
+                headers=headers or None,
+                params=params or None,
+                stealthy_headers=action.stealthy_headers,
+                impersonate=action.impersonate or "chrome",
+            )
+
+        import httpx
+
+        try:
+            return httpx.request(action.method, url, headers=headers, params=params, json=body, timeout=30)
+        except httpx.ReadTimeout as e:
+            page_value = params.get("page")
+            if page_value is None and isinstance(body, dict):
+                page_value = body.get("page")
+            if page_value is None:
+                page_value = ctx.get("vars", {}).get("page")
+            query_text = "&".join(f"{k}={v}" for k, v in params.items()) or "none"
+            body_text = json.dumps(body, ensure_ascii=False) if body is not None else "none"
+            detail = f"fetch timeout at page={page_value or 'unknown'} url={url} query={query_text} json_body={body_text}"
+            logger.warning(detail)
+            raise RuntimeError(detail) from e
+
+    def _response_text(self, response: Any) -> str:
+        body = getattr(response, "body", None)
+        if isinstance(body, bytes):
+            encoding = getattr(response, "encoding", None) or "utf-8"
+            return body.decode(encoding, errors="replace")
+        text = getattr(response, "text", None)
+        if callable(text):
+            text = text()
+        if text is not None:
+            return str(text)
+        html_content = getattr(response, "html_content", None)
+        if html_content is not None:
+            return str(html_content)
+        return str(response)
+
+    def _load_html_page_for_extract(self, url: str, *, params: dict[str, str]) -> None:
+        """为后续 selector:extract 准备真实 DOM 页面。"""
+        from playwright.sync_api import sync_playwright
+
+        if self._page is None:
+            self._pw = sync_playwright().start()
+            self._browser = self._pw.chromium.launch(headless=True)
+            self._page = self._browser.new_page()
+        target_url = url
+        if params:
+            query_text = urlencode(params)
+            sep = "&" if "?" in url else "?"
+            target_url = f"{url}{sep}{query_text}"
+        self._page.goto(target_url, wait_until="networkidle")
 
     def _render_json_like(self, value: Any, ctx: dict[str, Any]) -> Any:
         """递归渲染 JSON 载荷中的字符串变量，保留 int/bool/null 等原始类型。"""
@@ -196,9 +297,13 @@ class DslInterpreter:
 
     def _resolve_html_field(self, spec: Any, el: Any) -> str:
         """解析 HTML 字段：attr:取属性，其余按 selector 取文本。"""
+        if spec == "self":
+            return (el.inner_text() or "").strip()
         if isinstance(spec, str) and spec.startswith("attr:"):
             attr = spec.removeprefix("attr:")
             child = el.query_selector(f"[{attr}]") or el
+            if attr in {"href", "src"}:
+                return child.evaluate("(node, attr) => node[attr] || node.getAttribute(attr) || ''", attr) or ""
             return child.get_attribute(attr) or ""
         # "selector:text" 或裸 selector
         sel = spec.split(":")[0] if ":" in spec else spec
@@ -230,16 +335,26 @@ class DslInterpreter:
             out.append(it)
         ctx["items"] = out
 
-    def _loop(self, action: LoopAction, ctx: dict[str, Any]) -> None:
+    def _loop(self, action: LoopAction, ctx: dict[str, Any], *, max_items: int | None = None) -> None:
         """循环：until 条件为真或 max_iters 用尽则停（先到先停，防死循环）。"""
         from app.discovery.dsl import eval_condition
         for _ in range(action.max_iters):
             if eval_condition(action.until.model_dump(), ctx):
                 break  # 终止条件满足，退出循环
             for sub in action.body:  # 执行循环体
-                self._exec(sub, ctx)
+                self._exec(sub, ctx, max_items=max_items)
+                self._check_max_items(ctx, max_items)
             for sub in action.on_each:  # 每轮后置动作（如 page+1）
-                self._exec(sub, ctx)
+                self._exec(sub, ctx, max_items=max_items)
+                self._check_max_items(ctx, max_items)
+
+    def _check_max_items(self, ctx: dict[str, Any], max_items: int | None) -> None:
+        if max_items is None:
+            return
+        items = ctx.get("items", [])
+        if len(items) >= max_items:
+            ctx["items"] = items[:max_items]
+            raise _DslStopExecution()
 
     def _cleanup(self) -> None:
         """关闭 Playwright 浏览器，run 结束时调用（mock 路径下 _page 为 None，no-op）。"""

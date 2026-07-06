@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
+import time
 from typing import TypedDict
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, END
@@ -29,8 +31,10 @@ logger = logging.getLogger(__name__)
 
 TOKEN_BUDGET = 50000  # 生成命 token 硬上限，超即中止
 MAX_ATTEMPTS = 3      # 图级重试上限
+WORKER_RETRY_LIMIT = 3  # 单个 LLM worker 本地重试上限
 STALE_RUN_TIMEOUT_SECONDS = 1800       # running 超过 30 分钟判超时回收（定时巡检用）
 STALE_RUN_PATROL_INTERVAL_MINUTES = 5  # 定时巡检间隔
+DISCOVERY_LLM_TIMEOUT_SECONDS = 300.0
 
 # node_name → 流程图节点标签 / 日志 stage 标签（前端渲染 [stage] source message · key=value）
 _STAGE_LABELS = {
@@ -67,6 +71,7 @@ class DiscoveryState(TypedDict, total=False):
     dsl_recipe: dict | None # dsl_writer 产出
     audit_result: dict | None  # auditor 产出：通过/不通过 + 原因
     attempt: int            # 重试轮数
+    dsl_cycle_attempt: int  # dsl_writer <-> auditor 局部重写轮数
     verdict: str | None     # "dsl" | "failed"
     method_id: int | None   # 最终存入的 crawl_methods.id
     token_used: int         # 累计 token（硬中止用）
@@ -76,10 +81,22 @@ class DiscoveryState(TypedDict, total=False):
     explorer_agent_output: str | None
     explorer_synthesis_output: str | None
     explorer_parse_error: str | None
+    explorer_trace_logs: list[dict] | None
+    validator_llm_output: str | None
+    dsl_writer_llm_output: str | None
+    auditor_llm_output: str | None
+    audit_input: dict | None
+    retry_feedback: dict | None
+    dsl_sanitize_warnings: list[str] | None
+    run_id: int | None
+    log_source: str | None
 
 
 class ExplorationFetch(BaseModel):
     method: str = "GET"
+    transport: str = "httpx"
+    impersonate: str | None = None
+    stealthy_headers: bool = True
     headers: dict = Field(default_factory=dict)
     query: dict = Field(default_factory=dict)
     json_body: dict | None = None
@@ -163,13 +180,22 @@ def supervisor_route(state: DiscoveryState) -> str:
     优先级：token 硬中止 > audit 通过 > 重试用尽 > 接力。
     """
     ensure_not_cancelled()
+    if state.get("error") or state.get("verdict") == "failed":
+        return "__end__"
     if state.get("token_used", 0) >= TOKEN_BUDGET:
         return "__end__"  # token 超预算，硬中止
     audit = state.get("audit_result")
-    if audit and audit.get("passed"):
+    decision = audit.get("decision") if audit else None
+    if audit and (audit.get("passed") or decision == "pass"):
         return "save_method"  # 审计通过，存方法
     if audit and not audit.get("passed") and state.get("attempt", 0) >= MAX_ATTEMPTS:
         return "__end__"  # 重试用尽，判 failed
+    if decision == "reexplore":
+        return "explorer"
+    if decision == "rewrite" and state.get("url_rule") and not state.get("dsl_recipe"):
+        return "dsl_writer"
+    if audit and not audit.get("passed") and not state.get("exploration") and not state.get("url_rule") and not state.get("dsl_recipe"):
+        return "explorer"  # 审计不通过后，重新进入探查
     # 接力顺序：explorer → validator → dsl_writer → auditor
     if state.get("dsl_recipe") and not audit:
         return "auditor"
@@ -253,8 +279,24 @@ def _make_llm():
     s = get_settings()
     return ChatOpenAI(
         base_url=s.llm_base_url, model=s.llm_model,
-        api_key=s.llm_api_key, temperature=0,
+        api_key=s.llm_api_key, temperature=0, max_retries=4,
     )
+
+
+def _is_retryable_llm_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(token in text for token in (
+        " 500",
+        " 502",
+        " 503",
+        " 504",
+        "internalservererror",
+        "bad gateway",
+        "service unavailable",
+        "gateway timeout",
+        "api connection error",
+        "timeout",
+    ))
 
 
 EXPLORER_SYSTEM_PROMPT = """# 角色
@@ -282,14 +324,23 @@ EXPLORER_SYSTEM_PROMPT = """# 角色
 - 是否有分页，以及分页参数/终止条件是什么
 
 # 可用工具
-- fetch_page(url, render_js)：抓页面，返回 status/title/links/html。render_js=true 用浏览器。
+- fetch_page(url, render_js, transport, impersonate, stealthy_headers)：抓页面，返回 status/title/links/html/feed。
+  transport=httpx 为默认；transport=scrapling 会用 Scrapling 浏览器指纹 HTTP 调取，适合 Oracle/Akamai 等普通 httpx/curl 403 但浏览器指纹可通的站点。
 - capture_network(url)：用浏览器抓页面加载时的 XHR/Fetch JSON 响应，用于发现 SPA 隐藏 API。
 - inspect_item(api_url, method, json_body)：看某个 API 返回的 item 结构。
+- probe_html_entries(url, item_selector, link_selector, title_selector, date_selector)：按 selector 真实抽取 HTML 列表样本。
 - test_url_template(template, id_field, sample_items)：用真实 id 填模板逐个请求，验证详情页能否打开。
 - probe_url_patterns(base_url, id_value)：没头绪时批量试常见 URL pattern（/blog/{id}、/post/{id} 等）。
 
 # 工作方式
 1. 先 fetch_page(url, render_js=false) 看页面结构、title、links、html。
+1.0 若 fetch_page 返回 403/401/429、首页为空、或候选 RSS/Atom 无法用默认 httpx 调取，
+    必须再调用 fetch_page(url, transport="scrapling", impersonate="chrome", stealthy_headers=true)。
+    如果 Scrapling 成功拿到 feed 或 HTML，必须在探查结论里保留 transport=scrapling 作为后续 DSL 配方的一部分。
+1.1 若首页已直接出现多个同模式文章链接（如 /post/…、/blog/…、/articles/…、/entry/…），
+    且这些链接看起来像真实文章详情页，同时还能看到 /page/2/ 之类分页链接，
+    这本身就是强 HTML 列表证据。此时应优先判断为服务端渲染 HTML（SSR），
+    不要因为没有 JSON API 就误判为"未确认"。
 2. 检查页面是否有 RSS/Atom（优先）：
    - HTML 里 <link rel="alternate" type="application/rss+xml"> 或 type="application/atom+xml">
    - 常见路径 /feed、/rss、/atom、/feed.xml、/rss.xml
@@ -303,6 +354,7 @@ EXPLORER_SYSTEM_PROMPT = """# 角色
    - link_selector：文章链接 selector
    - title_selector：标题 selector
    - date_selector：发布时间 selector
+   - 必要时调用 probe_html_entries(...)，不要只凭肉眼猜 selector。
 6. 必须检查列表数据源是否分页：
    - JSON API：query/body 里是否有 page/pageSize/limit/offset/cursor；响应里是否有 total/hasMore/next/pageNo/cursor
    - HTML：分页链接、next 按钮、页码 URL 规律
@@ -311,6 +363,9 @@ EXPLORER_SYSTEM_PROMPT = """# 角色
 7. 若列表 item 里没有直接 URL 但有 id/slug/no，可用 test_url_template 或 probe_url_patterns 做"初步验证"，
    把结果记进 url_candidates（只给候选 + 初步验证，不正式产出 UrlRule）。
 8. 控制工具调用次数，信息足够后停止。
+9. 如果 fetch_page 已经给出足够的首页文章链接证据，就直接在最终回答里明确写出：
+   候选 source_type=html、文章链接模式、分页线索、仍未确认的 selector；
+   不要机械继续寻找 JSON API。
 
 # 最终回答规则（最高优先级）
 - 你的最终回复不是系统最终结果，后端会再做结构化整理。
@@ -330,11 +385,9 @@ EXPLORER_SYSTEM_PROMPT = """# 角色
 """
 
 
-def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
-    """Explorer worker：ReAct 探证据，最终结果统一由程序对象产出。"""
-    ensure_not_cancelled()
-    llm = llm or _make_llm()
+def _run_single_explorer_attempt(state: DiscoveryState, *, llm, user_message: str) -> DiscoveryState:
     from app.discovery.tools import TOOLS
+
     selected_tools = _select_explorer_tools(state, TOOLS)
     synth_raw = ""
     parse_error = None
@@ -343,7 +396,7 @@ def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
         result = _run_explorer_tool_loop(
             llm=llm,
             tools=selected_tools,
-            user_message=_explorer_input_message(state),
+            user_message=user_message,
             max_rounds=3,
         )
         ensure_not_cancelled()
@@ -359,6 +412,7 @@ def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
             "explorer_parse_error": parse_error,
         }
     agent_output = _extract_final_ai_content(result)
+    trace_logs = _extract_explorer_log_events(result)
     deterministic_candidates.extend(_derive_exploration_candidates_from_result(state, result))
     try:
         synth_raw, exploration = _synthesize_exploration(
@@ -370,13 +424,99 @@ def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
         exploration = _apply_exploration_constraints(exploration, matched_hint)
     except Exception as e:
         parse_error = str(e)
-        exploration = _unknown_exploration()
+        exploration = _pick_best_deterministic_candidate(deterministic_candidates) or _unknown_exploration()
     return {
         "exploration": ExplorationResult(**exploration).model_dump(),
         "explorer_agent_output": agent_output,
         "explorer_synthesis_output": synth_raw,
         "explorer_parse_error": parse_error,
+        "explorer_trace_logs": trace_logs,
     }
+
+
+def _build_explorer_retry_feedback(update: DiscoveryState) -> str:
+    exploration = update.get("exploration") or {}
+    return (
+        f"source_type={exploration.get('source_type')} · success={exploration.get('success')} "
+        f"· list_url={exploration.get('list_url') or '无'} · parse_error={update.get('explorer_parse_error') or '无'} "
+        f"· notes={json.dumps((exploration.get('notes') or [])[:3], ensure_ascii=False)}"
+    )
+
+
+def _append_worker_attempt_log(
+    state: DiscoveryState,
+    *,
+    node_name: str,
+    attempt: int,
+    status: str,
+    detail: str,
+) -> None:
+    run_id = state.get("run_id")
+    if run_id is None:
+        return
+    from app.run_logs import append_run_log
+
+    stage = _STAGE_LABELS.get(node_name, node_name)
+    source_label = state.get("log_source") or state.get("name") or state.get("site_url")
+    outcome = "成功" if status == "success" else "失败"
+    append_run_log(
+        stage,
+        f"本地重试第 {attempt} / {WORKER_RETRY_LIMIT} 轮{outcome} · {detail}",
+        source=source_label,
+        run_id=run_id,
+        step=f"{node_name}_local_retry",
+        worker_attempt=attempt,
+        worker_attempt_limit=WORKER_RETRY_LIMIT,
+        level="info" if status == "success" else "warning",
+    )
+
+
+def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
+    """Explorer worker：ReAct 探证据，最终结果统一由程序对象产出。"""
+    ensure_not_cancelled()
+    llm = llm or _make_llm()
+    worker_feedback = None
+    last_update: DiscoveryState | None = None
+    for attempt in range(1, WORKER_RETRY_LIMIT + 1):
+        try:
+            update = _run_single_explorer_attempt(
+                state,
+                llm=llm,
+                user_message=_explorer_input_message(state, worker_retry_feedback=worker_feedback),
+            )
+        except Exception as exc:
+            update = {
+                "exploration": _unknown_exploration(),
+                "explorer_agent_output": "",
+                "explorer_synthesis_output": "",
+                "explorer_parse_error": str(exc),
+            }
+        last_update = update
+        if (update.get("exploration") or {}).get("success") is True:
+            exploration = update.get("exploration") or {}
+            _append_worker_attempt_log(
+                state,
+                node_name="explorer",
+                attempt=attempt,
+                status="success",
+                detail=(
+                    f"source_type={exploration.get('source_type')} · "
+                    f"list_url={exploration.get('list_url') or '无'}"
+                ),
+            )
+            return update
+        worker_feedback = _build_explorer_retry_feedback(update)
+        _append_worker_attempt_log(
+            state,
+            node_name="explorer",
+            attempt=attempt,
+            status="failed",
+            detail=worker_feedback,
+        )
+    failed = dict(last_update or {})
+    failed["verdict"] = "failed"
+    failed["error"] = "探查连续失败 3 次，程序无法继续进行"
+    return failed
 
 
 def _select_explorer_tools(state: DiscoveryState, tools: list) -> list:
@@ -399,7 +539,7 @@ def _select_explorer_tools(state: DiscoveryState, tools: list) -> list:
     )
     if not has_high_quality_json_capture:
         return tools
-    preferred = ["test_url_template", "test_path_join", "probe_url_patterns"]
+    preferred = ["fetch_page", "test_url_template", "test_path_join", "probe_url_patterns"]
     return [tool_map[name] for name in preferred if name in tool_map]
 
 
@@ -426,7 +566,19 @@ def _run_explorer_tool_loop(*, llm, tools: list, user_message: str, max_rounds: 
 
     for round_idx in range(max_rounds):
         ensure_not_cancelled()
-        raw_response = bound_llm.invoke(model_messages)
+        last_exc = None
+        for retry_idx in range(4):
+            try:
+                raw_response = bound_llm.invoke(model_messages)
+                break
+            except Exception as exc:
+                last_exc = exc
+                if not _is_retryable_llm_error(exc) or retry_idx == 3:
+                    raise
+                time.sleep(1.0 * (retry_idx + 1))
+        else:
+            assert last_exc is not None
+            raise last_exc
         ai_msg = raw_response if isinstance(raw_response, AIMessage) else AIMessage(content=str(raw_response))
         tool_calls = []
         for tool_idx, call in enumerate(getattr(ai_msg, "tool_calls", None) or []):
@@ -505,8 +657,13 @@ def _summarize_explorer_tool_result(tool_name: str, tool_result: object) -> obje
         return {
             "url": tool_result.get("url"),
             "status": tool_result.get("status"),
+            "content_type": tool_result.get("content_type"),
+            "transport": tool_result.get("transport"),
+            "impersonate": tool_result.get("impersonate"),
+            "stealthy_headers": tool_result.get("stealthy_headers"),
             "title": _truncate_text(tool_result.get("title"), 120),
             "links_sample": _compact_explorer_value((tool_result.get("links") or [])[:10], depth=1),
+            "feed": _compact_explorer_value(tool_result.get("feed"), depth=2),
             "html_preview": _truncate_text(tool_result.get("html"), 800),
         }
     return _compact_explorer_value(tool_result, depth=3)
@@ -563,6 +720,13 @@ def _derive_exploration_candidates_from_state(state: DiscoveryState) -> list[dic
         feed_exploration = _derive_feed_exploration_from_html(site_url=state["site_url"], html=html)
         if feed_exploration:
             candidates.append(feed_exploration)
+        html_exploration = _derive_html_exploration_from_homepage(
+            site_url=state["site_url"],
+            html=html,
+            links=homepage.get("links") or [],
+        )
+        if html_exploration:
+            candidates.append(html_exploration)
     caps = state.get("network_captures") or []
     for cap in caps:
         parsed = cap.get("parsed_json")
@@ -582,8 +746,6 @@ def _derive_exploration_candidates_from_state(state: DiscoveryState) -> list[dic
 
 
 def _derive_feed_exploration_from_html(*, site_url: str, html: str) -> dict | None:
-    import re
-
     m = re.search(
         r'<link[^>]+rel=["\'][^"\']*alternate[^"\']*["\'][^>]+type=["\']application/(rss\+xml|atom\+xml)["\'][^>]+href=["\']([^"\']+)["\']',
         html,
@@ -597,7 +759,7 @@ def _derive_feed_exploration_from_html(*, site_url: str, html: str) -> dict | No
     return ExplorationResult(
         source_type=source_type,
         list_url=feed_url,
-        fetch={"method": "GET", "headers": {}, "query": {}, "json_body": None},
+        fetch={"method": "GET", "transport": "httpx", "headers": {}, "query": {}, "json_body": None},
         format_locator={"kind": "feed_entries", "value": "feed.entries"},
         evidence=[{
             "tool": "fetch_page",
@@ -606,6 +768,134 @@ def _derive_feed_exploration_from_html(*, site_url: str, html: str) -> dict | No
         notes=["deterministic fallback from homepage alternate feed link"],
         success=True,
     ).model_dump()
+
+
+def _derive_html_exploration_from_homepage(*, site_url: str, html: str, links: list[str]) -> dict | None:
+    article_links = _pick_homepage_article_links(site_url=site_url, links=links)
+    if len(article_links) < 2:
+        return None
+
+    article_pattern = _infer_article_link_pattern(article_links)
+    next_link = _pick_homepage_next_page_link(site_url=site_url, links=links)
+    pagination: dict[str, object] = {
+        "type": "none",
+        "page_param": None,
+        "size_param": None,
+        "offset_param": None,
+        "limit_param": None,
+        "cursor_param": None,
+        "next_path": None,
+        "has_more_path": None,
+        "start": 1,
+        "size": None,
+        "notes": "deterministic fallback from homepage article links",
+    }
+    if next_link:
+        pagination["type"] = "html_next"
+        pagination["next_path"] = urlparse(next_link).path or next_link
+
+    selector = f'a[href*="{article_pattern}"]' if article_pattern else "a[href]"
+    sample_items = [
+        {
+            "raw": {"url": link},
+            "id": None,
+            "title": None,
+            "raw_url": link,
+            "url": link,
+            "published_at": None,
+        }
+        for link in article_links[:5]
+    ]
+    return ExplorationResult(
+        source_type="html",
+        list_url=site_url,
+        fetch={"method": "GET", "transport": "httpx", "headers": {}, "query": {}, "json_body": None},
+        format_locator={"kind": "html_selector", "value": selector},
+        fields={
+            "id": None,
+            "title": None,
+            "url": "url",
+            "published_at": None,
+            "summary": None,
+            "content": None,
+        },
+        html_selectors={
+            "item_selector": selector,
+            "link_selector": "self",
+            "title_selector": "self",
+            "date_selector": "time",
+        },
+        sample_items=sample_items,
+        url_candidates=[{
+            "mode": "existing_url",
+            "url_field": "url",
+            "id_field": None,
+            "template": None,
+            "verification": "homepage_link_direct",
+        }],
+        pagination=pagination,
+        evidence=[{
+            "tool": "fetch_page",
+            "summary": f"homepage article links detected · sample_items={len(sample_items)}"
+                       + (f" · next_page={pagination['next_path']}" if pagination.get("next_path") else ""),
+        }],
+        notes=["deterministic fallback from homepage article links"],
+        success=True,
+    ).model_dump()
+
+
+def _pick_homepage_article_links(*, site_url: str, links: list[str]) -> list[str]:
+    site_host = urlparse(site_url).netloc
+    article_patterns = (
+        "/post/",
+        "/posts/",
+        "/blog/",
+        "/blogs/",
+        "/article/",
+        "/articles/",
+        "/entry/",
+        "/entries/",
+    )
+    article_links: list[str] = []
+    seen: set[str] = set()
+    for link in links:
+        if not isinstance(link, str):
+            continue
+        normalized = urljoin(site_url, link)
+        parsed = urlparse(normalized)
+        if parsed.netloc and parsed.netloc != site_host:
+            continue
+        path = parsed.path.lower()
+        if not any(pattern in path for pattern in article_patterns):
+            continue
+        if path.endswith("/page/") or re.search(r"/page/\d+/?$", path):
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        article_links.append(normalized)
+    return article_links
+
+
+def _pick_homepage_next_page_link(*, site_url: str, links: list[str]) -> str | None:
+    site_host = urlparse(site_url).netloc
+    for link in links:
+        if not isinstance(link, str):
+            continue
+        normalized = urljoin(site_url, link)
+        parsed = urlparse(normalized)
+        if parsed.netloc and parsed.netloc != site_host:
+            continue
+        if re.search(r"/page/\d+/?$", parsed.path.lower()):
+            return normalized
+    return None
+
+
+def _infer_article_link_pattern(article_links: list[str]) -> str | None:
+    for token in ("/post/", "/posts/", "/blog/", "/blogs/", "/article/", "/articles/", "/entry/", "/entries/"):
+        if any(token in urlparse(link).path.lower() for link in article_links):
+            return token
+    return None
 
 
 def _derive_json_api_exploration(
@@ -632,6 +922,7 @@ def _derive_json_api_exploration(
         list_url=api_url,
         fetch={
             "method": method or "GET",
+            "transport": "httpx",
             "headers": {},
             "query": {},
             "json_body": json_body,
@@ -667,6 +958,44 @@ def _derive_exploration_candidates_from_result(state: DiscoveryState, result: di
     """从 ReAct 工具轨迹里提炼候选池。"""
     candidates: list[dict] = []
     for event in _iter_tool_events(result):
+        if event["name"] == "fetch_page":
+            payload = event.get("payload") or {}
+            feed = payload.get("feed") if isinstance(payload, dict) else None
+            if isinstance(feed, dict) and feed.get("item_count"):
+                transport = payload.get("transport") or "httpx"
+                candidates.append(ExplorationResult(
+                    source_type="rss",
+                    list_url=payload.get("url") or state["site_url"],
+                    fetch={
+                        "method": "GET",
+                        "transport": transport,
+                        "impersonate": payload.get("impersonate"),
+                        "stealthy_headers": bool(payload.get("stealthy_headers", True)),
+                        "headers": {},
+                        "query": {},
+                        "json_body": None,
+                    },
+                    format_locator={"kind": "feed_entries", "value": "feed.entries"},
+                    sample_items=[
+                        {
+                            "raw": item,
+                            "id": None,
+                            "title": item.get("title"),
+                            "raw_url": item.get("url"),
+                            "url": item.get("url"),
+                            "published_at": item.get("published_at"),
+                        }
+                        for item in (feed.get("sample_items") or [])[:5]
+                        if isinstance(item, dict)
+                    ],
+                    evidence=[{
+                        "tool": "fetch_page",
+                        "summary": f"feed fetched via {transport} · item_count={feed.get('item_count')}",
+                    }],
+                    notes=[f"feed transport confirmed via {transport}"],
+                    success=True,
+                ).model_dump())
+            continue
         if event["name"] != "inspect_item":
             continue
         payload = event.get("payload") or {}
@@ -854,8 +1183,9 @@ def _build_sample_items(items: list[dict], site_url: str) -> list[dict]:
                 url_field = candidate
                 break
         raw_url = item.get(url_field) if url_field else None
+        raw_id = item.get("id") or item.get("no") or item.get("slug") or item.get("uuid")
         sample_items.append({
-            "id": item.get("id") or item.get("no") or item.get("slug") or item.get("uuid"),
+            "id": str(raw_id) if raw_id is not None else None,
             "raw_url": str(raw_url) if raw_url is not None else None,
             "url": urljoin(site_url, str(raw_url)) if raw_url else None,
             "title": item.get("title") or item.get("name") or item.get("subject"),
@@ -873,68 +1203,65 @@ def _build_sample_items(items: list[dict], site_url: str) -> list[dict]:
 
 
 def _sanitize_sample_raw(item: dict) -> dict:
-    """裁剪 sample raw，只保留探查真正需要的少数字段。"""
-    keep_keys = {
-        "id",
-        "no",
-        "slug",
-        "uuid",
-        "title",
-        "name",
-        "subject",
-        "url",
-        "link",
-        "href",
-        "path",
-        "date",
-        "published_at",
-        "pubDate",
-        "publishTime",
-        "created_at",
-        "time",
-        "summary",
-        "description",
-        "desc",
-        "brief",
-        "articleName",
-        "author",
+    """保留 raw 主体，但删除键名里包含 content/text 的字段，避免无关长正文污染上下文。"""
+    cloned = json.loads(json.dumps(item, ensure_ascii=False, default=str))
+    return {
+        key: value
+        for key, value in cloned.items()
+        if "content" not in key.lower() and "text" not in key.lower()
     }
-    sanitized: dict = {}
-    for key, value in item.items():
-        if key not in keep_keys:
-            continue
-        if isinstance(value, str):
-            sanitized[key] = _truncate_text(value, 160)
-        elif isinstance(value, list):
-            clipped = value[:6]
-            sanitized[key] = [
-                _truncate_text(v, 120) if isinstance(v, str) else v
-                for v in clipped
-            ]
-        elif isinstance(value, dict):
-            inner: dict = {}
-            for inner_key, inner_value in list(value.items())[:8]:
-                if isinstance(inner_value, str):
-                    inner[inner_key] = _truncate_text(inner_value, 120)
-                else:
-                    inner[inner_key] = inner_value
-            sanitized[key] = inner
-        else:
-            sanitized[key] = value
-    return sanitized
 
 
-def _explorer_input_message(state: DiscoveryState) -> str:
+def _stringify_worker_retry_feedback(feedback: object) -> str:
+    if feedback is None:
+        return ""
+    if isinstance(feedback, str):
+        return feedback
+    try:
+        return json.dumps(feedback, ensure_ascii=False)
+    except Exception:
+        return str(feedback)
+
+
+def _append_worker_retry_prompt(prompt: str, heading: str, feedback: object | None) -> str:
+    if not feedback:
+        return prompt
+    return f"{prompt}\n\n# {heading}\n{_stringify_worker_retry_feedback(feedback)}"
+
+
+def _explorer_input_message(state: DiscoveryState, worker_retry_feedback: object | None = None) -> str:
     """为 explorer 组装上下文，把已抓到的首页/网络证据直接带给 agent。"""
     lines = [f"请探查站点 {state['site_url']} 的文章列表数据源和 item 结构。"]
+    retry_feedback = state.get("retry_feedback") or {}
+    if retry_feedback:
+        lines.append("上一轮审计失败反馈（用于纠偏，但不要机械复用旧结论）：")
+        lines.append(json.dumps(retry_feedback, ensure_ascii=False))
+    if worker_retry_feedback:
+        lines.append("上一轮探查失败反馈（请针对这些失败点纠偏后重试，不要重复同样结论）：")
+        lines.append(_stringify_worker_retry_feedback(worker_retry_feedback))
     homepage = state.get("homepage") or {}
     if homepage:
+        article_links = _pick_homepage_article_links(
+            site_url=state["site_url"],
+            links=homepage.get("links") or [],
+        )
+        next_link = _pick_homepage_next_page_link(
+            site_url=state["site_url"],
+            links=homepage.get("links") or [],
+        )
         lines.append("已知首页证据：")
         lines.append(json.dumps({
             "title": homepage.get("title"),
             "status": homepage.get("status"),
             "links_sample": (homepage.get("links") or [])[:10],
         }, ensure_ascii=False))
+        if article_links:
+            lines.append("首页文章链接线索：")
+            lines.append(json.dumps({
+                "article_link_candidates": article_links[:5],
+                "article_link_pattern": _infer_article_link_pattern(article_links),
+                "next_page_candidate": next_link,
+            }, ensure_ascii=False))
     caps = state.get("network_captures") or []
     if caps:
         lines.append("已抓到的网络请求证据（优先复用这些结果，必要时再调用 inspect_item 做二次请求）：")
@@ -976,6 +1303,86 @@ def _format_log_json_text(text: str | None) -> str | None:
     return json.dumps(parsed, ensure_ascii=False, indent=2)
 
 
+def _extract_explorer_log_events(result: dict) -> list[dict]:
+    """提取 explorer 可见输出轨迹，仅保留 AI 文本和工具结果摘要，不含 thinking。"""
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    events: list[dict] = []
+    for msg in result.get("messages", []):
+        if isinstance(msg, AIMessage):
+            content = _truncate_text(getattr(msg, "content", ""), 1200)
+            if content:
+                events.append({"kind": "ai", "content": content})
+        elif isinstance(msg, ToolMessage):
+            raw = getattr(msg, "content", None)
+            content = _format_log_json_text(raw) or _truncate_text(raw, 1200)
+            if content:
+                events.append({
+                    "kind": "tool",
+                    "name": getattr(msg, "name", None) or "tool",
+                    "content": content,
+                })
+    return events[-12:]
+
+
+def _summarize_explorer_tool_content(tool_name: str | None, raw_content: str | None) -> str:
+    """压缩第二阶段 evidence 中的工具输出，只保留 URL 判断所需线索。"""
+    parsed = None
+    try:
+        parsed = json.loads(str(raw_content or "").strip())
+    except (json.JSONDecodeError, TypeError):
+        return _truncate_text(raw_content, 600)
+
+    if tool_name == "capture_network" and isinstance(parsed, list):
+        compact = []
+        for item in parsed[:4]:
+            if not isinstance(item, dict):
+                continue
+            compact.append({
+                "api_url": item.get("api_url"),
+                "method": item.get("method"),
+                "status": item.get("status"),
+                "request_json_body": item.get("request_json_body"),
+            })
+        return json.dumps(compact, ensure_ascii=False)
+
+    if tool_name == "inspect_item" and isinstance(parsed, dict):
+        sample = parsed.get("sample")
+        sample_preview = None
+        if isinstance(sample, dict):
+            sample_preview = dict(list(sample.items())[:4])
+        compact = {
+            "status": parsed.get("status"),
+            "sample_keys": list(sample.keys())[:8] if isinstance(sample, dict) else None,
+            "sample_preview": sample_preview,
+        }
+        return json.dumps(compact, ensure_ascii=False)
+
+    if tool_name == "fetch_page" and isinstance(parsed, dict):
+        compact = {
+            "status": parsed.get("status"),
+            "content_type": parsed.get("content_type"),
+            "transport": parsed.get("transport"),
+            "impersonate": parsed.get("impersonate"),
+            "stealthy_headers": parsed.get("stealthy_headers"),
+            "title": parsed.get("title"),
+            "links_count": len(parsed.get("links") or []),
+            "feed": parsed.get("feed"),
+        }
+        return json.dumps(compact, ensure_ascii=False)
+
+    if tool_name == "probe_html_entries" and isinstance(parsed, dict):
+        compact = {
+            "count": parsed.get("count"),
+            "valid_count": parsed.get("valid_count"),
+            "looks_like_article_list": parsed.get("looks_like_article_list"),
+            "samples": parsed.get("samples", [])[:3],
+        }
+        return json.dumps(compact, ensure_ascii=False)
+
+    return _truncate_text(json.dumps(parsed, ensure_ascii=False), 600)
+
+
 def _explorer_evidence_payload(result: dict) -> list[dict]:
     """从 ReAct 轨迹提炼证据，供第二阶段结构化整理使用。"""
     from langchain_core.messages import AIMessage, ToolMessage
@@ -983,21 +1390,31 @@ def _explorer_evidence_payload(result: dict) -> list[dict]:
     payload: list[dict] = []
     for msg in result.get("messages", []):
         if isinstance(msg, AIMessage):
-            entry = {"kind": "ai", "content": _truncate_text(getattr(msg, "content", ""), 1200)}
+            entry = {"kind": "ai", "content": _truncate_text(getattr(msg, "content", ""), 320)}
             tool_calls = getattr(msg, "tool_calls", None)
             if tool_calls:
                 entry["tool_calls"] = [
-                    {"name": call.get("name"), "args": call.get("args")}
-                    for call in tool_calls[:8]
+                    {
+                        "name": call.get("name"),
+                        "args": {
+                            key: value
+                            for key, value in (call.get("args") or {}).items()
+                            if key in {"url", "api_url", "method", "id_field", "template", "base_url", "path_field"}
+                        },
+                    }
+                    for call in tool_calls[:4]
                 ]
             payload.append(entry)
         elif isinstance(msg, ToolMessage):
             payload.append({
                 "kind": "tool",
                 "name": getattr(msg, "name", None),
-                "content": _truncate_text(getattr(msg, "content", ""), 2400),
+                "content": _summarize_explorer_tool_content(
+                    getattr(msg, "name", None),
+                    getattr(msg, "content", ""),
+                ),
             })
-    return payload[-12:]
+    return payload[-8:]
 
 
 def _synthesize_exploration(*, site_url: str, result: dict, deterministic_candidates: list[dict]) -> tuple[str, dict]:
@@ -1024,7 +1441,7 @@ def _synthesize_exploration(*, site_url: str, result: dict, deterministic_candid
         "{\n"
         '  "source_type": "json_api | rss | atom | html | unknown",\n'
         '  "list_url": "string or null",\n'
-        '  "fetch": {"method": "GET | POST", "headers": {}, "query": {}, "json_body": null},\n'
+        '  "fetch": {"method": "GET | POST", "transport": "httpx | scrapling", "impersonate": null, "stealthy_headers": true, "headers": {}, "query": {}, "json_body": null},\n'
         '  "format_locator": {"kind": "json_path | feed_entries | html_selector | unknown", "value": "string"},\n'
         '  "fields": {"id": null, "title": null, "url": null, "published_at": null, "summary": null, "content": null},\n'
         '  "html_selectors": {"item_selector": null, "link_selector": null, "title_selector": null, "date_selector": null},\n'
@@ -1043,6 +1460,7 @@ def _synthesize_exploration(*, site_url: str, result: dict, deterministic_candid
         prompt,
         temperature=0.0,
         response_format={"type": "json_object"},
+        timeout=DISCOVERY_LLM_TIMEOUT_SECONDS,
     )
     parsed = _parse_strict_exploration_output(raw)
     return raw, parsed
@@ -1152,6 +1570,44 @@ def _apply_exploration_constraints(exploration: dict, hint: dict | None) -> dict
     return ExplorationResult(**filled).model_dump()
 
 
+def _normalize_exploration_evidence(parsed: dict) -> dict:
+    evidence = parsed.get("evidence")
+    if not isinstance(evidence, list):
+        return parsed
+    normalized: list[dict] = []
+    for item in evidence:
+        if isinstance(item, dict):
+            normalized.append(item)
+            continue
+        text = str(item).strip()
+        if not text:
+            continue
+        tool, sep, summary = text.partition(":")
+        if sep:
+            normalized.append({"tool": tool.strip(), "summary": summary.strip()})
+        else:
+            normalized.append({"tool": "unknown", "summary": text})
+    parsed["evidence"] = normalized
+    return parsed
+
+
+def _normalize_exploration_sample_items(parsed: dict) -> dict:
+    sample_items = parsed.get("sample_items")
+    if not isinstance(sample_items, list):
+        return parsed
+    normalized: list[dict | object] = []
+    for item in sample_items:
+        if not isinstance(item, dict):
+            normalized.append(item)
+            continue
+        row = dict(item)
+        if row.get("id") is not None and not isinstance(row.get("id"), str):
+            row["id"] = str(row["id"])
+        normalized.append(row)
+    parsed["sample_items"] = normalized
+    return parsed
+
+
 def _parse_strict_exploration_output(content: str) -> dict:
     """严格解析 explorer 输出：必须是可直接 json.loads 的单个对象且满足 schema。"""
     if not content:
@@ -1162,6 +1618,8 @@ def _parse_strict_exploration_output(content: str) -> dict:
         raise ValueError(f"strict exploration json parse failed: {e}") from e
     if not isinstance(parsed, dict):
         raise ValueError("strict exploration output must be a JSON object")
+    parsed = _normalize_exploration_evidence(parsed)
+    parsed = _normalize_exploration_sample_items(parsed)
     return ExplorationResult(**parsed).model_dump()
 
 
@@ -1202,6 +1660,66 @@ def _parse_json_or_fallback(content: str) -> dict:
         except Exception:
             pass
     return {"source_type": "unknown", "success": False, "raw": content[:2000]}
+
+
+def _repair_loop_until(loop_action: dict) -> None:
+    until = loop_action.get("until")
+    if not isinstance(until, dict):
+        return
+    has_target = any(until.get(key) is not None for key in ("count_of", "var", "path", "exists", "not_exists"))
+    if has_target:
+        return
+    for sub in loop_action.get("body") or []:
+        if sub.get("op") == "extract" and sub.get("from"):
+            until.update({
+                "count_of": None,
+                "var": None,
+                "path": sub["from"],
+                "exists": None,
+                "not_exists": None,
+                "op": "==",
+                "value": [],
+            })
+            return
+
+
+def _sanitize_recipe_actions(actions: list[dict], *, path: str = "actions") -> tuple[list[dict], list[str]]:
+    sanitized: list[dict] = []
+    warnings: list[str] = []
+    for idx, action in enumerate(actions):
+        action_path = f"{path}[{idx}]"
+        current = dict(action)
+        if current.get("op") == "fetch":
+            if current.get("query") is None:
+                current["query"] = {}
+                warnings.append(f"{action_path}.fetch.query was null and sanitized to {{}}")
+            elif isinstance(current.get("query"), dict):
+                current["query"] = {k: str(v) for k, v in current["query"].items()}
+        if current.get("op") == "extract" and isinstance(current.get("fields"), dict):
+            current["fields"] = {k: v for k, v in current["fields"].items() if v is not None}
+        if current.get("op") == "loop":
+            if isinstance(current.get("body"), list):
+                current["body"], body_warnings = _sanitize_recipe_actions(current["body"], path=f"{action_path}.loop.body")
+                warnings.extend(body_warnings)
+            if isinstance(current.get("on_each"), list):
+                current["on_each"], each_warnings = _sanitize_recipe_actions(current["on_each"], path=f"{action_path}.loop.on_each")
+                warnings.extend(each_warnings)
+            _repair_loop_until(current)
+        sanitized.append(current)
+    return sanitized, warnings
+
+
+def _sanitize_recipe_dict(recipe_dict: dict) -> dict:
+    return _sanitize_recipe(recipe_dict)[0]
+
+
+def _sanitize_recipe(recipe_dict: dict) -> tuple[dict, list[str]]:
+    out = dict(recipe_dict)
+    if isinstance(out.get("actions"), list):
+        out["actions"], warnings = _sanitize_recipe_actions(out["actions"])
+    else:
+        warnings = []
+    return out, warnings
 
 
 class UrlRule(BaseModel):
@@ -1302,95 +1820,174 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
     都不中 → evidence="unverified"。
     """
     ensure_not_cancelled()
-    from app.discovery.tools import test_path_join, test_url_template, probe_url_patterns
+    from app.discovery.tools import probe_html_entries, test_path_join, test_url_template, probe_url_patterns
     exploration = state.get("exploration") or {}
-    prompt = (VALIDATOR_PROMPT
-              .replace("{site_url}", state["site_url"])
-              .replace("{exploration}", json.dumps(exploration, ensure_ascii=False)))
-    if llm is None:
-        from app.llm.client import LlmClient
-        ensure_not_cancelled()
-        raw = LlmClient().complete(
-            prompt,
-            temperature=0.0,
-            response_format={"type": "json_object"},
-        )
-        rule_obj = UrlRule(**_parse_json_or_fallback(raw))
-    else:
-        structured = llm.with_structured_output(UrlRule)
-        rule = structured.invoke(prompt)
-        rule_obj = rule if isinstance(rule, UrlRule) else UrlRule(**rule)
-    if rule_obj.mode == "template" and rule_obj.id_field == "path" and not rule_obj.path_field:
-        rule_obj = rule_obj.model_copy(update={
-            "mode": "path_join",
-            "base_url": state["site_url"],
-            "path_field": "path",
-            "template": None,
-            "id_field": None,
-        })
+    if exploration.get("source_type") == "html":
+        selectors = exploration.get("html_selectors") or {}
+        item_selector = selectors.get("item_selector")
+        if item_selector:
+            probe = probe_html_entries.invoke({
+                "url": exploration.get("list_url") or state["site_url"],
+                "item_selector": item_selector,
+                "link_selector": selectors.get("link_selector"),
+                "title_selector": selectors.get("title_selector"),
+                "date_selector": selectors.get("date_selector"),
+            })
+            samples = probe.get("samples") or []
+            if probe.get("looks_like_article_list"):
+                return {"url_rule": {
+                    "mode": "existing_url",
+                    "url_field": "url",
+                    "id_field": None,
+                    "evidence": f"html_validated {probe.get('valid_count')}/{probe.get('count')}",
+                    "confidence": "high",
+                    "validation_samples": samples[:5],
+                }, "audit_result": None, "validator_llm_output": json.dumps(probe, ensure_ascii=False)}
+    worker_feedback = None
+    last_out: DiscoveryState | None = None
+    for attempt in range(1, WORKER_RETRY_LIMIT + 1):
+        prompt = (VALIDATOR_PROMPT
+                  .replace("{site_url}", state["site_url"])
+                  .replace("{exploration}", json.dumps(exploration, ensure_ascii=False)))
+        prompt = _append_worker_retry_prompt(prompt, "上一轮验证URL失败反馈", worker_feedback)
+        try:
+            if llm is None:
+                from app.llm.client import LlmClient
+                ensure_not_cancelled()
+                raw = LlmClient().complete(
+                    prompt,
+                    temperature=0.0,
+                    response_format={"type": "json_object"},
+                    timeout=DISCOVERY_LLM_TIMEOUT_SECONDS,
+                )
+                rule_obj = UrlRule(**_parse_json_or_fallback(raw))
+            else:
+                structured = llm.with_structured_output(UrlRule)
+                rule = structured.invoke(prompt)
+                rule_obj = rule if isinstance(rule, UrlRule) else UrlRule(**rule)
+                raw = json.dumps(rule_obj.model_dump(), ensure_ascii=False)
+        except Exception as exc:
+            last_out = {"url_rule": None, "validator_llm_output": "", "audit_result": None}
+            worker_feedback = f"exception={exc}"
+            _append_worker_attempt_log(
+                state,
+                node_name="validator",
+                attempt=attempt,
+                status="failed",
+                detail=worker_feedback,
+            )
+            continue
+        if rule_obj.mode == "template" and rule_obj.id_field == "path" and not rule_obj.path_field:
+            rule_obj = rule_obj.model_copy(update={
+                "mode": "path_join",
+                "base_url": state["site_url"],
+                "path_field": "path",
+                "template": None,
+                "id_field": None,
+            })
 
-    # mode=existing_url：列表已有 url 字段，无需模板验证
-    if rule_obj.mode == "existing_url" and rule_obj.url_field:
-        return {"url_rule": {
-            "mode": "existing_url", "url_field": rule_obj.url_field,
-            "id_field": rule_obj.id_field, "evidence": "existing_url",
-            "confidence": rule_obj.confidence, "validation_samples": rule_obj.validation_samples,
-        }}
-
-    if rule_obj.mode == "path_join" and rule_obj.base_url and rule_obj.path_field and rule_obj.sample_items:
-        test_out = test_path_join.invoke({
-            "base_url": rule_obj.base_url,
-            "path_field": rule_obj.path_field,
-            "sample_items": rule_obj.sample_items,
-        })
-        results = test_out.get("results", [])
-        valid = [r for r in results if r.get("is_article_page")]
-        if valid:
+        if rule_obj.mode == "existing_url" and rule_obj.url_field:
+            _append_worker_attempt_log(
+                state,
+                node_name="validator",
+                attempt=attempt,
+                status="success",
+                detail=f"mode=existing_url · evidence=existing_url · url_field={rule_obj.url_field}",
+            )
             return {"url_rule": {
-                "mode": "path_join", "base_url": rule_obj.base_url,
+                "mode": "existing_url", "url_field": rule_obj.url_field,
+                "id_field": rule_obj.id_field, "evidence": "existing_url",
+                "confidence": rule_obj.confidence, "validation_samples": rule_obj.validation_samples,
+            }, "audit_result": None, "validator_llm_output": raw}
+
+        if rule_obj.mode == "path_join" and rule_obj.base_url and rule_obj.path_field and rule_obj.sample_items:
+            test_out = test_path_join.invoke({
+                "base_url": rule_obj.base_url,
                 "path_field": rule_obj.path_field,
-                "evidence": f"validated {len(valid)}/{len(results)}",
-                "confidence": rule_obj.confidence,
-                "validation_samples": results[:5],
-            }}
+                "sample_items": rule_obj.sample_items,
+            })
+            results = test_out.get("results", [])
+            valid = [r for r in results if r.get("is_article_page")]
+            if valid:
+                _append_worker_attempt_log(
+                    state,
+                    node_name="validator",
+                    attempt=attempt,
+                    status="success",
+                    detail=f"mode=path_join · evidence=validated {len(valid)}/{len(results)} · path_field={rule_obj.path_field}",
+                )
+                return {"url_rule": {
+                    "mode": "path_join", "base_url": rule_obj.base_url,
+                    "path_field": rule_obj.path_field,
+                    "evidence": f"validated {len(valid)}/{len(results)}",
+                    "confidence": rule_obj.confidence,
+                    "validation_samples": results[:5],
+                }, "audit_result": None, "validator_llm_output": raw}
 
-    # mode=template：test_url_template 程序验证（sample 里 id 值放在 "id" 键）
-    if rule_obj.mode == "template" and rule_obj.template and rule_obj.sample_items:
-        test_out = test_url_template.invoke({
-            "template": rule_obj.template,
-            "id_field": "id",  # sample_items 用 "id" 键存 id 值
-            "sample_items": rule_obj.sample_items,
+        if rule_obj.mode == "template" and rule_obj.template and rule_obj.sample_items:
+            test_out = test_url_template.invoke({
+                "template": rule_obj.template,
+                "id_field": "id",
+                "sample_items": rule_obj.sample_items,
+            })
+            results = test_out.get("results", [])
+            valid = [r for r in results if r.get("is_article_page")]
+            if valid:
+                _append_worker_attempt_log(
+                    state,
+                    node_name="validator",
+                    attempt=attempt,
+                    status="success",
+                    detail=f"mode=template · evidence=validated {len(valid)}/{len(results)} · template={rule_obj.template}",
+                )
+                return {"url_rule": {
+                    "mode": "template", "template": rule_obj.template,
+                    "id_field": rule_obj.id_field, "evidence": f"validated {len(valid)}/{len(results)}",
+                    "confidence": rule_obj.confidence,
+                    "validation_samples": results[:5],
+                }, "audit_result": None, "validator_llm_output": raw}
+
+        probe_out = probe_url_patterns.invoke({
+            "base_url": state["site_url"],
+            "id_value": _first_sample_id(rule_obj),
         })
-        results = test_out.get("results", [])
-        valid = [r for r in results if r.get("is_article_page")]
-        if valid:
+        hit = next((p for p in probe_out if p.get("is_article_page")), None)
+        if hit:
+            _append_worker_attempt_log(
+                state,
+                node_name="validator",
+                attempt=attempt,
+                status="success",
+                detail=f"mode=template · evidence=probed: {hit['pattern']} · template={urljoin(state['site_url'], hit['pattern'])}",
+            )
             return {"url_rule": {
-                "mode": "template", "template": rule_obj.template,
-                "id_field": rule_obj.id_field, "evidence": f"validated {len(valid)}/{len(results)}",
-                "confidence": rule_obj.confidence,
-                "validation_samples": results[:5],
-            }}
-
-    # mode=unknown / template 验证失败 → probe_url_patterns 兜底
-    probe_out = probe_url_patterns.invoke({
-        "base_url": state["site_url"],
-        "id_value": _first_sample_id(rule_obj),
-    })
-    hit = next((p for p in probe_out if p.get("is_article_page")), None)
-    if hit:
-        return {"url_rule": {
-            "mode": "template", "template": urljoin(state["site_url"], hit["pattern"]),
-            "id_field": rule_obj.id_field, "evidence": f"probed: {hit['pattern']}",
-            "confidence": "low",
-            "validation_samples": [hit],
-        }}
-    return {"url_rule": {
-        "mode": rule_obj.mode, "template": rule_obj.template,
-        "base_url": rule_obj.base_url, "path_field": rule_obj.path_field,
-        "id_field": rule_obj.id_field, "url_field": rule_obj.url_field,
-        "evidence": "unverified", "confidence": rule_obj.confidence,
-        "validation_samples": rule_obj.validation_samples,
-    }}
+                "mode": "template", "template": urljoin(state["site_url"], hit["pattern"]),
+                "id_field": rule_obj.id_field, "evidence": f"probed: {hit['pattern']}",
+                "confidence": "low",
+                "validation_samples": [hit],
+            }, "audit_result": None, "validator_llm_output": raw}
+        last_out = {"url_rule": {
+            "mode": rule_obj.mode, "template": rule_obj.template,
+            "base_url": rule_obj.base_url, "path_field": rule_obj.path_field,
+            "id_field": rule_obj.id_field, "url_field": rule_obj.url_field,
+            "evidence": "unverified", "confidence": rule_obj.confidence,
+            "validation_samples": rule_obj.validation_samples,
+        }, "audit_result": None, "validator_llm_output": raw}
+        worker_feedback = (
+            f"mode={rule_obj.mode} · confidence={rule_obj.confidence} "
+            f"· evidence=unverified · reason={rule_obj.reason}"
+        )
+        _append_worker_attempt_log(
+            state,
+            node_name="validator",
+            attempt=attempt,
+            status="failed",
+            detail=worker_feedback,
+        )
+    failed = dict(last_out or {})
+    failed["verdict"] = "failed"
+    failed["error"] = "验证URL连续失败 3 次，程序无法继续进行"
+    return failed
 
 
 DSL_WRITER_PROMPT = """# 角色
@@ -1406,7 +2003,7 @@ DSL_WRITER_PROMPT = """# 角色
 # DSL 动作格式（严格：每个动作必须是 JSON object，必须有 op 字段，字段名固定如下）
 
 1. fetch
-{"op": "fetch", "mode": "json | feed | html", "url": "...", "method": "GET | POST", "headers": {}, "query": {}, "json_body": null, "as": "last_fetch"}
+{"op": "fetch", "mode": "json | feed | html", "url": "...", "method": "GET | POST", "transport": "httpx | scrapling", "impersonate": "chrome 或 null", "stealthy_headers": true, "headers": {}, "query": {}, "json_body": null, "as": "last_fetch"}
 
 2. goto
 {"op": "goto", "url": "..."}
@@ -1441,6 +2038,7 @@ max_iters 必须 1~20。
 - 站点 URL：{site_url}
 - URL 规律：{url_rule}
 - 探查结果：{exploration}
+- 上一轮审计反馈：{retry_feedback}
 
 # 输出
 必须按 DslRecipe schema 结构化输出：
@@ -1454,6 +2052,7 @@ max_iters 必须 1~20。
 # 编写规则
 1. 根据 exploration.source_type 选 fetch.mode：json_api→json；rss/atom→feed；html→html。
 2. 第一阶段必须 fetch 列表数据源：url 用 exploration.list_url；method/query/json_body/headers 用 exploration.fetch。
+2.1 如果 exploration.fetch.transport=scrapling，所有对应 fetch 动作必须原样写入 transport、impersonate、stealthy_headers；这是探查阶段验证出的调取配方，不允许丢失。
 3. 第二阶段必须 extract：
    - json_api：from 用 exploration.format_locator.value
    - rss/atom：from 用 feed.entries
@@ -1480,16 +2079,167 @@ max_iters 必须 1~20。
 - extract.from 必须和 fetch.mode 匹配（json→json path；feed→feed.entries；html→selector: 前缀）。
 - loop.max_iters 必须 1~20。
 - fetch URL、字段名、selector、json path 必须来自 exploration。
+- transport/impersonate/stealthy_headers 必须来自 exploration.fetch；默认 httpx，但一旦探查证据为 scrapling，配方必须写 scrapling。
 - 配方执行后应能抓到 ≥1 条带 title 和 url 的文章。
 """
+
+
+def _fetch_transport_fields(fetch_cfg: dict) -> dict:
+    stealthy_headers = fetch_cfg.get("stealthy_headers")
+    if stealthy_headers is None:
+        stealthy_headers = True
+    out = {
+        "transport": fetch_cfg.get("transport") or "httpx",
+        "stealthy_headers": bool(stealthy_headers),
+    }
+    if fetch_cfg.get("impersonate"):
+        out["impersonate"] = fetch_cfg.get("impersonate")
+    return out
 
 
 def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
     """DslWriter worker：with_structured_output 强制产出合法 DSL Recipe（喂 site_url+url_rule+exploration）。"""
     ensure_not_cancelled()
     from app.discovery.dsl import DslRecipe
+
+    def finalize_recipe(recipe_dict: dict, *, raw_output: str | None = None) -> DiscoveryState:
+        sanitized_recipe, sanitize_warnings = _sanitize_recipe(recipe_dict)
+        notes = list(sanitized_recipe.get("notes") or [])
+        for warning in sanitize_warnings:
+            note = f"sanitize warning: {warning}"
+            if note not in notes:
+                notes.append(note)
+        if notes:
+            sanitized_recipe["notes"] = notes
+        out: DiscoveryState = {
+            "dsl_recipe": DslRecipe(**sanitized_recipe).model_dump(),
+            "token_used": state.get("token_used", 0) + 1000,
+            "dsl_sanitize_warnings": sanitize_warnings,
+            "audit_result": None,
+            "retry_feedback": None,
+        }
+        if raw_output is not None:
+            out["dsl_writer_llm_output"] = raw_output
+        return out
+
     exploration = state.get("exploration") or {}
     url_rule = state.get("url_rule") or {}
+    retry_feedback = state.get("retry_feedback") or {}
+    if exploration.get("source_type") in ("rss", "atom") and exploration.get("list_url"):
+        fetch_cfg = exploration.get("fetch") or {}
+        recipe_dict = {
+            "recipe_type": "dsl",
+            "entry_url": state["site_url"],
+            "actions": [
+                {
+                    "op": "fetch",
+                    "mode": "feed",
+                    "url": exploration.get("list_url"),
+                    "method": fetch_cfg.get("method", "GET"),
+                    **_fetch_transport_fields(fetch_cfg),
+                    "headers": fetch_cfg.get("headers", {}),
+                    "query": fetch_cfg.get("query", {}),
+                    "json_body": None,
+                    "as": "last_fetch",
+                },
+                {
+                    "op": "extract",
+                    "from": "feed.entries",
+                    "fields": {
+                        "title": "title",
+                        "url": "link",
+                        "published_at": ["published", "updated"],
+                        "summary": ["summary", "description"],
+                    },
+                    "into": "items",
+                    "merge": False,
+                },
+                {"op": "dedup_by", "field": "url"},
+            ],
+            "notes": [f"deterministic {exploration.get('source_type')} recipe"],
+        }
+        if (fetch_cfg.get("transport") or "httpx") == "scrapling":
+            recipe_dict["notes"].append("scrapling transport recipe preserved from explorer")
+        return finalize_recipe(recipe_dict)
+    if exploration.get("source_type") == "html":
+        selectors = exploration.get("html_selectors") or {}
+        item_selector = selectors.get("item_selector")
+        if item_selector:
+            fetch_cfg = exploration.get("fetch") or {}
+            title_selector = selectors.get("title_selector") or "self"
+            date_selector = selectors.get("date_selector")
+            actions = [
+                {
+                    "op": "fetch",
+                    "mode": "html",
+                    "url": exploration.get("list_url") or state["site_url"],
+                    "method": "GET",
+                    **_fetch_transport_fields(fetch_cfg),
+                    "headers": fetch_cfg.get("headers", {}),
+                    "query": fetch_cfg.get("query", {}),
+                    "json_body": None,
+                    "as": "last_fetch",
+                },
+                {
+                    "op": "extract",
+                    "from": f"selector:{item_selector}",
+                    "fields": {
+                        "title": title_selector if title_selector != "self" else "self",
+                        "url": "attr:href",
+                        **({"published_at": date_selector} if date_selector else {}),
+                    },
+                    "into": "items",
+                    "merge": False,
+                },
+            ]
+            pagination = exploration.get("pagination") or {}
+            next_path = pagination.get("next_path") if pagination.get("type") == "html_next" else None
+            next_template = _build_html_next_page_template(state["site_url"], next_path) if next_path else None
+            if next_template:
+                actions.extend([
+                    {"op": "set", "var": "page", "value": 2},
+                    {
+                        "op": "loop",
+                        "until": {"count_of": "items", "op": ">=", "value": 50},
+                        "max_iters": 8,
+                        "body": [
+                            {
+                                "op": "fetch",
+                                "mode": "html",
+                                "url": next_template,
+                                "method": "GET",
+                                **_fetch_transport_fields(fetch_cfg),
+                                "headers": fetch_cfg.get("headers", {}),
+                                "query": {},
+                                "json_body": None,
+                                "as": "last_fetch",
+                            },
+                            {
+                                "op": "extract",
+                                "from": f"selector:{item_selector}",
+                                "fields": {
+                                    "title": title_selector if title_selector != "self" else "self",
+                                    "url": "attr:href",
+                                    **({"published_at": date_selector} if date_selector else {}),
+                                },
+                                "into": "items",
+                                "merge": True,
+                            },
+                        ],
+                        "on_each": [{"op": "set", "var": "page", "expr": "{{page}} + 1"}],
+                    },
+                ])
+            actions.append({"op": "dedup_by", "field": "url"})
+            notes = ["deterministic html recipe"]
+            if next_template:
+                notes.append(f"deterministic html pagination via {next_template}")
+            recipe_dict = {
+                "recipe_type": "dsl",
+                "entry_url": state["site_url"],
+                "actions": actions,
+                "notes": notes,
+            }
+            return finalize_recipe(recipe_dict)
     if url_rule.get("mode") == "path_join" and url_rule.get("base_url") and url_rule.get("path_field"):
         fields = dict(exploration.get("fields") or {})
         path_field = url_rule["path_field"]
@@ -1501,13 +2251,27 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
         if pagination.get("type") == "page_param" and pagination.get("page_param"):
             page_param = pagination["page_param"]
             start = pagination.get("start", 1) or 1
+            loop_query = dict(fetch_cfg.get("query") or {})
+            if page_param in loop_query:
+                loop_query[page_param] = f"{{{{{page_param}}}}}"
             loop_json_body = dict(fetch_cfg.get("json_body") or {})
-            loop_json_body[page_param] = f"{{{{{page_param}}}}}"
+            if page_param in loop_json_body:
+                loop_json_body[page_param] = f"{{{{{page_param}}}}}"
+            if pagination.get("has_more_path"):
+                until_condition = {
+                    "path": pagination["has_more_path"],
+                    "op": "==",
+                    "value": False,
+                }
+                pagination_note = f"deterministic has_more_path loop via {pagination['has_more_path']}"
+            else:
+                until_condition = {"path": format_value, "op": "==", "value": []}
+                pagination_note = "deterministic empty-page loop fallback"
             actions = [
                 {"op": "set", "var": page_param, "value": start},
                 {
                     "op": "loop",
-                    "until": {"path": format_value, "op": "==", "value": []},
+                    "until": until_condition,
                     "max_iters": 10,
                     "body": [
                         {
@@ -1515,9 +2279,10 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
                             "mode": "json",
                             "url": exploration.get("list_url") or state["site_url"],
                             "method": fetch_cfg.get("method", "GET"),
+                            **_fetch_transport_fields(fetch_cfg),
                             "headers": fetch_cfg.get("headers", {}),
-                            "query": fetch_cfg.get("query", {}),
-                            "json_body": loop_json_body,
+                            "query": loop_query,
+                            "json_body": loop_json_body or None,
                             "as": "last_fetch",
                         },
                         {
@@ -1536,9 +2301,9 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
                 "recipe_type": "dsl",
                 "entry_url": state["site_url"],
                 "actions": actions,
-                "notes": ["deterministic path_join recipe", "deterministic page_param loop"],
+                "notes": ["deterministic path_join recipe", "deterministic page_param loop", pagination_note],
             }
-            return {"dsl_recipe": DslRecipe(**recipe_dict).model_dump(), "token_used": state.get("token_used", 0) + 1000}
+            return finalize_recipe(recipe_dict)
         recipe_dict = {
             "recipe_type": "dsl",
             "entry_url": state["site_url"],
@@ -1547,10 +2312,11 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
                     "op": "fetch",
                     "mode": "json",
                     "url": exploration.get("list_url") or state["site_url"],
-                    "method": (exploration.get("fetch") or {}).get("method", "GET"),
-                    "headers": (exploration.get("fetch") or {}).get("headers", {}),
-                    "query": (exploration.get("fetch") or {}).get("query", {}),
-                    "json_body": (exploration.get("fetch") or {}).get("json_body"),
+                    "method": fetch_cfg.get("method", "GET"),
+                    **_fetch_transport_fields(fetch_cfg),
+                    "headers": fetch_cfg.get("headers", {}),
+                    "query": fetch_cfg.get("query", {}),
+                    "json_body": fetch_cfg.get("json_body"),
                     "as": "last_fetch",
                 },
                 {
@@ -1564,30 +2330,87 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
             ],
             "notes": ["deterministic path_join recipe"],
         }
-        return {"dsl_recipe": DslRecipe(**recipe_dict).model_dump(), "token_used": state.get("token_used", 0) + 1000}
+        return finalize_recipe(recipe_dict)
     prompt = (DSL_WRITER_PROMPT
               .replace("{site_url}", state["site_url"])
               .replace("{url_rule}", json.dumps(url_rule, ensure_ascii=False))
-              .replace("{exploration}", json.dumps(exploration, ensure_ascii=False)))
-    if llm is None:
-        from app.llm.client import LlmClient
+              .replace("{exploration}", json.dumps(exploration, ensure_ascii=False))
+              .replace("{retry_feedback}", json.dumps(retry_feedback, ensure_ascii=False)))
+    worker_feedback = None
+    last_out: DiscoveryState | None = None
+    for attempt in range(1, WORKER_RETRY_LIMIT + 1):
+        attempt_prompt = _append_worker_retry_prompt(prompt, "上一轮写配方失败反馈", worker_feedback)
+        try:
+            if llm is None:
+                from app.llm.client import LlmClient
 
-        ensure_not_cancelled()
-        raw = LlmClient().complete(
-            prompt,
-            temperature=0.0,
-            response_format={"type": "json_object"},
+                ensure_not_cancelled()
+                raw = LlmClient().complete(
+                    attempt_prompt,
+                    temperature=0.0,
+                    response_format={"type": "json_object"},
+                    timeout=DISCOVERY_LLM_TIMEOUT_SECONDS,
+                )
+                recipe_dict = _parse_json_or_fallback(raw)
+            else:
+                structured = llm.with_structured_output(DslRecipe)
+                recipe = structured.invoke(attempt_prompt)
+                if isinstance(recipe, DslRecipe):
+                    recipe_dict = recipe.model_dump()
+                else:
+                    recipe_dict = recipe
+                raw = json.dumps(recipe_dict, ensure_ascii=False)
+        except Exception as exc:
+            last_out = {"dsl_recipe": None, "dsl_writer_llm_output": "", "audit_result": None}
+            worker_feedback = f"exception={exc}"
+            _append_worker_attempt_log(
+                state,
+                node_name="dsl_writer",
+                attempt=attempt,
+                status="failed",
+                detail=worker_feedback,
+            )
+            continue
+        out = finalize_recipe(recipe_dict, raw_output=raw)
+        actions = (out.get("dsl_recipe") or {}).get("actions") or []
+        if actions:
+            _append_worker_attempt_log(
+                state,
+                node_name="dsl_writer",
+                attempt=attempt,
+                status="success",
+                detail=f"actions={len(actions)} · has_loop={any(a.get('op') == 'loop' for a in actions)}",
+            )
+            return out
+        last_out = out
+        worker_feedback = (
+            f"actions={len(actions)} · notes={json.dumps(((out.get('dsl_recipe') or {}).get('notes') or [])[:5], ensure_ascii=False)} "
+            f"· raw_output_preview={_truncate_text(raw, 300)}"
         )
-        recipe_dict = DslRecipe(**_parse_json_or_fallback(raw)).model_dump()
-    else:
-        structured = llm.with_structured_output(DslRecipe)  # 测试 mock 路径保留
-        recipe = structured.invoke(prompt)
-        # with_structured_output 真实路径返回 DslRecipe 实例；部分后端/mock 返回 dict —— 统一转 dict
-        if isinstance(recipe, DslRecipe):
-            recipe_dict = recipe.model_dump()
-        else:
-            recipe_dict = DslRecipe(**recipe).model_dump()
-    return {"dsl_recipe": recipe_dict, "token_used": state.get("token_used", 0) + 1000}
+        _append_worker_attempt_log(
+            state,
+            node_name="dsl_writer",
+            attempt=attempt,
+            status="failed",
+            detail=worker_feedback,
+        )
+    failed = dict(last_out or {})
+    failed["verdict"] = "failed"
+    failed["error"] = "写配方连续失败 3 次，程序无法继续进行"
+    return failed
+
+
+def _build_html_next_page_template(site_url: str, next_path: str | None) -> str | None:
+    if not next_path:
+        return None
+    normalized = urljoin(site_url, next_path)
+    parsed = urlparse(normalized)
+    path = parsed.path
+    if not re.search(r"/page/\d+/?$", path):
+        return None
+    templated_path = re.sub(r"/page/\d+/?$", "/page/{{page}}/", path)
+    rebuilt = parsed._replace(path=templated_path, query="", fragment="")
+    return rebuilt.geturl()
 
 
 class AuditVerdict(BaseModel):
@@ -1599,6 +2422,57 @@ class AuditVerdict(BaseModel):
     value_assessment: str = ""            # 一句话价值评估
     issues: list[str] = Field(default_factory=list)  # 发现的问题
     suggested_fix: str | None = None      # 给 dsl_writer 的修改建议（不通过时）
+
+
+def _coerce_boolish(value: object) -> object:
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "yes", "1"}:
+            return True
+        if lowered in {"false", "no", "0"}:
+            return False
+    return value
+
+
+def _normalize_audit_verdict(parsed: dict) -> dict:
+    if not isinstance(parsed, dict):
+        return parsed
+
+    for key in ("passed", "is_real_content", "has_pagination", "not_blocked"):
+        parsed[key] = _coerce_boolish(parsed.get(key))
+
+    value_assessment = parsed.get("value_assessment")
+    if isinstance(value_assessment, list):
+        parsed["value_assessment"] = "\n".join(
+            str(item).strip() for item in value_assessment if str(item).strip()
+        )
+    elif value_assessment is not None and not isinstance(value_assessment, str):
+        parsed["value_assessment"] = str(value_assessment)
+
+    issues = parsed.get("issues")
+    if isinstance(issues, str):
+        parsed["issues"] = [issues] if issues.strip() else []
+    elif isinstance(issues, list):
+        parsed["issues"] = [
+            str(item).strip() for item in issues
+            if item is not None and str(item).strip()
+        ]
+    elif issues is None:
+        parsed["issues"] = []
+    else:
+        text = str(issues).strip()
+        parsed["issues"] = [text] if text else []
+
+    suggested_fix = parsed.get("suggested_fix")
+    if isinstance(suggested_fix, list):
+        parsed["suggested_fix"] = "\n".join(
+            str(item).strip() for item in suggested_fix if str(item).strip()
+        ) or None
+    elif suggested_fix is not None and not isinstance(suggested_fix, str):
+        text = str(suggested_fix).strip()
+        parsed["suggested_fix"] = text or None
+
+    return parsed
 
 
 _AUDIT_PROMPT = """# 角色
@@ -1644,11 +2518,31 @@ _AUDIT_PROMPT = """# 角色
 
 def _run_recipe_for_audit(recipe: DslRecipe) -> dict:
     """实跑配方拿真实产出（生产 auditor 用）；失败返回空产出 + error。"""
-    from app.discovery.interpreter import DslInterpreter
+    from app.discovery.interpreter import DslExecutionPartialError, DslInterpreter
     try:
-        return DslInterpreter().run(recipe)
+        return DslInterpreter().run(recipe, max_items=50)
+    except DslExecutionPartialError as e:
+        return {"items": e.items, "stats": e.stats, "error": str(e)}
     except Exception as e:
         return {"items": [], "stats": {"discovered_count": 0}, "error": str(e)}
+
+
+def _build_retry_feedback(*, recipe: DslRecipe, test_result: dict, llm_verdict: dict) -> dict:
+    errors = list(llm_verdict.get("issues") or [])
+    errors.extend(
+        note for note in (recipe.notes or [])
+        if isinstance(note, str) and note.startswith("sanitize warning:")
+    )
+    runtime_error = test_result.get("error")
+    if runtime_error:
+        errors.append(f"runtime error: {runtime_error}")
+    feedback = {
+        "issues": errors[:6],
+        "suggested_fix": llm_verdict.get("suggested_fix"),
+        "last_runtime_error": runtime_error,
+        "failed_recipe_summary": _recipe_summary(recipe),
+    }
+    return feedback
 
 
 def _recipe_summary(recipe: DslRecipe) -> dict:
@@ -1668,15 +2562,9 @@ def _recipe_summary(recipe: DslRecipe) -> dict:
     return {"has_loop": has_loop, "actions": ops}
 
 
-def _llm_audit_quality(llm, site_url: str, recipe: DslRecipe, items: list, errors: list) -> dict:
-    """调 LLM 评判实跑抓取结果的价值/全面性/反爬/翻页，返回 AuditVerdict dict。"""
-    sample = []
-    for it in items[:8]:
-        s = {"title": it.get("title"), "url": it.get("url")}
-        content = it.get("content") or it.get("summary") or ""
-        if content:
-            s["content_snippet"] = str(content)[:200]
-        sample.append(s)
+def _llm_audit_quality(llm, site_url: str, recipe: DslRecipe, items: list, errors: list) -> tuple[str, dict]:
+    """调 LLM 评判实跑抓取结果的价值/全面性/反爬/翻页，返回可见输出文本与 verdict dict。"""
+    sample = _audit_items_sample(items)
     prompt = _AUDIT_PROMPT.format(
         site_url=site_url,
         recipe_summary=json.dumps(_recipe_summary(recipe), ensure_ascii=False),
@@ -1693,13 +2581,28 @@ def _llm_audit_quality(llm, site_url: str, recipe: DslRecipe, items: list, error
             prompt,
             temperature=0.0,
             response_format={"type": "json_object"},
+            timeout=DISCOVERY_LLM_TIMEOUT_SECONDS,
         )
-        return AuditVerdict(**_parse_json_or_fallback(raw)).model_dump()
+        parsed = _normalize_audit_verdict(_parse_json_or_fallback(raw))
+        return raw, AuditVerdict(**parsed).model_dump()
     structured = llm.with_structured_output(AuditVerdict)
     verdict = structured.invoke(prompt)
     if isinstance(verdict, AuditVerdict):
-        return verdict.model_dump()
-    return AuditVerdict(**verdict).model_dump()
+        verdict_dict = verdict.model_dump()
+    else:
+        verdict_dict = AuditVerdict(**_normalize_audit_verdict(verdict)).model_dump()
+    return json.dumps(verdict_dict, ensure_ascii=False), verdict_dict
+
+
+def _audit_items_sample(items: list) -> list[dict]:
+    sample = []
+    for it in items[:8]:
+        s = {"title": it.get("title"), "url": it.get("url")}
+        content = it.get("content") or it.get("summary") or ""
+        if content:
+            s["content_snippet"] = str(content)[:200]
+        sample.append(s)
+    return sample
 
 
 def auditor(state: DiscoveryState, llm=None, test_fn=None) -> DiscoveryState:
@@ -1712,24 +2615,73 @@ def auditor(state: DiscoveryState, llm=None, test_fn=None) -> DiscoveryState:
     from app.discovery.dsl import DslRecipe, validate_semantics
     recipe = DslRecipe(**state["dsl_recipe"])
     errors = validate_semantics(recipe)  # 静态审：结构合理性
+    sanitize_warnings = list(state.get("dsl_sanitize_warnings") or [])
+    if not sanitize_warnings:
+        sanitize_warnings = [
+            note.removeprefix("sanitize warning: ").strip()
+            for note in (recipe.notes or [])
+            if isinstance(note, str) and note.startswith("sanitize warning:")
+        ]
+    errors = [*errors, *[f"dsl sanitize warning: {warning}" for warning in sanitize_warnings]]
     # 动态审：实跑配方拿真实产出（测试可注入 mock，生产真跑）
     test_result = test_fn(recipe) if test_fn is not None else _run_recipe_for_audit(recipe)
     if test_result.get("error"):
         errors = [*errors, f"runtime error: {test_result['error']}"]
     items = test_result.get("items", [])
     discovered_count = test_result.get("stats", {}).get("discovered_count", len(items))
+    audit_input = {
+        "recipe_summary": _recipe_summary(recipe),
+        "errors": errors,
+        "dsl_sanitize_warnings": sanitize_warnings,
+        "discovered_count": discovered_count,
+        "items_sample": _audit_items_sample(items),
+    }
+    if test_result.get("error"):
+        audit_input["runtime_error"] = test_result["error"]
     # LLM 审：看真实抓到的条目，判价值/全面性/反爬/翻页
-    llm_verdict = _llm_audit_quality(llm, state["site_url"], recipe, items, errors)
+    auditor_llm_output, llm_verdict = _llm_audit_quality(llm, state["site_url"], recipe, items, errors)
     # 通过 = 无静态错误 + 抓到至少 1 条 + LLM 判值得存
     passed = (not errors) and discovered_count >= 1 and llm_verdict.get("passed", False)
-    return {
+    current_cycle_attempt = int(state.get("dsl_cycle_attempt", 0) or 0)
+    if passed:
+        decision = "pass"
+    elif llm_verdict.get("suggested_fix") or discovered_count >= 1:
+        decision = "rewrite"
+    else:
+        decision = "reexplore"
+    next_cycle_attempt = 0 if passed else (current_cycle_attempt + 1 if decision == "rewrite" else 0)
+    if decision == "rewrite" and next_cycle_attempt >= 3:
+        decision = "reexplore"
+        next_cycle_attempt = 0
+    out = {
         "audit_result": {
             "passed": passed, "errors": errors, "test": test_result,
             "llm_verdict": llm_verdict,
-            "suggested_next": "dsl_writer" if not passed else None,
+            "dsl_sanitize_warnings": sanitize_warnings,
+            "decision": decision,
+            "suggested_next": "dsl_writer" if decision == "rewrite" else ("explorer" if decision == "reexplore" else None),
         },
-        "attempt": state.get("attempt", 0) + (0 if passed else 1),  # 不通过则 attempt+1
+        "audit_input": audit_input,
+        "auditor_llm_output": auditor_llm_output,
+        "attempt": state.get("attempt", 0) + (1 if decision == "reexplore" else 0),
+        "dsl_cycle_attempt": next_cycle_attempt,
     }
+    if not passed:
+        if decision == "reexplore":
+            out["exploration"] = {}
+            out["url_rule"] = None
+        else:
+            out["exploration"] = state.get("exploration") or {}
+            out["url_rule"] = state.get("url_rule")
+        out["dsl_recipe"] = None
+        out["retry_feedback"] = _build_retry_feedback(
+            recipe=recipe,
+            test_result=test_result,
+            llm_verdict=llm_verdict,
+        )
+    else:
+        out["retry_feedback"] = None
+    return out
 
 
 # --- Task 12: graph assembly + run entrypoint ---
@@ -1836,8 +2788,13 @@ def _step_summary(node_name: str, update: dict) -> dict:
     if node_name == "auditor":
         a = update.get("audit_result") or {}
         lv = a.get("llm_verdict") or {}
-        return {"passed": a.get("passed"), "issues": lv.get("issues"),
-                "attempt": update.get("attempt")}
+        return {
+            "passed": a.get("passed"),
+            "decision": a.get("decision"),
+            "issues": lv.get("issues"),
+            "attempt": update.get("attempt"),
+            "dsl_cycle_attempt": update.get("dsl_cycle_attempt"),
+        }
     return {}
 
 
@@ -1889,9 +2846,15 @@ def _step_log_detail(node_name: str, update: dict, state: DiscoveryState | None 
     if node_name == "auditor":
         a = update.get("audit_result") or {}
         passed = a.get("passed")
+        decision = a.get("decision") or "?"
         issues = a.get("llm_verdict", {}).get("issues") or []
         issues_text = "; ".join(str(i) for i in issues[:3]) or "无"
-        return f" · passed={passed} · attempt={update.get('attempt')} · issues={issues_text}"
+        cycle_attempt = update.get("dsl_cycle_attempt")
+        return (
+            f" · passed={passed} · decision={decision}"
+            f" · dsl_cycle_attempt={cycle_attempt if cycle_attempt is not None else '无'}"
+            f" · attempt={update.get('attempt')} · issues={issues_text}"
+        )
     return ""
 
 
@@ -1916,7 +2879,15 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
         db_sess = SessionLocal()
         try:
             config = {"configurable": {"thread_id": f"discovery-{run_id}"}}
-            initial = {"site_url": site_url, "attempt": 0, "token_used": 0, "force": force, "name": name}
+            initial = {
+                "site_url": site_url,
+                "attempt": 0,
+                "token_used": 0,
+                "force": force,
+                "name": name,
+                "run_id": run_id,
+                "log_source": source_label,
+            }
             node_trace: list = []
             current_state: DiscoveryState = dict(initial)
             append_run_log("任务", "Discovery 探查开始", source=source_label,
@@ -1951,6 +2922,13 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
                         )
                     if node_name == "dsl_writer":
                         _append_dsl_writer_logs(
+                            append_run_log=append_run_log,
+                            run_id=run_id,
+                            source_label=source_label,
+                            update=update or {},
+                        )
+                    if node_name == "auditor":
+                        _append_auditor_logs(
                             append_run_log=append_run_log,
                             run_id=run_id,
                             source_label=source_label,
@@ -2009,25 +2987,7 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
 
 
 def _append_explorer_generation_logs(*, append_run_log, run_id: int, source_label: str, update: dict) -> None:
-    """把 explorer 两阶段生成内容写入日志面板，便于前端排查。"""
-    raw = _truncate_text((update.get("explorer_agent_output") or "").strip(), 1800)
-    if raw:
-        append_run_log(
-            "探查",
-            f"explorer 原始输出 · {raw}",
-            source=source_label,
-            run_id=run_id,
-            step="explorer_raw",
-        )
-    synth = _format_log_json_text(update.get("explorer_synthesis_output"))
-    if synth:
-        append_run_log(
-            "探查",
-            f"explorer 结构化整理 · {synth}",
-            source=source_label,
-            run_id=run_id,
-            step="explorer_structured",
-        )
+    """记录 explorer 失败信息；不在日志面板中展开 LLM 原始输出。"""
     err = update.get("explorer_parse_error")
     if err:
         append_run_log(
@@ -2043,6 +3003,16 @@ def _append_explorer_generation_logs(*, append_run_log, run_id: int, source_labe
 def _append_dsl_writer_logs(*, append_run_log, run_id: int, source_label: str, update: dict) -> None:
     """把 dsl_writer 的完整 recipe 写入日志面板，便于直接排查配方内容。"""
     recipe = update.get("dsl_recipe")
+    warnings = update.get("dsl_sanitize_warnings") or []
+    if warnings:
+        append_run_log(
+            "写配方",
+            f"写配方告警 · {json.dumps(warnings, ensure_ascii=False)}",
+            source=source_label,
+            run_id=run_id,
+            step="dsl_writer_warning",
+            level="warning",
+        )
     if not recipe:
         return
     append_run_log(
@@ -2066,6 +3036,28 @@ def _append_validator_logs(*, append_run_log, run_id: int, source_label: str, up
         run_id=run_id,
         step="validator_rule",
     )
+
+
+def _append_auditor_logs(*, append_run_log, run_id: int, source_label: str, update: dict) -> None:
+    """把 auditor 简要结论写入日志。"""
+    audit_result = update.get("audit_result") or {}
+    decision = audit_result.get("decision")
+    if decision:
+        cycle_attempt = int(update.get("dsl_cycle_attempt", 0) or 0)
+        if decision == "rewrite":
+            msg = f"局部循环决策 · 继续写配方 · 第 {cycle_attempt} / 3 轮"
+        elif decision == "reexplore":
+            msg = "局部循环决策 · 返回探查 · 写配方局部循环已结束"
+        else:
+            msg = "局部循环决策 · 审计通过 · 准备存库"
+        append_run_log(
+            "审计",
+            msg,
+            source=source_label,
+            run_id=run_id,
+            step="auditor_decision",
+            level="warning" if decision != "pass" else "info",
+        )
 
 
 def run_discovery(site_url: str, force: bool = False, name: str | None = None) -> dict:
