@@ -36,7 +36,8 @@ export function useDiscoveryLogs(runId: number | null, enabled: boolean, include
     let stop = false;
     async function poll() {
       try {
-        const base = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+        const configuredBase = import.meta.env.VITE_API_BASE?.trim();
+        const base = configuredBase ? configuredBase.replace(/\/+$/, "") : "";
         const r = await fetch(`${base}/news-run/logs?after_id=${lastId.current}`, { headers: authHeaders() });
         if (!r.ok) return;
         const data = (await r.json()) as { logs: NewsRunLogEntry[] };

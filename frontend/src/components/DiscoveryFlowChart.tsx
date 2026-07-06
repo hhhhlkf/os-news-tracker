@@ -1,13 +1,24 @@
 // frontend/src/components/DiscoveryFlowChart.tsx
 import { useMemo, type CSSProperties } from "react";
-import { ReactFlow, Background, BackgroundVariant, Handle, MarkerType, Position, type Node, type Edge } from "@xyflow/react";
+import {
+  ReactFlow,
+  Background,
+  BackgroundVariant,
+  Handle,
+  MarkerType,
+  Position,
+  BaseEdge,
+  EdgeLabelRenderer,
+  type Node,
+  type Edge,
+  type EdgeProps,
+} from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
   FLOW_NODES,
   FLOW_EDGES,
   computeNodeStates,
   computeEdgeStates,
-  attemptCount,
   currentAttemptRound,
   type FlowNodeId,
   type NodeState,
@@ -96,6 +107,14 @@ function NodeBox({ data }: { data: { label: string; id: string; kind: "det" | "a
       <Handle id="bottom-out" type="source" position={Position.Bottom} style={handleStyle} />
       <Handle id="left-in" type="target" position={Position.Left} style={handleStyle} />
       <Handle id="left-out" type="source" position={Position.Left} style={handleStyle} />
+      <Handle id="left-upper-in" type="target" position={Position.Left} style={{ ...handleStyle, top: "28%" }} />
+      <Handle id="left-upper-out" type="source" position={Position.Left} style={{ ...handleStyle, top: "28%" }} />
+      <Handle id="left-lower-in" type="target" position={Position.Left} style={{ ...handleStyle, top: "72%" }} />
+      <Handle id="left-lower-out" type="source" position={Position.Left} style={{ ...handleStyle, top: "72%" }} />
+      <Handle id="right-upper-in" type="target" position={Position.Right} style={{ ...handleStyle, top: "28%" }} />
+      <Handle id="right-upper-out" type="source" position={Position.Right} style={{ ...handleStyle, top: "28%" }} />
+      <Handle id="right-lower-in" type="target" position={Position.Right} style={{ ...handleStyle, top: "72%" }} />
+      <Handle id="right-lower-out" type="source" position={Position.Right} style={{ ...handleStyle, top: "72%" }} />
       <div style={getNodeBoxVisualStyle({ state: data.state, isAgent })}>
         <div>{data.label}</div>
         <div style={{ fontSize: 9, fontFamily: "JetBrains Mono, monospace", opacity: 0.7 }}>{data.id}</div>
@@ -107,6 +126,72 @@ function NodeBox({ data }: { data: { label: string; id: string; kind: "det" | "a
 const nodeTypes = { flow: NodeBox };
 const handleStyle = { width: 8, height: 8, background: "transparent", border: "none", opacity: 0 } as const;
 
+function LocalLoopEdge(props: EdgeProps) {
+  const {
+    id,
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    markerEnd,
+    style,
+    label,
+    labelStyle,
+  } = props;
+  const isRetry = id.includes("auditor->dsl_writer");
+  const arcLift = isRetry ? -28 : 28;
+  const controlX = (sourceX + targetX) / 2;
+  const controlY = sourceY + arcLift;
+  const path = `M ${sourceX},${sourceY} C ${controlX},${controlY} ${controlX},${targetY + arcLift} ${targetX},${targetY}`;
+  const labelX = controlX;
+  const labelY = sourceY + (isRetry ? -40 : 40);
+
+  return (
+    <>
+      <BaseEdge path={path} markerEnd={markerEnd} style={style} />
+      {label ? (
+        <EdgeLabelRenderer>
+          <div
+            style={{
+              position: "absolute",
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+              pointerEvents: "none",
+              padding: "3px 8px",
+              borderRadius: 999,
+              background: "rgba(255,255,255,0.96)",
+              border: `1px solid ${style?.stroke ?? "#f59e0b"}`,
+              boxShadow: "0 4px 12px rgba(16, 24, 40, 0.08)",
+              whiteSpace: "nowrap",
+              ...(labelStyle ?? {}),
+            }}
+          >
+            {label}
+          </div>
+        </EdgeLabelRenderer>
+      ) : null}
+    </>
+  );
+}
+
+const edgeTypes = { loop: LocalLoopEdge };
+
+export function getEdgeLabel(edgeId: string, attempt: number): string | undefined {
+  if (edgeId === "auditor->save_method") return "通过";
+  if (edgeId === "auditor->dsl_writer") return `第 ${attempt} / 3 轮`;
+  if (edgeId === "auditor->explorer") return `不通过·回探查(${attempt}/3)`;
+  return undefined;
+}
+
+function currentDslCycleRound(run: DiscoveryRun): number {
+  for (let i = run.node_trace.length - 1; i >= 0; i--) {
+    const entry = run.node_trace[i];
+    if (entry.step !== "auditor") continue;
+    const round = entry.summary?.dsl_cycle_attempt;
+    if (typeof round === "number" && round > 0) return round;
+  }
+  return 1;
+}
+
 export function DiscoveryFlowChart({ run, onSelectNode, selectedNode }: {
   run: DiscoveryRun;
   onSelectNode?: (id: FlowNodeId) => void;
@@ -115,6 +200,7 @@ export function DiscoveryFlowChart({ run, onSelectNode, selectedNode }: {
   const states = useMemo(() => computeNodeStates(run), [run]);
   const edgeStates = useMemo(() => computeEdgeStates(run), [run]);
   const attempt = useMemo(() => currentAttemptRound(run), [run]);
+  const dslCycleRound = useMemo(() => currentDslCycleRound(run), [run]);
 
   const nodes: Node[] = useMemo(() => FLOW_NODES.map((n) => ({
     id: n.id, type: "flow", position: POS[n.id],
@@ -128,25 +214,25 @@ export function DiscoveryFlowChart({ run, onSelectNode, selectedNode }: {
       "capture_network->explorer": { sourceHandle: "bottom-out", targetHandle: "top-in" },
       "explorer->validator": { sourceHandle: "right-out", targetHandle: "left-in" },
       "validator->dsl_writer": { sourceHandle: "bottom-out", targetHandle: "top-in" },
-      "dsl_writer->auditor": { sourceHandle: "left-out", targetHandle: "right-in" },
+      "dsl_writer->auditor": { sourceHandle: "left-lower-out", targetHandle: "right-lower-in" },
+      "auditor->dsl_writer": { sourceHandle: "right-upper-out", targetHandle: "left-upper-in" },
       "auditor->save_method": { sourceHandle: "bottom-out", targetHandle: "left-in" },
       "auditor->explorer": { sourceHandle: "top-out", targetHandle: "bottom-in" },
     };
 
-    return FLOW_EDGES.map((edge, index) => {
+    return FLOW_EDGES.map((edge) => {
       const visual = EDGE_STYLE[edgeStates[edge.id]];
       const handle = handles[edge.id];
-      const isRetry = edge.id === "auditor->explorer";
-      const label = edge.id === "auditor->save_method"
-        ? "通过"
-        : isRetry ? `不通过·重试(${attempt}/3)` : undefined;
+      const isRetry = edge.kind === "retry";
+      const label = getEdgeLabel(edge.id, edge.id === "auditor->dsl_writer" ? dslCycleRound : attempt);
+      const isLocalLoop = edge.id === "dsl_writer->auditor" || edge.id === "auditor->dsl_writer";
       return {
-        id: `e${index + 1}`,
+        id: edge.id,
         source: edge.source,
         target: edge.target,
         sourceHandle: handle.sourceHandle,
         targetHandle: handle.targetHandle,
-        type: "step",
+        type: isLocalLoop ? "loop" : "step",
         animated: Boolean(visual.animated),
         label,
         labelStyle: label ? {
@@ -169,13 +255,13 @@ export function DiscoveryFlowChart({ run, onSelectNode, selectedNode }: {
         },
       } satisfies Edge;
     });
-  }, [attempt, edgeStates]);
+  }, [attempt, dslCycleRound, edgeStates]);
 
   return (
     <div style={{ position: "relative", height: 520 }}>
       <style>{NODE_PULSE_KEYFRAMES}</style>
       <ReactFlow
-        nodes={nodes} edges={edges} nodeTypes={nodeTypes}
+        nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
         onNodeClick={(_, n) => onSelectNode?.(n.id as FlowNodeId)}
         nodesDraggable={false} nodesConnectable={false} elementsSelectable
         panOnDrag zoomOnScroll={false} zoomOnPinch={false} panOnScroll={false}

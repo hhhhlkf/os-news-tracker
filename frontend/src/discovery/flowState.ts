@@ -31,6 +31,7 @@ export type FlowEdgeId =
   | "explorer->validator"
   | "validator->dsl_writer"
   | "dsl_writer->auditor"
+  | "auditor->dsl_writer"
   | "auditor->save_method"
   | "auditor->explorer";
 
@@ -49,6 +50,7 @@ export const FLOW_EDGES: FlowEdgeMeta[] = [
   { id: "explorer->validator", source: "explorer", target: "validator", kind: "forward" },
   { id: "validator->dsl_writer", source: "validator", target: "dsl_writer", kind: "forward" },
   { id: "dsl_writer->auditor", source: "dsl_writer", target: "auditor", kind: "forward" },
+  { id: "auditor->dsl_writer", source: "auditor", target: "dsl_writer", kind: "retry" },
   { id: "auditor->save_method", source: "auditor", target: "save_method", kind: "forward" },
   { id: "auditor->explorer", source: "auditor", target: "explorer", kind: "retry" },
 ];
@@ -122,6 +124,13 @@ function isRetryActive(run: DiscoveryRun): boolean {
   return run.status === "running" && latestFailedAuditor(run.node_trace) !== null;
 }
 
+function latestAuditorDecision(run: DiscoveryRun): string | null {
+  const entry = latestEntryForStep(run.node_trace, "auditor");
+  const decision = entry?.summary?.decision;
+  if (typeof decision === "string") return decision;
+  return entry?.summary?.passed === false ? "reexplore" : null;
+}
+
 function retrySegment(trace: DiscoveryNodeTraceEntry[]): DiscoveryNodeTraceEntry[] {
   const failed = latestFailedAuditor(trace);
   if (!failed) return [];
@@ -136,6 +145,8 @@ function inferredRunningStep(run: DiscoveryRun): FlowNodeId | null {
   const latestAuditorPassed = latestAuditor?.summary?.passed;
 
   if (last === "auditor") {
+    const latestAuditorDecision = latestAuditor?.summary?.decision;
+    if (latestAuditorPassed === false && latestAuditorDecision === "rewrite") return "dsl_writer";
     if (latestAuditorPassed === false) return "explorer";
     if (latestAuditorPassed === true) return "save_method";
   }
@@ -184,11 +195,18 @@ export function computeNodeStates(
   if (isRetryActive(run)) {
     const failed = latestFailedAuditor(run.node_trace);
     const retrySteps = new Set(retrySegment(run.node_trace).map((e) => e.step));
+    const latestDecision = latestAuditorDecision(run);
     states["fetch_homepage"] = done.has("fetch_homepage") ? "done" : "pending";
     states["capture_network"] = done.has("capture_network") ? "done" : "pending";
-    states["explorer"] = retrySteps.has("explorer") ? "done" : "pending";
-    states["validator"] = retrySteps.has("validator") ? "done" : "pending";
-    states["dsl_writer"] = retrySteps.has("dsl_writer") ? "done" : "pending";
+    states["explorer"] = latestDecision === "rewrite"
+      ? (done.has("explorer") ? "done" : "pending")
+      : (retrySteps.has("explorer") ? "done" : "pending");
+    states["validator"] = latestDecision === "rewrite"
+      ? (done.has("validator") ? "done" : "pending")
+      : (retrySteps.has("validator") ? "done" : "pending");
+    states["dsl_writer"] = latestDecision === "rewrite"
+      ? (done.has("dsl_writer") ? "done" : "pending")
+      : (retrySteps.has("dsl_writer") ? "done" : "pending");
     states["auditor"] = "pending";
     states["save_method"] = retrySteps.has("save_method") ? "done" : "pending";
 
@@ -223,13 +241,15 @@ export function computeEdgeStates(run: DiscoveryRun): Record<FlowEdgeId, EdgeSta
   if (isRetryActive(run)) {
     const fullTrace = run.node_trace;
     const retryTrace = retrySegment(run.node_trace);
+    const latestDecision = latestAuditorDecision(run);
     states["fetch_homepage->capture_network"] = hasTraversedEdge(fullTrace, "fetch_homepage", "capture_network") ? "done" : "pending";
     states["capture_network->explorer"] = hasTraversedEdge(fullTrace, "capture_network", "explorer") ? "done" : "pending";
     states["explorer->validator"] = hasTraversedEdge(retryTrace, "explorer", "validator") ? "done" : "pending";
     states["validator->dsl_writer"] = hasTraversedEdge(retryTrace, "validator", "dsl_writer") ? "done" : "pending";
     states["dsl_writer->auditor"] = hasTraversedEdge(retryTrace, "dsl_writer", "auditor") ? "done" : "pending";
     states["auditor->save_method"] = hasTraversedEdge(retryTrace, "auditor", "save_method") ? "done" : "pending";
-    states["auditor->explorer"] = "retrying";
+    states["auditor->dsl_writer"] = latestDecision === "rewrite" ? "retrying" : "pending";
+    states["auditor->explorer"] = latestDecision === "reexplore" ? "retrying" : "pending";
 
     const running = inferredRunningStep(run);
     if (running && running !== "explorer") {
@@ -255,8 +275,13 @@ export function computeEdgeStates(run: DiscoveryRun): Record<FlowEdgeId, EdgeSta
 
   const latestAuditor = latestEntryForStep(run.node_trace, "auditor");
   const latestAuditorPassed = latestAuditor?.summary?.passed;
-  if (running === "explorer" && latestAuditorPassed === false) {
+  const latestDecision = latestAuditorDecision(run);
+  if (running === "explorer" && latestAuditorPassed === false && latestDecision === "reexplore") {
     states["auditor->explorer"] = "retrying";
+    return states;
+  }
+  if (running === "dsl_writer" && latestAuditorPassed === false && latestDecision === "rewrite") {
+    states["auditor->dsl_writer"] = "retrying";
     return states;
   }
 

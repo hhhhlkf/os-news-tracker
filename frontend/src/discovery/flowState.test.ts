@@ -71,6 +71,10 @@ describe("computeNodeStates", () => {
     const t = trace(["fetch_homepage", "capture_network", "explorer", "validator",
       "dsl_writer", "auditor", "dsl_writer"]);
     const s = computeNodeStates(baseRun({ node_trace: t, current_step: "dsl_writer" }));
+    expect(s["fetch_homepage"]).toBe("done");
+    expect(s["capture_network"]).toBe("done");
+    expect(s["explorer"]).toBe("done");
+    expect(s["validator"]).toBe("done");
     expect(s["auditor"]).toBe("done");
     expect(s["dsl_writer"]).toBe("running");
   });
@@ -212,5 +216,44 @@ describe("computeEdgeStates", () => {
     expect(s["auditor->explorer"]).toBe("retrying");
     expect(s["explorer->validator"]).toBe("pending");
     expect(s["validator->dsl_writer"]).toBe("pending");
+  });
+
+  it("局部重写时 auditor -> dsl_writer 回环边变 retrying", () => {
+    const s = computeEdgeStates(baseRun({
+      node_trace: [
+        step("fetch_homepage", undefined, "2026-07-02T00:00:00Z"),
+        step("capture_network", undefined, "2026-07-02T00:00:01Z"),
+        step("explorer", undefined, "2026-07-02T00:00:02Z"),
+        step("validator", undefined, "2026-07-02T00:00:03Z"),
+        step("dsl_writer", undefined, "2026-07-02T00:00:04Z"),
+        step("auditor", { passed: false, decision: "rewrite", dsl_cycle_attempt: 1 }, "2026-07-02T00:00:05Z"),
+      ],
+      current_step: "auditor",
+    }));
+    expect(s["auditor->dsl_writer"]).toBe("retrying");
+    expect(s["auditor->explorer"]).toBe("pending");
+  });
+});
+
+describe("rewrite retry visuals", () => {
+  it("auditor 判定 rewrite 后，上游步骤保持 done，写配方进入 running", () => {
+    const s = computeNodeStates(baseRun({
+      node_trace: [
+        step("fetch_homepage", undefined, "2026-07-02T00:00:00Z"),
+        step("capture_network", undefined, "2026-07-02T00:00:01Z"),
+        step("explorer", undefined, "2026-07-02T00:00:02Z"),
+        step("validator", undefined, "2026-07-02T00:00:03Z"),
+        step("dsl_writer", undefined, "2026-07-02T00:00:04Z"),
+        step("auditor", { passed: false, decision: "rewrite", dsl_cycle_attempt: 1 }, "2026-07-02T00:00:05Z"),
+      ],
+      current_step: "auditor",
+    }), Date.parse("2026-07-02T00:00:05.500Z"));
+
+    expect(s["fetch_homepage"]).toBe("done");
+    expect(s["capture_network"]).toBe("done");
+    expect(s["explorer"]).toBe("done");
+    expect(s["validator"]).toBe("done");
+    expect(s["dsl_writer"]).toBe("running");
+    expect(s["auditor"]).toBe("warning");
   });
 });

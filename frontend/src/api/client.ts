@@ -29,7 +29,8 @@ import type {
 } from "../types";
 import { authHeaders } from "../auth";
 
-const BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+const configuredBase = import.meta.env.VITE_API_BASE?.trim();
+const BASE = configuredBase ? configuredBase.replace(/\/+$/, "") : "";
 const CRAWL_BASE = `${BASE}/crawl-sources`;
 const LEGACY_CRAWL_BASE = `${BASE}/sources/agent`;
 const DISCOVERY_BASE = `${BASE}/discovery`;

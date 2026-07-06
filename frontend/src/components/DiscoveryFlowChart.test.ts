@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getNodeBoxVisualStyle } from "./DiscoveryFlowChart";
+import { getNodeBoxVisualStyle, getEdgeLabel } from "./DiscoveryFlowChart";
 
 describe("getNodeBoxVisualStyle", () => {
   it("gives running nodes a pulse animation", () => {
@@ -30,5 +30,9 @@ describe("getNodeBoxVisualStyle", () => {
     expect(style.animation).toBeUndefined();
     expect(style.borderColor).toBe("#f59e0b");
     expect(style.background).toBe("#fffaeb");
+  });
+
+  it("labels local rewrite loop with cycle round", () => {
+    expect(getEdgeLabel("auditor->dsl_writer", 2)).toBe("第 2 / 3 轮");
   });
 });
