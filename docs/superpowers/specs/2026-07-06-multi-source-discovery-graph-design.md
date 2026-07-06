@@ -2,7 +2,7 @@
 
 **日期：** 2026-07-06
 **状态：** 待用户评审
-**项目：** `os-news-tracker` — Site Discovery Graph 扩展为普通网站、公众号、司内 KM/iWiki 三分支
+**项目：** `os-news-tracker` — Site Discovery Graph 扩展为普通网站、微信公众号、司内 KM/iWiki 三分支
 
 ---
 
@@ -12,100 +12,159 @@
 
 现在需要把“发现爬取方法”的入口扩展成三类来源：
 
-1. 普通网址或订阅链接：沿用现有网站探查流程。
-2. 微信公众号链接：进入公众号爬取分支，生成公众号抓取方法。
-3. 公司内部知识来源：输入关键词/作者等文本并带 `[KM]` 或 `[iWiki]` 标记时，进入司内 MCP 检索分支，生成 MCP 工具组合形成的抓取方法。
+1. 普通网站或订阅链接：继续沿用现有网站探查流程。
+2. 微信公众号：支持公众号名称/ID、公众号历史页 URL，并生成可保存、可审计、可运行的公众号抓取方法。
+3. 公司内部知识来源：输入关键词、作者等文本并带 `[KM]` 或 `[iWiki]` 标记时，路由到司内 MCP 分支。本设计只定义接口契约，完整实现另行设计。
 
-核心目标不是立即把所有分支细节写满，而是先把完整 graph 框架搭出来，再逐个补充分支能力。
-
----
-
-## 2. 设计原则
-
-### 2.1 保持旧逻辑稳定
-
-- 不直接重写现有 `dsl_writer()` 和 `auditor()`。
-- 新增 `multi_dsl_writer()` 和 `multi_auditor()` 作为多来源聚合别名。
-- 普通网站分支在 `multi_dsl_writer()`/`multi_auditor()` 内部继续委托旧 `dsl_writer()`/`auditor()`。
-- 公众号和司内分支使用新的 branch writer/auditor，但遵循旧 writer/auditor 的思想：先生成可保存的动作配方，再由审计节点真实执行或真实调用工具验证。
-
-### 2.2 路由先确定，能力后填充
-
-第一阶段只搭整体框架：
-
-- 输入归一化。
-- source router agent 识别来源类型。
-- 三个 branch explorer 产出统一 branch artifact。
-- `multi_dsl_writer` 汇聚生成 DSL。
-- `multi_auditor` 汇聚审计。
-- save_method 复用或薄封装。
-
-第二阶段开始逐个补充分支真实能力。
-
-### 2.3 Prompt-first，不先写特殊硬规则
-
-当某类特殊链接或 DSL 失败时，优先判断对应 prompt 是否没有讲清楚限制、字段边界、输出契约或工具能力。只有确认是结构性缺陷，且无法通过 prompt 稳定约束时，才写确定性硬规则代码。
-
-### 2.4 测试约束
-
-- 不为“骨架”写只检查格式的测试。
-- 一个子流程功能完整搭建后，再写一个端到端真实功能测试。
-- 测试应从 API 或 graph 入口直接走完整子流程，真实调用 LLM/工具/MCP/抓取能力；不允许 fake、仿真、只 mock 中间判断。
-- 测试可以通过环境变量显式开启，避免默认 CI 误跑外部网络或司内 MCP。
+本设计采用方案 B：新增独立 multi graph 与 `multi_dsl`，旧网站分支委托旧流程，不重写现有 `dsl_writer()` / `auditor()`。
 
 ---
 
-## 3. 输入与路由
+## 2. 范围与非目标
 
-### 3.1 新入口请求
+### 2.1 本次范围
 
-现有 `POST /discovery/run` 只接受 `url: HttpUrl`。多来源入口需要支持文本输入：
+- 新增多来源入口和 source router。
+- 新增 multi graph：`normalize_input -> source_router -> branch explorer -> multi_dsl_writer -> multi_auditor -> save_method`。
+- 普通网站分支作为旧流程的委托分支，不改内部逻辑。
+- 公众号分支作为首个完整落地分支：
+  - 支持公众号名称/ID。
+  - 支持公众号历史页 URL。
+  - 支持关键词搜索公众号文章。
+  - 参考 `wechatarticles` 的公众号历史文章能力，并拆成系统内部工具。
+  - 参考 `weixin_search_mcp` 的搜狗微信搜索能力，并拆成系统内部工具。
+  - 支持默认认证 profile：`wechat_mp_default`。
+- 新增 `multi_dsl` schema 和运行命 dispatch。
+- 司内 KM/iWiki 分支只定义路由、artifact、`mcp_call` DSL 契约。
+
+### 2.2 非目标
+
+- 不修改 `backend/app/agent/` 和 `backend/app/fetchers/agent_crawl.py`。
+- 不直接重写旧 `dsl_writer()` / `auditor()`。
+- 不把第三方微信公众号项目作为黑盒依赖直接塞进 graph。
+- 不在 DSL 中保存 cookie、token、header 等敏感认证信息。
+- 不在本 spec 完整实现 KM/iWiki MCP 分支。
+- 不为骨架写只检查格式的测试。
+
+---
+
+## 3. 设计原则
+
+### 3.1 旧逻辑稳定优先
+
+- 旧 `build_graph()`、旧 `/discovery/run`、旧 `DslRecipe(recipe_type="dsl")` 保持可用。
+- 新增 `multi_dsl_writer()` 和 `multi_auditor()` 作为聚合节点。
+- `branch_kind=website` 时，`multi_dsl_writer()` 委托旧 `dsl_writer()`，`multi_auditor()` 委托旧 `auditor()`。
+
+### 3.2 先生成方法，再审计执行
+
+三类来源都遵循同一思想：
+
+1. agent/tool 先探查可行路线。
+2. writer 将路线写成可保存 DSL。
+3. auditor 真实执行 DSL 或真实调用工具验证。
+4. 只有 auditor 通过或进入明确 pending 状态，才保存为方法。
+
+### 3.3 Prompt-first，不先写特殊硬规则
+
+特殊链接或 DSL 失败时，优先检查 prompt 是否没有讲清楚限制、字段边界、输出契约或工具能力。只有确认是结构性缺陷，且无法通过 prompt 稳定约束时，才加入确定性硬规则代码。
+
+### 3.4 测试必须真实走通
+
+一个子流程功能完整搭建后再写测试。测试必须从 API 或 graph 入口直接跑完整子流程，真实调用 LLM/工具/抓取能力；不写 fake、不写仿真、不写只检查格式的测试。需要外部网络或认证的测试用环境变量显式开启。
+
+---
+
+## 4. 输入与路由
+
+### 4.1 API 输入
+
+旧入口保留：
+
+```text
+POST /discovery/run
+```
+
+新增多来源入口：
+
+```text
+POST /discovery/multi-run
+```
+
+请求示例：
 
 ```json
 {
-  "input": "Linux 内核 热补丁 [KM]",
+  "input": "腾讯技术工程",
   "force": false,
-  "name": "KM Linux hotpatch",
+  "name": "腾讯技术工程",
   "hints": {
-    "author": "optional",
-    "time_range": "optional"
+    "source_kind": "wechat",
+    "limit": 20,
+    "fetch_content": false
   }
 }
 ```
 
-建议新增 `POST /discovery/multi-run`，先不破坏旧 `/discovery/run`。
+`hints.source_kind` 可选。没有 hint 时由 `source_router` 判断；用户明确指定 `wechat` 时，router 只做校验，不强行改成 website。
 
-### 3.2 路由结果
+### 4.2 路由结果
 
-`source_router` 产出：
+`source_router` 输出结构化结果：
 
 ```json
 {
   "kind": "website | wechat | internal_mcp | unsupported",
   "confidence": 0.0,
   "normalized_input": "...",
+  "input_type": "url | feed | wechat_account | wechat_history_url | keyword | internal_query",
   "markers": ["KM"],
   "reason": "...",
-  "suggested_branch": "website_explorer | wechat_explorer | internal_mcp_explorer"
+  "suggested_branch": "website | wechat | internal_mcp"
 }
 ```
 
-### 3.3 路由规则
+### 4.3 路由规则
 
-优先使用确定性预判，LLM 只处理模糊输入：
+优先确定性判断，模糊输入再交给 LLM：
 
 - 包含 `[KM]` 或 `[iWiki]`：`internal_mcp`。
-- URL host 为 `mp.weixin.qq.com` 或明确微信公众号文章/主页链接：`wechat`。
-- 其他 `http://` / `https://` / RSS feed URL：`website`。
-- 纯关键词且无 `[KM]`/`[iWiki]`：先标记 `unsupported` 或要求用户选择来源，不默认走外网搜索。
+- 明确 `mp.weixin.qq.com` 历史页 URL 或公众号相关 URL：`wechat`。
+- 用户通过 `hints.source_kind=wechat` 指定：`wechat`。
+- 普通 `http://` / `https://` / RSS feed URL：`website`。
+- 纯关键词且无 hint、无 `[KM]`/`[iWiki]`：默认 `unsupported`，不自动走外网搜索。
 
 ---
 
-## 4. Graph 结构
+## 5. Graph 架构
 
-### 4.1 MultiDiscoveryState
+### 5.1 新增 agent/节点
 
-在现有 `DiscoveryState` 旁新增 `MultiDiscoveryState`，不要把非网站字段硬塞进 `homepage/network_captures/url_rule`。
+新增节点放在 `backend/app/discovery/` 体系内，不放进 `backend/app/agent/`：
+
+```text
+source_router
+wechat_explorer
+internal_mcp_explorer
+multi_dsl_writer
+multi_auditor
+```
+
+旧网站分支继续使用：
+
+```text
+fetch_homepage
+capture_network
+explorer
+validator
+dsl_writer
+auditor
+save_method
+```
+
+### 5.2 MultiDiscoveryState
+
+新增 `MultiDiscoveryState`，不要把非网站字段硬塞进 `homepage/network_captures/url_rule`。
 
 ```python
 class MultiDiscoveryState(DiscoveryState, total=False):
@@ -119,69 +178,180 @@ class MultiDiscoveryState(DiscoveryState, total=False):
     multi_audit_result: dict | None
 ```
 
-普通网站分支可以继续写入旧字段，公众号/司内分支主要写入 `branch_artifact`。
+普通网站分支可以继续写入旧字段；公众号和司内分支主要写入 `branch_artifact`。
 
-### 4.2 图草图
+### 5.3 图流转
 
 ```text
 START
   -> normalize_input
   -> source_router
   -> branch_supervisor
-      -> website_preflight -> fetch_homepage -> capture_network -> explorer -> validator
-      -> wechat_explorer
-      -> internal_mcp_explorer
+      -> website branch:
+           fetch_homepage -> capture_network -> explorer -> validator
+      -> wechat branch:
+           wechat_explorer
+      -> internal_mcp branch:
+           internal_mcp_explorer
   -> multi_dsl_writer
   -> multi_auditor
       -> pass -> save_method -> END
+      -> pending_auth -> save_method -> END
+      -> retry_later -> END
       -> rewrite -> multi_dsl_writer
       -> reexplore -> selected branch explorer
       -> failed -> END
 ```
 
-### 4.3 分支职责
+---
 
-**website branch**
+## 6. 公众号分支设计
 
-- 复用现有 `fetch_homepage`、`capture_network`、`explorer`、`validator`。
-- `multi_dsl_writer` 委托 `dsl_writer`。
-- `multi_auditor` 委托 `auditor`。
+### 6.1 支持的输入
 
-**wechat branch**
+公众号分支支持三类输入：
 
-- 识别文章 URL、公众号主页 URL、可能的文章列表入口。
-- 探查可用抓取方式：页面抓取、历史文章接口、搜索入口、必要登录态说明。
-- 产出 `branch_artifact`，描述可执行动作和限制。
+1. 公众号名称/ID，例如 `腾讯技术工程`。
+2. 公众号历史页 URL。
+3. 关键词搜索公众号文章。
 
-**internal_mcp branch**
+单篇公众号文章 URL 不是首个可交付版本主路径，可以后续作为辅助能力加入。
 
-- 识别 `[KM]` / `[iWiki]` 标记并剥离查询文本。
-- 调用 MCP 工具发现可用能力，形成检索路线。
-- 产出 `branch_artifact`：MCP server/tool 名称、参数模板、分页/时间范围、字段映射。
+### 6.2 工具拆解
+
+参考 `wechatarticles` 和 `weixin_search_mcp`，但拆成系统内部工具，位置建议：
+
+```text
+backend/app/discovery/wechat_tools.py
+```
+
+工具能力：
+
+```text
+wechat_search_articles(query, limit)
+```
+
+参考 `weixin_search_mcp`，通过搜狗微信搜索获取文章候选。该工具适合关键词搜索，不保证某公众号完整历史，不依赖 `auth_ref`。
+
+```text
+wechat_resolve_account(nickname_or_account_id, auth_ref)
+```
+
+参考 `wechatarticles` 类能力，尝试将公众号名称/ID 解析为 `fakeid`、`__biz`、标准 nickname。需要默认认证 profile。
+
+```text
+wechat_fetch_account_history(nickname, account_id, fakeid, biz, limit, fetch_content, auth_ref)
+```
+
+核心历史抓取工具。DSL 存 `limit`；解释器内部转换为 `begin/count` 分页，直到达到 `limit` 或无更多文章。运行时优先用 `fakeid/__biz`，失效后再用原始 nickname/account_id 重新解析。
+
+```text
+wechat_probe_history_url(history_url, auth_ref)
+```
+
+处理用户直接提供历史页 URL 的情况，判断公开可访问、需要登录、验证码、频控或不支持。
+
+```text
+wechat_fetch_article_content(url, auth_ref=None)
+```
+
+当 `fetch_content=true` 时逐篇抓正文。默认 `false`，避免首个可交付版本过慢或触发频控。
+
+### 6.3 认证 profile
+
+首个可交付版本只支持一个默认 profile：
+
+```text
+wechat_mp_default
+```
+
+真实敏感信息来自后端 env/config，例如：
+
+```text
+WECHAT_MP_COOKIE
+WECHAT_MP_TOKEN
+```
+
+DSL 只保存引用：
+
+```json
+"auth_ref": "wechat_mp_default"
+```
+
+不在 DSL 或 node trace 中保存 cookie/token/header。配置缺失或失效时，工具返回 `pending_auth` 或 `auth_invalid`。
+
+### 6.4 公众号 branch artifact
+
+`wechat_explorer` 输出：
+
+```json
+{
+  "source_kind": "wechat",
+  "input_type": "account | history_url | keyword",
+  "nickname": "腾讯技术工程",
+  "account_id": null,
+  "fakeid": "...",
+  "__biz": "...",
+  "history_url": null,
+  "auth_ref": "wechat_mp_default",
+  "limit": 20,
+  "fetch_content": false,
+  "sample_items": [],
+  "status": "ok | pending_auth | auth_invalid | captcha_required | rate_limited | needs_resolver | unsupported | empty",
+  "notes": []
+}
+```
 
 ---
 
-## 5. Multi DSL 设计
+## 7. Multi DSL 设计
 
-### 5.1 不破坏旧 DSL
+### 7.1 旧 DSL 不变
 
-旧 `DslRecipe(recipe_type="dsl")` 继续只描述网页/HTTP/Playwright 动作。
+旧配方继续使用：
 
-新增多来源配方：
+```json
+{
+  "recipe_type": "dsl",
+  "entry_url": "...",
+  "actions": []
+}
+```
+
+新配方使用：
 
 ```json
 {
   "recipe_type": "multi_dsl",
-  "source_kind": "internal_mcp",
-  "entry": "Linux 内核 热补丁 [KM]",
+  "source_kind": "wechat",
+  "entry": "腾讯技术工程",
+  "auth_ref": "wechat_mp_default",
+  "requires_auth": true,
+  "actions": []
+}
+```
+
+`multi_dsl` 可以复用/继承旧 DSL 的 `extract`、`dedup_by`、变量渲染、语义校验思路，但新增公众号和 MCP 原语。旧 `dsl.py` 和 `interpreter.py` 尽量不动，新 schema 和解释器放在 `multi_dsl.py` / `multi_interpreter.py`。
+
+### 7.2 公众号配方示例
+
+```json
+{
+  "recipe_type": "multi_dsl",
+  "source_kind": "wechat",
+  "entry": "腾讯技术工程",
+  "auth_ref": "wechat_mp_default",
+  "requires_auth": true,
   "actions": [
     {
-      "op": "mcp_call",
-      "server": "km",
-      "tool": "search_articles",
-      "args": {
-        "query": "Linux 内核 热补丁"
-      },
+      "op": "wechat_fetch_account_history",
+      "nickname": "腾讯技术工程",
+      "account_id": null,
+      "fakeid": "...",
+      "__biz": "...",
+      "limit": 20,
+      "fetch_content": false,
+      "auth_ref": "wechat_mp_default",
       "as": "last_fetch"
     },
     {
@@ -206,72 +376,164 @@ START
 }
 ```
 
-### 5.2 新原语建议
+### 7.3 公众号原语
 
-- `mcp_list_tools`：列出 MCP server 工具能力，主要用于发现阶段，不一定存入最终配方。
-- `mcp_call`：运行命执行 MCP 工具。
-- `wechat_fetch_article`：抓取单篇公众号文章。
-- `wechat_search`：按公众号/关键词检索文章。
-- `normalize_items`：将分支返回统一成新闻 item 字段。
+- `wechat_search_articles`
+- `wechat_resolve_account`
+- `wechat_fetch_account_history`
+- `wechat_probe_history_url`
+- `wechat_fetch_article_content`
 
-这些原语应放在新的 `multi_dsl.py` / `multi_interpreter.py`，旧 `dsl.py` 和 `interpreter.py` 尽量不动。
+### 7.4 MCP 原语契约
 
----
-
-## 6. Auditor 设计
-
-`multi_auditor` 按 `recipe_type/source_kind` 分派：
-
-- `recipe_type == "dsl"`：调用旧 `auditor`。
-- `source_kind == "internal_mcp"`：真实执行 MCP 调用，检查返回 items 是否有 title/url/content 或 summary。
-- `source_kind == "wechat"`：真实执行公众号抓取动作，检查可用 item 数和字段质量。
-
-审计结果仍保持旧思想：
+司内 KM/iWiki 分支在本设计中只定义契约：
 
 ```json
 {
-  "passed": true,
-  "decision": "pass | rewrite | reexplore | fail",
-  "errors": [],
-  "test": {
-    "items": [],
-    "stats": {}
+  "op": "mcp_call",
+  "server": "km | iwiki",
+  "tool": "search_articles",
+  "args": {
+    "query": "...",
+    "author": null
   },
-  "llm_verdict": {}
+  "as": "last_fetch"
 }
 ```
 
+完整 MCP 工具发现、鉴权和审计在后续 spec 中展开。
+
 ---
 
-## 7. API 与存储
+## 8. Multi Auditor 设计
 
-### 7.1 API
+`multi_auditor` 按 `recipe_type/source_kind` 分派：
+
+- `recipe_type == "dsl"`：委托旧 `auditor()`。
+- `source_kind == "wechat"`：真实执行 `MultiDslInterpreter` 和公众号工具。
+- `source_kind == "internal_mcp"`：按接口契约返回 `needs_implementation` 或 pending 状态，后续 spec 完整实现。
+
+### 8.1 公众号状态语义
+
+公众号工具统一返回结构化状态：
+
+- `ok`
+- `pending_auth`
+- `auth_invalid`
+- `captcha_required`
+- `rate_limited`
+- `needs_resolver`
+- `unsupported`
+- `empty`
+
+### 8.2 公众号审计判定
+
+`ok` 且返回文章数量达到动态阈值时，通过：
+
+```text
+required_count = min(5, max(1, floor(limit * 0.25)))
+```
+
+字段要求：
+
+- 必须有 `title`。
+- 必须有 `url`。
+- `published_at` 尽量要求；如果底层工具明确不能返回，auditor 降级但记录 warning。
+- `content` 只在 `fetch_content=true` 时要求。
+
+其他状态：
+
+- `pending_auth`：保存方法，状态不可运行，等待默认 profile 配置或恢复。
+- `auth_invalid`：认证失效，方法不可运行。
+- `captcha_required` / `rate_limited`：不重写 DSL，返回 `retry_later`。
+- `needs_resolver`：回 `wechat_explorer` 或保存 pending resolver。
+- 字段质量不足：回 `multi_dsl_writer` rewrite。
+
+---
+
+## 9. API 与存储
+
+### 9.1 API
 
 新增：
 
-- `POST /discovery/multi-run`
-- `POST /discovery/methods/{id}/multi-fetch`
+```text
+POST /discovery/multi-run
+```
 
 保留：
 
-- `POST /discovery/run`
-- `POST /discovery/methods/{id}/fetch`
+```text
+POST /discovery/run
+POST /discovery/methods/{id}/fetch
+```
 
-### 7.2 存储
+方法运行入口建议不分裂：`/discovery/methods/{id}/fetch` 内部按 `recipe_type` dispatch。
 
-`crawl_methods.dsl_recipe` 是 JSON，可保存 `multi_dsl`。但运行命需要按 `recipe_type` dispatch：
+```text
+recipe_type=dsl       -> DslInterpreter
+recipe_type=multi_dsl -> MultiDslInterpreter
+```
 
-- `dsl` -> `DslInterpreter`
-- `multi_dsl` -> `MultiDslInterpreter`
+### 9.2 存储
 
-`signature` 应包含 source_kind，避免同一文本/域名下不同来源冲突。
+`crawl_methods.dsl_recipe` 是 JSON，可保存 `multi_dsl`。
+
+方法状态需要表达更细：
+
+- `active`：auditor passed，可运行。
+- `pending_auth`：DSL 已生成，但需要默认认证 profile 配置或认证恢复。
+- `auth_invalid`
+- `retry_later`
+- `failed`
+- `disabled`
+
+`signature` 建议包含：
+
+```text
+source_kind + normalized_input + auth_ref + fetch_content + limit
+```
+
+避免公众号名称、普通网站域名、不同抓取参数之间冲突。
 
 ---
 
-## 8. 风险
+## 10. 真实测试边界
 
-1. 司内 MCP 的真实工具名和权限未知：先设计抽象接口，等 MCP 可用后绑定具体 server/tool。
-2. 公众号抓取可能受登录态、频控、反爬影响：writer 必须把限制写进 notes，auditor 必须真实执行验证。
-3. 旧前端只理解 URL：multi-run 初期可只提供后端 API，前端后续再接。
-4. 旧 `DiscoverRequest.url: HttpUrl` 不适合关键词：必须新增接口，避免破坏旧契约。
+不为 multi graph 骨架写只检查格式的测试。
+
+公众号分支完整落地后，写 live 测试：
+
+```text
+POST /discovery/multi-run
+input = 一个真实公众号名称或历史页 URL
+hints.source_kind = wechat
+hints.limit = 5
+```
+
+测试等待 run 完成，然后用生成的 method 调：
+
+```text
+POST /discovery/methods/{id}/fetch
+```
+
+并验证真实返回 items。测试需要环境变量显式开启：
+
+```text
+RUN_LIVE_WECHAT_DISCOVERY=1
+WECHAT_MP_COOKIE=...
+WECHAT_MP_TOKEN=...
+```
+
+如果没有认证配置，测试 skip，而不是 mock。
+
+---
+
+## 11. 风险与处理
+
+1. 公众号平台接口、搜狗搜索接口、历史文章接口都可能变化。处理方式：工具返回结构化状态，不静默成功。
+2. 微信认证信息会过期。处理方式：DSL 只存 `auth_ref`，认证失效返回 `auth_invalid`。
+3. 公众号 ID 到历史文章列表不一定能稳定解析。处理方式：优先用 `fakeid/__biz`，失效后用 nickname/account_id 重新解析；仍失败则 `needs_resolver`。
+4. 旧网站发现流程稳定性不能被影响。处理方式：旧入口、旧 DSL、旧 writer/auditor 保持委托，不重写。
+5. KM/iWiki 真实 MCP 工具名和权限未知。处理方式：本 spec 只定义接口契约，不承诺可运行。
 
