@@ -1,0 +1,140 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="SiteDiscovery子流程" id="site-discovery-subflows">
+    <mxGraphModel dx="1814" dy="1042" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1100" math="0" shadow="0" adaptiveColors="auto">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="bg" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="0" y="0" width="1800" height="1100" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="title" value="🧭 Site Discovery 子流程图" style="text;html=1;strokeColor=none;fillColor=none;fontColor=#0F172A;fontSize=34;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="420" y="28" width="960" height="52" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="subtitle" value="智能探查负责生成模板，抓取模块负责复用模板稳定抓取与入库" style="text;html=1;strokeColor=none;fillColor=none;fontColor=#0E7490;fontSize=17;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="330" y="84" width="1140" height="30" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="lane_discovery" value="🧭 智能探查模块" style="swimlane;startSize=34;rounded=1;arcSize=8;fillColor=#ECFEFF;strokeColor=#06B6D4;fontColor=#0E7490;fontSize=16;fontStyle=1;html=1;" vertex="1" parent="1">
+          <mxGeometry x="90" y="145" width="1620" height="420" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="lane_fetch" value="⚡ 抓取模块 · 爬取方式库" style="swimlane;startSize=34;rounded=1;arcSize=8;fillColor=#F5F3FF;strokeColor=#8B5CF6;fontColor=#6D28D9;fontSize=16;fontStyle=1;html=1;" vertex="1" parent="1">
+          <mxGeometry x="90" y="650" width="1620" height="270" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="tag_discovery" value="🧠 supervisor 按 State 路由 explorer / validator / dsl_writer / auditor" style="rounded=1;arcSize=50;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;strokeWidth=2;fontColor=#164E63;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1125" y="152" width="510" height="38" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="tag_fetch" value="🚀 探查一次，复用多次" style="rounded=1;arcSize=50;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#F59E0B;strokeWidth=2;fontColor=#713F12;fontSize=15;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1250" y="657" width="240" height="38" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="n_input" value="🌐 输入站点&lt;br/&gt;&lt;font color=&quot;#0369A1&quot;&gt;URL + 可选名称&lt;/font&gt;" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="130" y="255" width="145" height="76" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="n_home" value="📄 抓首页&lt;br/&gt;&lt;font color=&quot;#0E7490&quot;&gt;fetch_homepage&lt;/font&gt;" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#CCFBF1;strokeColor=#0D9488;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="345" y="255" width="150" height="76" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="n_network" value="📡 抓网络请求&lt;br/&gt;&lt;font color=&quot;#0E7490&quot;&gt;capture_network&lt;/font&gt;" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#CCFBF1;strokeColor=#0D9488;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="570" y="255" width="165" height="76" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="n_explorer" value="探查&lt;br/&gt;&lt;font color=&quot;#047857&quot;&gt;explorer&lt;/font&gt;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#D1FAE5;strokeColor=#059669;strokeWidth=2;fontColor=#0F172A;fontSize=17;fontStyle=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="835" y="245" width="190" height="92" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="n_validator" value="验证 URL&lt;br/&gt;&lt;font color=&quot;#047857&quot;&gt;validator&lt;/font&gt;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#D1FAE5;strokeColor=#059669;strokeWidth=2;fontColor=#0F172A;fontSize=17;fontStyle=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1110" y="245" width="190" height="92" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="n_auditor" value="审计&lt;br/&gt;&lt;font color=&quot;#047857&quot;&gt;auditor&lt;/font&gt;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#D1FAE5;strokeColor=#059669;strokeWidth=2;fontColor=#0F172A;fontSize=17;fontStyle=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="835" y="405" width="190" height="92" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="n_dsl" value="写配方&lt;br/&gt;&lt;font color=&quot;#047857&quot;&gt;dsl_writer&lt;/font&gt;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#D1FAE5;strokeColor=#059669;strokeWidth=2;fontColor=#0F172A;fontSize=17;fontStyle=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1110" y="405" width="190" height="92" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="n_save" value="💾 存库&lt;br/&gt;&lt;font color=&quot;#047857&quot;&gt;save_method&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1435" y="415" width="160" height="76" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="n_library" value="💾 爬取方式库&lt;br/&gt;&lt;font color=&quot;#A16207&quot;&gt;Crawl Method / DSL Recipe&lt;/font&gt;" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#F59E0B;strokeWidth=2;fontColor=#713F12;fontSize=17;fontStyle=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="760" y="575" width="280" height="76" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="n_select" value="📚 方式选择区&lt;br/&gt;&lt;font color=&quot;#6D28D9&quot;&gt;选择已保存模板&lt;/font&gt;" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#7C3AED;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="170" y="765" width="165" height="78" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="n_fetch_exec" value="🚀 抓取执行&lt;br/&gt;&lt;font color=&quot;#1D4ED8&quot;&gt;POST /methods/{id}/fetch&lt;/font&gt;" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="415" y="765" width="220" height="78" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="n_dsl_exec" value="⚙️ DSL 解释执行器&lt;br/&gt;&lt;font color=&quot;#0F766E&quot;&gt;fetch / extract / dedup&lt;/font&gt;" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#CCFBF1;strokeColor=#0D9488;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="720" y="765" width="220" height="78" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="n_pipeline" value="🧪 新闻处理流水线&lt;br/&gt;&lt;font color=&quot;#BE123C&quot;&gt;去重 / 富化 / 评分 / 摘要&lt;/font&gt;" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#FFE4E6;strokeColor=#E11D48;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1025" y="765" width="235" height="78" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="n_news" value="📥 新闻流入库&lt;br/&gt;&lt;font color=&quot;#0E7490&quot;&gt;最终条目进入系统列表&lt;/font&gt;" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1360" y="765" width="190" height="78" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e1" edge="1" parent="1" source="n_input" target="n_home" style="rounded=1;html=1;strokeColor=#0284C7;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="n_home" target="n_network" style="rounded=1;html=1;strokeColor=#0D9488;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="n_network" target="n_explorer" style="rounded=1;html=1;strokeColor=#059669;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="n_explorer" target="n_validator" style="rounded=1;html=1;strokeColor=#059669;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="n_validator" target="n_dsl" style="rounded=1;html=1;strokeColor=#059669;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="n_dsl" target="n_auditor" style="rounded=1;html=1;strokeColor=#059669;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" value="通过" edge="1" parent="1" source="n_auditor" target="n_save" style="rounded=1;html=1;strokeColor=#16A34A;strokeWidth=3;fontColor=#047857;endArrow=classic;edgeStyle=orthogonalEdgeStyle;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8" value="不通过，重探查（1/3）" edge="1" parent="1" source="n_auditor" target="n_explorer" style="rounded=1;html=1;strokeColor=#94A3B8;strokeWidth=2;fontColor=#64748B;dashed=1;endArrow=classic;edgeStyle=orthogonalEdgeStyle;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e9" value="重写配方" edge="1" parent="1" source="n_auditor" target="n_dsl" style="rounded=1;html=1;strokeColor=#9333EA;strokeWidth=2;fontColor=#6D28D9;dashed=1;endArrow=classic;edgeStyle=orthogonalEdgeStyle;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="n_save" target="n_library" style="rounded=1;html=1;strokeColor=#F59E0B;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e11" value="复用探查产出的模板" edge="1" parent="1" source="n_library" target="n_select" style="rounded=1;html=1;strokeColor=#7C3AED;strokeWidth=3;fontColor=#6D28D9;endArrow=classic;edgeStyle=orthogonalEdgeStyle;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e12" edge="1" parent="1" source="n_select" target="n_fetch_exec" style="rounded=1;html=1;strokeColor=#7C3AED;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e13" edge="1" parent="1" source="n_fetch_exec" target="n_dsl_exec" style="rounded=1;html=1;strokeColor=#2563EB;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e14" edge="1" parent="1" source="n_dsl_exec" target="n_pipeline" style="rounded=1;html=1;strokeColor=#0D9488;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e15" edge="1" parent="1" source="n_pipeline" target="n_news" style="rounded=1;html=1;strokeColor=#E11D48;strokeWidth=3;endArrow=classic;edgeStyle=orthogonalEdgeStyle;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

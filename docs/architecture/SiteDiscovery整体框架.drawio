@@ -1,0 +1,87 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="SiteDiscovery整体框架" id="site-discovery-overview-clean">
+    <mxGraphModel dx="1623" dy="933" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="980" math="0" shadow="0" adaptiveColors="auto">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="bg" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="0" y="0" width="1800" height="980" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="title" value="站点发现（Site Discovery）整体框架" style="text;html=1;strokeColor=none;fillColor=none;fontColor=#0F172A;fontSize=30;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="420" y="24" width="960" height="46" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="page" value="站点发现页面" style="swimlane;startSize=34;rounded=1;arcSize=8;fillColor=#FFFFFF;strokeColor=#94A3B8;fontColor=#0F172A;fontSize=18;fontStyle=1;html=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="96" width="1720" height="820" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="smart_module" value="智能探查模块&lt;br/&gt;&lt;font style=&quot;font-size:14px;&quot;&gt;作用：为一个新站点自动探出“怎么抓”&lt;br/&gt;输入：站点 URL + 可选名称（支持自动命名）&lt;br/&gt;输出：一个可复用的 Crawl Method（抓取模板）&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#ECFEFF;strokeColor=#06B6D4;strokeWidth=2;fontColor=#0F172A;fontSize=18;fontStyle=1;shadow=1;align=left;spacingLeft=16;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="110" y="170" width="650" height="140" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="fetch_module" value="抓取模块 · 爬取方式库&lt;br/&gt;&lt;font style=&quot;font-size:14px;&quot;&gt;作用：复用已生成的抓取模板，稳定批量抓取&lt;br/&gt;输入：已保存的 Crawl Method / DSL Recipe&lt;br/&gt;输出：原始条目 -&gt; 新闻处理流水线 -&gt; 新闻流&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#F0FDF4;strokeColor=#22C55E;strokeWidth=2;fontColor=#0F172A;fontSize=18;fontStyle=1;shadow=1;align=left;spacingLeft=16;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="170" width="650" height="140" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="run_api" value="POST /discovery/run" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="372" width="250" height="64" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="fetch_api" value="POST /discovery/methods/{id}/fetch" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;strokeWidth=2;fontColor=#0F172A;fontSize=16;fontStyle=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1230" y="372" width="300" height="64" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="graph" value="SiteDiscoveryGraph&lt;br/&gt;&lt;font style=&quot;font-size:14px;&quot;&gt;作用：驱动智能探查 Agent 状态流转，逐步生成抓取模板&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;strokeWidth=2;fontColor=#0F172A;fontSize=18;fontStyle=1;shadow=1;align=left;spacingLeft=16;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="140" y="500" width="590" height="104" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="dsl" value="DSL 解释执行器&lt;br/&gt;&lt;font style=&quot;font-size:14px;&quot;&gt;作用：按模板中的 fetch / extract / dedup 执行抓取&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;strokeWidth=2;fontColor=#0F172A;fontSize=18;fontStyle=1;shadow=1;align=left;spacingLeft=16;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="1070" y="500" width="590" height="104" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="store" value="模板存储模块&lt;br/&gt;&lt;font style=&quot;font-size:14px;&quot;&gt;作用：保存 Crawl Method + Source，并沉淀到爬取方式库&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;strokeWidth=2;fontColor=#0F172A;fontSize=18;fontStyle=1;shadow=1;align=left;spacingLeft=16;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="140" y="670" width="590" height="104" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="pipeline" value="新闻处理流水线&lt;br/&gt;&lt;font style=&quot;font-size:14px;&quot;&gt;作用：去重、富化、评分、摘要生成、最终入库&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;strokeWidth=2;fontColor=#0F172A;fontSize=18;fontStyle=1;shadow=1;align=left;spacingLeft=16;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="1070" y="670" width="590" height="104" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="library" value="爬取方式库" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FEFCE8;strokeColor=#EAB308;strokeWidth=2;fontColor=#713F12;fontSize=18;fontStyle=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="790" y="828" width="220" height="64" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="library_note" value="（抓取模块只消费模板，不重新探查）" style="text;html=1;strokeColor=none;fillColor=none;fontColor=#64748B;fontSize=15;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="690" y="896" width="420" height="26" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e1" edge="1" parent="1" source="smart_module" target="run_api" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#0284C7;strokeWidth=3;endArrow=classic;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="fetch_module" target="fetch_api" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#16A34A;strokeWidth=3;endArrow=classic;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="run_api" target="graph" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#0284C7;strokeWidth=3;endArrow=classic;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="fetch_api" target="dsl" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#16A34A;strokeWidth=3;endArrow=classic;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="graph" target="store" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#0284C7;strokeWidth=3;endArrow=classic;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="dsl" target="pipeline" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#16A34A;strokeWidth=3;endArrow=classic;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="1" source="store" target="library" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#0F766E;strokeWidth=3;endArrow=classic;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="pipeline" target="library" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#0F766E;strokeWidth=3;endArrow=classic;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
