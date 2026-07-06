@@ -192,6 +192,22 @@ def validate_semantics(recipe: DslRecipe) -> list[str]:
     errors: list[str] = []
     last_mode: str | None = None
     has_browser = False
+
+    def check_fetch_transport(actions: list[Action], *, path: str = "action") -> None:
+        for idx, action in enumerate(actions):
+            action_path = f"{path} {idx}" if path == "action" else f"{path}.{idx}"
+            if (
+                isinstance(action, FetchAction)
+                and action.transport == "scrapling"
+                and action.method.upper() != "GET"
+            ):
+                errors.append(f"{action_path}: scrapling transport only supports GET fetch actions")
+            if isinstance(action, LoopAction):
+                check_fetch_transport(action.body, path=f"{action_path}.loop.body")
+                check_fetch_transport(action.on_each, path=f"{action_path}.loop.on_each")
+
+    check_fetch_transport(recipe.actions)
+
     for i, a in enumerate(recipe.actions):
         if isinstance(a, FetchAction):
             last_mode = a.mode
