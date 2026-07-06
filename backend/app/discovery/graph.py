@@ -1505,6 +1505,8 @@ def _synthesize_exploration(*, site_url: str, result: dict, deterministic_candid
         "4.2 若候选像 tags/archives/count 统计接口，而不是文章列表，不要选它。\n"
         "5. 若 success=true 且 source_type=json_api，必须同时给出：list_url、format_locator.value（json path）、"
         "fields.title、至少 1 条 sample_items，以及 fields.url 或 fields.id 或 sample_items 中的 path/url。\n"
+        "5.1 对 JSON API：list_url 只放不带 query string 的接口 URL；URL 上的 ?a=b&page=1 等参数必须拆到 fetch.query；"
+        "POST 请求体参数必须放 fetch.json_body。不要把分页/筛选参数混在 list_url 里。\n"
         "6. 若 success=true 且 source_type=rss/atom，必须给出 list_url 且 format_locator.kind=feed_entries。\n"
         "7. 若 success=true 且 source_type=html，必须给出 html_selectors 四项和 sample_items。\n\n"
         "输出 schema：\n"
@@ -1831,6 +1833,8 @@ explorer 只给了候选，最终的 UrlRule 由你产出。
 你的输出会被程序拿真实样本请求验证，不通过会回退让你重提。
 
 # 背景
+- 你的职责只判断“文章详情页 URL 如何从列表 item 得到”，不要处理列表 API 的分页、筛选、query 参数。
+- exploration.list_url / exploration.fetch.query / exploration.pagination 描述的是“列表接口怎么请求”，不是详情页 URL 规律。
 - 如果列表里已有 url/link 字段，应直接使用该字段（mode=existing_url），不要多此一举去推模板。
 - 如果列表里给的是 path/href 这类相对路径字段，应输出 mode=path_join，填写 base_url 与 path_field。
 - 如果列表只有 id/slug/no，则需要推断模板，如 https://x.com/blog/{id}（mode=template）。
@@ -1870,6 +1874,8 @@ explorer 只给了候选，最终的 UrlRule 由你产出。
 {"mode": "path_join", "template": null, "base_url": "https://www.openeuler.org", "path_field": "path", "id_field": null, "url_field": null, "sample_items": [...], "confidence": "high", "reason": "sample_items.raw_url 或 sample_items.raw.path 是相对路径，需与站点根 URL 拼接"}
 
 # 质量约束
+- 不要因为 list_url 包含 ?page=1&pageSize=10 就把这些 query 参数写进 template/base_url；它们属于 fetch.query/pagination。
+- template/base_url 必须指向文章详情页 URL 形态，不是列表 API endpoint。
 - 如果 exploration.fields.url 对应的 sample_items.raw_url 本身就是完整链接，优先 mode=existing_url，不要强推 template。
 - 如果 sample_items.raw_url 或 raw 样本里的字段值像 /xx/yy 这种相对路径，优先 mode=path_join，不要伪装成 template + {id}。
 - template 必须使用 {id} 占位符，不要写 {item.no}。
@@ -2123,6 +2129,9 @@ max_iters 必须 1~20。
 1. 根据 exploration.source_type 选 fetch.mode：json_api→json；rss/atom→feed；html→html。
 2. 第一阶段必须 fetch 列表数据源：url 用 exploration.list_url；method/query/json_body/headers 用 exploration.fetch。
 2.1 如果 exploration.fetch.transport=scrapling，所有对应 fetch 动作必须原样写入 transport、impersonate、stealthy_headers；这是探查阶段验证出的调取配方，不允许丢失。
+2.2 fetch.url 必须是干净 endpoint，不要把 query string 写进 url；所有 ?a=b&page=1&pageSize=10 参数必须写进 fetch.query。
+    如果 exploration.list_url 仍然带 query string，必须先拆分：url 去掉 ? 后面的部分，query 合并 URL 参数和 exploration.fetch.query。
+2.3 翻页时只改 query/json_body 里的分页参数值（如 page="{{page}}"），不要生成带 ?page={{page}} 的 url 字符串。
 3. 第二阶段必须 extract：
    - json_api：from 用 exploration.format_locator.value
    - rss/atom：from 用 feed.entries
