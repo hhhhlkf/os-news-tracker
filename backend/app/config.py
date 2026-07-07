@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     fetch_per_host_delay_seconds: float = 2.0
     missing_date_policy: str = "include_as_now"
     manual_fetch_max_workers: int = 4
+    wechat_mp_cookie: str | None = None
+    wechat_mp_token: str | None = None
+    wechat_mp_profile_name: str = "wechat_mp_default"
 
 
 @lru_cache

@@ -13,11 +13,16 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from typing import Any
+
 from app.discovery.dsl import DslRecipe
 from app.discovery.cancel import request_cancel
 from app.discovery.graph import check_existing_method, start_discovery_run
 from app.discovery.ingester import CrawlOutputIngester
 from app.discovery.interpreter import DslInterpreter
+from app.discovery.multi_dsl import MultiDslRecipe
+from app.discovery.multi_graph import start_multi_discovery_run
+from app.discovery.multi_interpreter import MultiDslInterpreter
 from app.llm.client import LlmClient
 from app.manual_news_run import _build_not_stored_log_fields
 from app.models import CrawlMethod, CrawlMethodDomain, SiteDiscoveryRun
@@ -40,8 +45,22 @@ class DiscoverRequest(BaseModel):
     name: str | None = None  # 站点别名（选填，不填自动用域名）
 
 
-def run_method(recipe: DslRecipe) -> dict:
+class MultiDiscoverRequest(BaseModel):
+    input: str
+    force: bool = False
+    name: str | None = None
+    hints: dict[str, Any] | None = None
+
+
+def run_method(recipe: DslRecipe | MultiDslRecipe | dict) -> dict:
     """运行命执行核心：按 DSL Recipe 纯确定性抓取。供 discovery_fetch 调用 + 测试 mock。"""
+    if isinstance(recipe, dict):
+        recipe_type = recipe.get("recipe_type")
+        if recipe_type == "multi_dsl":
+            return MultiDslInterpreter().run(MultiDslRecipe(**recipe))
+        return DslInterpreter().run(DslRecipe(**recipe))
+    if isinstance(recipe, MultiDslRecipe):
+        return MultiDslInterpreter().run(recipe)
     return DslInterpreter().run(recipe)
 
 
@@ -94,6 +113,16 @@ def discover_run(body: DiscoverRequest, db: Session = Depends(get_db)):
     name = body.name or urlparse(site_url).netloc.removeprefix("www.")
     run_id = start_discovery_run(site_url, force=body.force, name=name)
     return {"status": "started", "run_id": run_id, "name": name}
+
+
+@router.post("/multi-run")
+def discover_multi_run(body: MultiDiscoverRequest):
+    return start_multi_discovery_run(
+        body.input,
+        force=body.force,
+        name=body.name,
+        hints=body.hints,
+    )
 
 
 @router.get("/runs")
@@ -226,7 +255,7 @@ def discovery_fetch(
     m = db.get(CrawlMethod, method_id)
     if not m:
         raise HTTPException(404, "method not found")
-    recipe = DslRecipe(**m.dsl_recipe)
+    recipe = m.dsl_recipe
     append_run_log(
         "抓方式",
         "开始抓取爬取方式",
