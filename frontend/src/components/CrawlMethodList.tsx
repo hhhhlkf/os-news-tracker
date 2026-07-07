@@ -1,7 +1,7 @@
 // frontend/src/components/CrawlMethodList.tsx
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, fetchDiscoveryMethod, listDiscoveryMethods } from "../api/client";
+import { ApiError, deleteDiscoveryMethod, fetchDiscoveryMethod, listDiscoveryMethods } from "../api/client";
 import type { CrawlMethod } from "../types";
 import { buildManualNewsRunRequest } from "./NewsRunControl";
 import type { NewsRunFormState } from "./NewsRunControl";
@@ -23,9 +23,10 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [rowStates, setRowStates] = useState<Record<number, RowState>>({});
-  const [summary, setSummary] = useState<string | null>(null);
+  const [summary, setSummary] = useState<{ text: string; tone: "success" | "danger"; showItemsLink: boolean } | null>(null);
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchCancelling, setBatchCancelling] = useState(false);
+  const [batchDeleting, setBatchDeleting] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
   const abortRef = useRef<AbortController | null>(null);
@@ -50,16 +51,19 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
     mutationFn: ({ id, request, signal }: { id: number; request: ReturnType<typeof buildManualNewsRunRequest>; signal?: AbortSignal }) =>
       fetchDiscoveryMethod(id, request, signal),
   });
+  const deleteMut = useMutation({
+    mutationFn: (id: number) => deleteDiscoveryMethod(id),
+  });
 
   async function batchFetch() {
     const ids = [...selected];
     const request = buildManualNewsRunRequest(runLimitState);
     if (!request) {
-      setSummary("抓取限制无效，请先补全时间范围和目标条目数。");
+      setSummary({ text: "抓取限制无效，请先补全时间范围和目标条目数。", tone: "danger", showItemsLink: false });
       return;
     }
     if (ids.length === 0) {
-      setSummary("请先选择至少一个爬取方式。");
+      setSummary({ text: "请先选择至少一个爬取方式。", tone: "danger", showItemsLink: false });
       return;
     }
     setSummary(null);
@@ -96,7 +100,11 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
           }
         }
       }
-      setSummary(cancelledRef.current ? `已取消抓取 · 已处理 ${totalDisc} 条 · 入库 ${totalStored} 条` : `本次抓取 ${totalDisc} 条 · 入库 ${totalStored} 条`);
+      setSummary({
+        text: cancelledRef.current ? `已取消抓取 · 已处理 ${totalDisc} 条 · 入库 ${totalStored} 条` : `本次抓取 ${totalDisc} 条 · 入库 ${totalStored} 条`,
+        tone: "success",
+        showItemsLink: true,
+      });
       await qc.invalidateQueries({ queryKey: ["discovery-methods"] });
     } finally {
       setBatchRunning(false);
@@ -110,7 +118,40 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
     cancelledRef.current = true;
     setBatchCancelling(true);
     abortRef.current?.abort();
-    setSummary("正在取消当前抓取批次…");
+    setSummary({ text: "正在取消当前抓取批次…", tone: "danger", showItemsLink: false });
+  }
+
+  async function batchDelete() {
+    const ids = [...selected];
+    if (ids.length === 0) {
+      setSummary({ text: "请先选择至少一个爬取方式。", tone: "danger", showItemsLink: false });
+      return;
+    }
+    const confirmed = window.confirm(`删除选中的 ${ids.length} 个链接方式？此操作会从方式库移除它们。`);
+    if (!confirmed) return;
+    setSummary(null);
+    setBatchDeleting(true);
+    let deletedCount = 0;
+    try {
+      for (const id of ids) {
+        await deleteMut.mutateAsync(id);
+        deletedCount += 1;
+      }
+      setSelected(new Set());
+      setRowStates((states) => {
+        const next = { ...states };
+        for (const id of ids) {
+          delete next[id];
+        }
+        return next;
+      });
+      setSummary({ text: `已批量删除 ${deletedCount} 个链接方式`, tone: "success", showItemsLink: false });
+      await qc.invalidateQueries({ queryKey: ["discovery-methods"] });
+    } catch (error) {
+      setSummary({ text: error instanceof ApiError ? error.message : "批量删除失败", tone: "danger", showItemsLink: false });
+    } finally {
+      setBatchDeleting(false);
+    }
   }
 
   function toggle(id: number, enabled: boolean) {
@@ -141,27 +182,36 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
               type="checkbox"
               aria-label="全选当前页爬取方式"
               checked={allPageSelected}
-              disabled={selectablePageIds.length === 0 || batchRunning}
+              disabled={selectablePageIds.length === 0 || batchRunning || batchDeleting}
               onChange={(e) => toggleCurrentPage(e.target.checked)}
             />
             全选本页
           </label>
-          <button type="button" style={btnPrimary} disabled={selected.size === 0 || batchRunning} onClick={batchFetch}>
-            {batchRunning ? "抓取中…" : "抓取选中"}
+          <button
+            type="button"
+            style={batchRunning ? btnDanger : btnPrimary}
+            disabled={batchRunning ? batchCancelling : selected.size === 0 || batchDeleting}
+            onClick={batchRunning ? cancelBatch : batchFetch}
+          >
+            {batchRunning ? (batchCancelling ? "取消中…" : "取消抓取") : "抓取选中"}
           </button>
           <button
             type="button"
-            style={batchRunning ? btnDanger : btnDisabled}
-            disabled={!batchRunning || batchCancelling}
-            onClick={cancelBatch}
+            style={selected.size === 0 || batchRunning || batchDeleting ? btnDangerDisabled : btnDangerGhost}
+            disabled={selected.size === 0 || batchRunning || batchDeleting}
+            onClick={batchDelete}
           >
-            {batchCancelling ? "取消中…" : "取消抓取"}
+            {batchDeleting ? "删除中…" : "批量删除链接"}
           </button>
-          <a style={{ fontSize: 12, color: "#667085", cursor: "pointer" }} onClick={() => setSelected(new Set())}>清空</a>
         </div>
       </div>
 
-      {summary && <div style={{ fontSize: 13, color: "#059669", marginBottom: 10 }}>{summary} · <a style={{ color: "#175cd3", cursor: "pointer" }} onClick={() => (window.location.href = "/")}>查看入库条目 →</a></div>}
+      {summary && (
+        <div style={{ fontSize: 13, color: summary.tone === "danger" ? "#b42318" : "#059669", marginBottom: 10 }}>
+          {summary.text}
+          {summary.showItemsLink ? <> · <a style={{ color: "#175cd3", cursor: "pointer" }} onClick={() => (window.location.href = "/")}>查看入库条目 →</a></> : null}
+        </div>
+      )}
 
       <div style={{ display: "grid", gap: 8 }}>
         {list.isLoading && (
@@ -176,7 +226,7 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
         )}
         {pageMethods.map((m) => (
           <MethodRow key={m.id} m={m} selected={selected.has(m.id)} state={rowStates[m.id]}
-            onToggle={(en) => toggle(m.id, en)} onOpen={() => onOpenMethod?.(m.id)} highlight={highlightId === m.id} />
+            onToggle={(en) => toggle(m.id, en)} onOpen={() => onOpenMethod?.(m.id)} highlight={highlightId === m.id} busy={batchRunning || batchDeleting} />
         ))}
         {list.data && methods.length === 0 && (
           <div style={{ border: "1px dashed #d0d5dd", borderRadius: 8, padding: 16, color: "#667085", fontSize: 13 }}>
@@ -217,16 +267,16 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
   );
 }
 
-function MethodRow({ m, selected, state, onToggle, onOpen, highlight }: {
+function MethodRow({ m, selected, state, onToggle, onOpen, highlight, busy }: {
   m: CrawlMethod; selected: boolean; state?: RowState;
-  onToggle: (enabled: boolean) => void; onOpen: () => void; highlight: boolean;
+  onToggle: (enabled: boolean) => void; onOpen: () => void; highlight: boolean; busy: boolean;
 }) {
   const disabled = m.status === "disabled";
   const primaryLabel = m.source_name?.trim() || m.domain;
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12, border: `1px solid ${selected ? "#b9d4ff" : highlight ? "#175cd3" : "#eaecf0"}`,
       borderRadius: 9, padding: "9px 11px", background: selected ? "#f8fbff" : highlight ? "#eff6ff" : "#fff" }}>
-      <input type="checkbox" aria-label={`选择 ${primaryLabel}`} checked={selected} disabled={disabled} onChange={(e) => onToggle(e.target.checked)} />
+      <input type="checkbox" aria-label={`选择 ${primaryLabel}`} checked={selected} disabled={disabled || busy} onChange={(e) => onToggle(e.target.checked)} />
       <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={onOpen}>
         <div style={{ fontSize: 14, fontWeight: 700, color: disabled ? "#98a2b3" : "#101828" }}>
           {primaryLabel} <span style={badge(m.status)}>{m.status}</span>
@@ -254,8 +304,9 @@ function badge(status: string): CSSProperties {
 }
 
 const btnPrimary: CSSProperties = { border: "none", borderRadius: 999, padding: "8px 16px", background: "#175cd3", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" };
-const btnDisabled: CSSProperties = { ...btnPrimary, background: "#98a2b3", cursor: "not-allowed" };
 const btnDanger: CSSProperties = { ...btnPrimary, background: "#dc2626" };
+const btnDangerGhost: CSSProperties = { border: "1px solid #fecdca", borderRadius: 999, padding: "8px 16px", background: "#fff", color: "#b42318", fontSize: 13, fontWeight: 700, cursor: "pointer" };
+const btnDangerDisabled: CSSProperties = { ...btnDangerGhost, color: "#98a2b3", border: "1px solid #eaecf0", cursor: "not-allowed" };
 const infoBox: CSSProperties = { border: "1px dashed #d0d5dd", borderRadius: 8, padding: 16, color: "#667085", fontSize: 13 };
 const pagerBar: CSSProperties = {
   display: "flex",
