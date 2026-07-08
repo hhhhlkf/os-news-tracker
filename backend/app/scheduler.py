@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -109,6 +110,69 @@ def run_startup_backfill() -> int:
     return len(source_ids)
 
 
+MAIL_SCHEDULE_TICK_INTERVAL_MINUTES = 1
+MAIL_SCHEDULE_PATROL_INTERVAL_HOURS = 6
+
+
+def _schedule_due_now(schedule, *, now: datetime, today: str) -> bool:
+    """判断某条启用中的预定发送任务此刻是否应触发。
+
+    - 当天已发送（marker == today）则跳过
+    - weekly 仅在与创建日相同的星期几触发
+    - 当前时间需已到达/越过 send_time
+    """
+    if not schedule.enabled:
+        return False
+    if schedule.last_sent_marker_date == today:
+        return False
+    try:
+        hour_str, minute_str = (schedule.send_time or "09:00").split(":", 1)
+        hour, minute = int(hour_str), int(minute_str)
+    except (ValueError, AttributeError):
+        return False
+    if schedule.frequency == "weekly":
+        anchor = schedule.created_at.weekday() if schedule.created_at else now.weekday()
+        if now.weekday() != anchor:
+            return False
+    return (now.hour, now.minute) >= (hour, minute)
+
+
+def _run_due_schedules(*, trigger_type: str, mark_today: bool, patrol: bool) -> None:
+    from app.mail.service import MailService, beijing_now
+    from app.models import MailSchedule
+
+    session = SessionLocal()
+    try:
+        # 预定发送的判定统一按北京时间：send_time / marker 都是北京时间墙钟值
+        now = beijing_now()
+        today = now.date().isoformat()
+        schedules = list(session.scalars(select(MailSchedule).where(MailSchedule.enabled.is_(True))))
+        service = MailService(session)
+        for schedule in schedules:
+            if not _schedule_due_now(schedule, now=now, today=today):
+                continue
+            try:
+                service.run_schedule(schedule, trigger_type=trigger_type, mark_today=mark_today)
+                if patrol:
+                    schedule.patrol_status = "resent"
+                    session.commit()
+                logger.info("mail schedule %s executed (%s)", schedule.id, trigger_type)
+            except Exception:
+                logger.exception("mail schedule %s failed (%s)", schedule.id, trigger_type)
+    finally:
+        session.close()
+
+
+def run_mail_schedule_tick() -> None:
+    """主任务：巡检启用中的预定发送任务，触发到点且当天未发送的任务。"""
+    _run_due_schedules(trigger_type="scheduled_send", mark_today=True, patrol=False)
+
+
+def run_mail_schedule_patrol() -> None:
+    """巡检任务：兜底补发当天到点却漏发的任务。"""
+    _run_due_schedules(trigger_type="patrol_resend", mark_today=True, patrol=True)
+
+
 def start_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler()
     session = SessionLocal()
@@ -132,5 +196,102 @@ def start_scheduler() -> BackgroundScheduler:
         id="discovery-reclaim-stale-runs",
         replace_existing=True,
     )
+    scheduler.start()
+    return scheduler
+
+
+def register_mail_schedule_jobs(scheduler: BackgroundScheduler) -> None:
+    """在给定调度器上注册邮件预定发送的 tick / patrol 任务。
+
+    统一巡检启用中的任务，不为每条 schedule 单独注册 job。
+    """
+    scheduler.add_job(
+        run_mail_schedule_tick,
+        IntervalTrigger(minutes=MAIL_SCHEDULE_TICK_INTERVAL_MINUTES),
+        id="mail-schedule-tick",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_mail_schedule_patrol,
+        IntervalTrigger(hours=MAIL_SCHEDULE_PATROL_INTERVAL_HOURS),
+        id="mail-schedule-patrol",
+        replace_existing=True,
+    )
+
+
+def start_mail_scheduler() -> BackgroundScheduler:
+    """轻量调度器：只跑邮件预定发送，不注册新闻源 cron / discovery 巡检。
+
+    由独立开关 ENABLE_MAIL_SCHEDULER 控制，便于开发态只验证邮件定时功能。
+    """
+    scheduler = BackgroundScheduler()
+    register_mail_schedule_jobs(scheduler)
+    scheduler.start()
+    return scheduler
+
+
+MORNING_CRAWL_TICK_INTERVAL_MINUTES = 1
+MORNING_CRAWL_PATROL_INTERVAL_HOURS = 3
+
+
+def _run_system_morning_crawl(*, trigger_type: str, patrol: bool) -> None:
+    from app.morning_crawl.service import (
+        beijing_now,
+        execute_morning_crawl,
+        get_or_create_config,
+        is_running,
+        schedule_due_now,
+    )
+
+    session = SessionLocal()
+    try:
+        config = get_or_create_config(session)
+        now = beijing_now()
+        today = now.date().isoformat()
+        if not schedule_due_now(config, now=now, today=today):
+            return
+        if is_running(session):
+            return
+        try:
+            execute_morning_crawl(session, trigger_type=trigger_type)
+            logger.info("system morning crawl executed (%s)", trigger_type)
+        except Exception:
+            logger.exception("system morning crawl failed (%s)", trigger_type)
+    finally:
+        session.close()
+
+
+def run_system_morning_crawl() -> None:
+    """晨抓主任务：到点且当天未成功、且无进行中的 run 时，执行全部 active discovery methods。"""
+    _run_system_morning_crawl(trigger_type="scheduled", patrol=False)
+
+
+def patrol_system_morning_crawl() -> None:
+    """晨抓巡检：兜底补跑当天到点却漏跑/未成功的晨抓。"""
+    _run_system_morning_crawl(trigger_type="patrol_resend", patrol=True)
+
+
+def register_morning_crawl_jobs(scheduler: BackgroundScheduler) -> None:
+    scheduler.add_job(
+        run_system_morning_crawl,
+        IntervalTrigger(minutes=MORNING_CRAWL_TICK_INTERVAL_MINUTES),
+        id="system-morning-crawl-tick",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        patrol_system_morning_crawl,
+        IntervalTrigger(hours=MORNING_CRAWL_PATROL_INTERVAL_HOURS),
+        id="system-morning-crawl-patrol",
+        replace_existing=True,
+    )
+
+
+def start_morning_crawl_scheduler() -> BackgroundScheduler:
+    """轻量调度器：只跑系统晨抓 tick / patrol，由独立开关 ENABLE_MORNING_CRAWL_SCHEDULER 控制。
+
+    与 ENABLE_SCHEDULER（新闻源 cron）解耦，便于开发态单独验证晨抓。
+    """
+    scheduler = BackgroundScheduler()
+    register_morning_crawl_jobs(scheduler)
     scheduler.start()
     return scheduler

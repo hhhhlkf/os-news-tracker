@@ -5,16 +5,51 @@ import { FacetSidebar } from "../components/FacetSidebar";
 import { ItemList } from "../components/ItemList";
 import { ItemDetail } from "../components/ItemDetail";
 import { MailTaskCenter } from "../components/MailTaskCenter";
+import { MorningCrawlModal } from "../components/MorningCrawlModal";
+import { fetchMailSchedules, fetchMailTemplates } from "../mail/api";
+import { fetchMorningCrawlDashboard } from "../morningCrawl/api";
 import { demoItems } from "../demoData";
 import { buildDemoFacets, filterDemoItems, makeListResponse, resolveHomeDataMode } from "./homeData";
 
 const PAGE_SIZE = 10;
+const ENTRY_CARD_MIN_HEIGHT = 196;
+
+const MORNING_STATUS_META: Record<string, { text: string; bg: string; color: string }> = {
+  not_run: { text: "今日未执行", bg: "#f2f4f7", color: "#475467" },
+  running: { text: "执行中", bg: "#eff6ff", color: "#175cd3" },
+  success: { text: "今日已完成", bg: "#ecfdf3", color: "#067647" },
+  partial: { text: "部分成功", bg: "#fffaeb", color: "#b54708" },
+  failed: { text: "执行失败", bg: "#fef3f2", color: "#b42318" },
+};
+
+const FILTER_LABELS: Array<{ key: string; label: string }> = [
+  { key: "q", label: "关键词" },
+  { key: "main_category", label: "分类" },
+  { key: "info_type", label: "类型" },
+  { key: "importance", label: "重要度" },
+  { key: "sub_tag", label: "热点" },
+];
+
+function summarizeActiveFilters(filters: Record<string, string>): string[] {
+  const chips: string[] = [];
+  for (const { key, label } of FILTER_LABELS) {
+    const value = filters[key];
+    if (value) chips.push(`${label}：${value}`);
+  }
+  if (filters.published_after || filters.published_before) {
+    const from = filters.published_after || "不限";
+    const to = filters.published_before || "至今";
+    chips.push(`时间：${from} ~ ${to}`);
+  }
+  return chips;
+}
 
 export function HomePage() {
   const [filters, setFilters] = useState<Record<string, string>>({ q: "", sort_by: "published_at", sort_dir: "desc" });
   const [page, setPage] = useState(1);
   const [openId, setOpenId] = useState<number | null>(null);
   const [mailOpen, setMailOpen] = useState(false);
+  const [morningCrawlOpen, setMorningCrawlOpen] = useState(false);
 
   const setFilter = (key: string, value: string) => {
     setPage(1);
@@ -39,6 +74,22 @@ export function HomePage() {
     queryFn: fetchFacets,
     retry: false,
   });
+  const mailTemplatesQuery = useQuery({
+    queryKey: ["mail-templates"],
+    queryFn: fetchMailTemplates,
+    retry: false,
+  });
+  const mailSchedulesQuery = useQuery({
+    queryKey: ["mail-schedules"],
+    queryFn: fetchMailSchedules,
+    retry: false,
+  });
+  const morningCrawlQuery = useQuery({
+    queryKey: ["morning-crawl"],
+    queryFn: fetchMorningCrawlDashboard,
+    retry: false,
+    refetchInterval: (query) => (query.state.data?.is_running ? 2000 : false),
+  });
 
   const mode = resolveHomeDataMode({
     itemsFailed: itemsQuery.isError,
@@ -59,6 +110,12 @@ export function HomePage() {
 
   const hasLiveEmptyState = mode === "live" && listData?.total === 0;
   const activeFilterCount = Object.entries(filters).filter(([key, value]) => value && key !== "sort_by" && key !== "sort_dir").length;
+  const filterChips = summarizeActiveFilters(filters);
+  const templateCount = mailTemplatesQuery.data?.length ?? 0;
+  const scheduleCount = mailSchedulesQuery.data?.length ?? 0;
+  const morningDashboard = morningCrawlQuery.data;
+  const morningStatus = morningDashboard?.today_status ?? "not_run";
+  const morningStatusMeta = MORNING_STATUS_META[morningStatus] ?? MORNING_STATUS_META.not_run;
   return (
     <div style={{ minHeight: "100vh", background: "#f5f7fb" }}>
       <div style={{ maxWidth: 1280, margin: "0 auto", padding: 24 }}>
@@ -184,32 +241,68 @@ export function HomePage() {
         </section>
 
         <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
-          <div style={{ width: 280, flexShrink: 0, display: "grid", gap: 16 }}>
+          <div style={{ width: 260, flexShrink: 0, display: "grid", gap: 16 }}>
             <div
               style={{
                 border: "1px solid #bfd7ff",
                 background: "linear-gradient(180deg,#f8fbff 0%,#ffffff 100%)",
-                borderRadius: 14,
-                boxShadow: "0 12px 26px rgba(16,24,40,0.05)",
-                padding: 16,
+                borderRadius: 8,
+                padding: 14,
+                minHeight: ENTRY_CARD_MIN_HEIGHT,
+                display: "flex",
+                flexDirection: "column",
               }}
             >
-              <div style={{ fontSize: 15, fontWeight: 800, color: "#101828", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#101828", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                 邮件任务中心
                 <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "3px 8px", background: "#eff6ff", color: "#175cd3" }}>
                   框架已接入
                 </span>
               </div>
-              <div style={{ display: "grid", gap: 8, fontSize: 12, color: "#475467", lineHeight: 1.45 }}>
-                <div>当前筛选可直接带入邮件中心。</div>
-                <div>Task 1 已接入弹窗框架、模板列表骨架与左侧可折叠导航。</div>
+
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{templateCount}</div>
+                  <div style={{ fontSize: 11, color: "#667085", marginTop: 2 }}>模板</div>
+                </div>
+                <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{scheduleCount}</div>
+                  <div style={{ fontSize: 11, color: "#667085", marginTop: 2 }}>已预定</div>
+                </div>
               </div>
+
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#98a2b3", marginBottom: 6 }}>当前筛选</div>
+              {filterChips.length > 0 ? (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {filterChips.map((chip) => (
+                    <span
+                      key={chip}
+                      style={{
+                        fontSize: 11,
+                        color: "#344054",
+                        background: "#eff6ff",
+                        border: "1px solid #d3e3fb",
+                        borderRadius: 6,
+                        padding: "3px 7px",
+                        wordBreak: "break-all",
+                      }}
+                    >
+                      {chip}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: "#98a2b3" }}>全部条目（未设置筛选）</div>
+              )}
+
               <button
                 onClick={() => setMailOpen(true)}
                 style={{
-                  marginTop: 12,
+                  marginTop: "auto",
+                  paddingTop: 12,
+                  width: "100%",
                   border: "none",
-                  borderRadius: 999,
+                  borderRadius: 8,
                   padding: "8px 14px",
                   fontSize: 12,
                   fontWeight: 700,
@@ -218,7 +311,63 @@ export function HomePage() {
                   cursor: "pointer",
                 }}
               >
-                打开窗口
+                打开邮件任务中心
+              </button>
+            </div>
+
+            <div
+              style={{
+                border: "1px solid #cbd9ea",
+                background: "linear-gradient(180deg,#f7faff 0%,#ffffff 100%)",
+                borderRadius: 8,
+                padding: 14,
+                minHeight: ENTRY_CARD_MIN_HEIGHT,
+                display: "flex",
+                flexDirection: "column",
+              }}
+            >
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#101828", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                系统晨抓
+                <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "3px 8px", background: morningStatusMeta.bg, color: morningStatusMeta.color }}>
+                  {morningStatusMeta.text}
+                </span>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{morningDashboard?.active_method_count ?? 0}</div>
+                  <div style={{ fontSize: 11, color: "#667085", marginTop: 2 }}>爬取方式</div>
+                </div>
+                <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{morningDashboard?.today_run?.stored_count ?? 0}</div>
+                  <div style={{ fontSize: 11, color: "#667085", marginTop: 2 }}>今日入库</div>
+                </div>
+              </div>
+
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#98a2b3", marginBottom: 6 }}>下次执行</div>
+              <div style={{ fontSize: 12, color: "#344054" }}>
+                {morningDashboard?.config.next_run_at
+                  ? `${morningDashboard.config.next_run_at.split("T")[0]} ${morningDashboard.config.next_run_at.split("T")[1]?.slice(0, 5) ?? ""}（北京时间）`
+                  : "未排程"}
+              </div>
+
+              <button
+                onClick={() => setMorningCrawlOpen(true)}
+                style={{
+                  marginTop: "auto",
+                  paddingTop: 12,
+                  width: "100%",
+                  border: "none",
+                  borderRadius: 8,
+                  padding: "8px 14px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: "#fff",
+                  background: "#0e7090",
+                  cursor: "pointer",
+                }}
+              >
+                打开系统晨抓
               </button>
             </div>
 
@@ -273,6 +422,7 @@ export function HomePage() {
         )}
 
         <MailTaskCenter open={mailOpen} onClose={() => setMailOpen(false)} homeFilters={params} />
+        <MorningCrawlModal open={morningCrawlOpen} onClose={() => setMorningCrawlOpen(false)} />
       </div>
     </div>
   );

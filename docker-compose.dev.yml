@@ -28,6 +28,8 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/osnews_empty_test
       ENABLE_SCHEDULER: "0"
+      ENABLE_MAIL_SCHEDULER: "1"
+      ENABLE_MORNING_CRAWL_SCHEDULER: "0"
       RUN_STARTUP_BACKFILL: "0"
       WATCHFILES_FORCE_POLLING: "true"
     depends_on:

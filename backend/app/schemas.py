@@ -148,6 +148,7 @@ MailRelativeRange = Literal["24h", "7d", "30d"]
 MailSortBy = Literal["published_at", "fetched_at"]
 MailSortDir = Literal["desc", "asc"]
 MailBoundaryMode = Literal["none", "absolute", "relative"]
+MailProviderKind = Literal["tof4", "smtp"]
 
 
 class MailFilterSnapshot(BaseModel):
@@ -188,10 +189,23 @@ class MailTemplateResponse(BaseModel):
     updated_at: datetime | None = None
 
 
+class MailTemplateUpdateRequest(BaseModel):
+    name: str | None = None
+    subject: str | None = None
+    recipients: list[str] | None = None
+    filter_snapshot: MailFilterSnapshot | None = None
+    is_active: bool | None = None
+
+
+class MailTemplateActionRequest(BaseModel):
+    provider: MailProviderKind | None = None
+
+
 class MailImmediatePreviewRequest(BaseModel):
     subject: str
     recipients: list[str] = Field(default_factory=list)
     filter_snapshot: MailFilterSnapshot = Field(default_factory=MailFilterSnapshot)
+    provider: MailProviderKind | None = None
 
 
 class MailPreviewItem(BaseModel):
@@ -208,6 +222,7 @@ class MailPreviewResponse(BaseModel):
     subject: str
     filter_snapshot: MailFilterSnapshot
     recipients: list[str] = Field(default_factory=list)
+    provider: MailProviderKind
     item_count: int
     items: list[MailPreviewItem] = Field(default_factory=list)
     rendered_html: str
@@ -215,6 +230,112 @@ class MailPreviewResponse(BaseModel):
 
 class MailImmediateSendResponse(BaseModel):
     delivery_id: int
+    provider: MailProviderKind
     status: str
     item_count: int
     error_message: str | None = None
+
+
+MailFrequency = Literal["daily", "weekly"]
+
+
+class MailScheduleCreateRequest(BaseModel):
+    name: str
+    subject: str
+    recipients: list[str] = Field(default_factory=list)
+    filter_snapshot: MailFilterSnapshot = Field(default_factory=MailFilterSnapshot)
+    frequency: MailFrequency = "daily"
+    send_time: str = "09:00"
+    enabled: bool = True
+    template_id: int | None = None
+
+
+class MailScheduleUpdateRequest(BaseModel):
+    name: str | None = None
+    subject: str | None = None
+    recipients: list[str] | None = None
+    filter_snapshot: MailFilterSnapshot | None = None
+    frequency: MailFrequency | None = None
+    send_time: str | None = None
+    enabled: bool | None = None
+
+
+class MailScheduleResponse(BaseModel):
+    id: int
+    template_id: int | None = None
+    template_name: str | None = None
+    name: str
+    subject: str
+    recipients: list[str] = Field(default_factory=list)
+    filter_snapshot: MailFilterSnapshot
+    frequency: MailFrequency
+    send_time: str
+    enabled: bool
+    last_sent_at: datetime | None = None
+    last_result_status: str | None = None
+    last_result_count: int | None = None
+    last_sent_marker_date: str | None = None
+    next_run_at: datetime | None = None
+    patrol_status: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class MailDeliveryLog(BaseModel):
+    id: int
+    trigger_type: str
+    status: str
+    item_count: int
+    subject: str
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error_message: str | None = None
+
+
+# --- System morning crawl ---
+
+MorningCrawlFrequency = Literal["daily", "weekly"]
+MorningCrawlLookback = Literal["24h", "7d", "30d", "all"]
+
+
+class MorningCrawlConfigResponse(BaseModel):
+    enabled: bool
+    run_time: str
+    frequency: MorningCrawlFrequency
+    lookback_window: MorningCrawlLookback
+    patrol_interval_hours: int
+    last_run_at: datetime | None = None
+    last_run_status: str | None = None
+    last_success_date: str | None = None
+    next_run_at: datetime | None = None
+
+
+class MorningCrawlConfigUpdateRequest(BaseModel):
+    enabled: bool | None = None
+    run_time: str | None = None
+    frequency: MorningCrawlFrequency | None = None
+    lookback_window: MorningCrawlLookback | None = None
+    patrol_interval_hours: int | None = Field(default=None, ge=1, le=24)
+
+
+class MorningCrawlRunSummary(BaseModel):
+    id: int
+    trigger_type: str
+    status: str
+    run_date: str | None = None
+    total_methods: int
+    success_methods: int
+    failed_methods: int
+    stored_count: int
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error_message: str | None = None
+
+
+class MorningCrawlDashboardResponse(BaseModel):
+    config: MorningCrawlConfigResponse
+    active_method_count: int
+    today_status: str          # not_run | running | success | partial | failed
+    today_run: MorningCrawlRunSummary | None = None
+    recent_runs: list[MorningCrawlRunSummary] = Field(default_factory=list)
+    is_running: bool = False

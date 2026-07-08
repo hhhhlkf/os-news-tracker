@@ -143,6 +143,7 @@ class MailSchedule(Base):
     __tablename__ = "mail_schedules"
     id: Mapped[int] = mapped_column(primary_key=True)
     template_id: Mapped[int | None] = mapped_column(ForeignKey("mail_templates.id"), nullable=True, index=True)
+    template: Mapped["MailTemplate | None"] = relationship("MailTemplate")
     name: Mapped[str] = mapped_column(String(200))
     subject: Mapped[str] = mapped_column(String(500))
     recipients_json: Mapped[list] = mapped_column(JSON, default=list)
@@ -393,3 +394,53 @@ class SiteDiscoveryRun(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+# --- System morning crawl (runs all active discovery methods on a schedule) ---
+
+class MorningCrawlConfig(Base):
+    """晨抓单例配置。所有时间字段以北京时间墙钟值语义存储。"""
+    __tablename__ = "morning_crawl_config"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    run_time: Mapped[str] = mapped_column(String(10), default="07:00")   # 北京时间 HH:MM
+    frequency: Mapped[str] = mapped_column(String(20), default="daily")  # daily | weekly
+    lookback_window: Mapped[str] = mapped_column(String(20), default="24h")  # 24h | 7d | 30d | all
+    patrol_interval_hours: Mapped[int] = mapped_column(Integer, default=3)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_run_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_success_date: Mapped[str | None] = mapped_column(String(10), nullable=True)  # 北京日期 marker
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class MorningCrawlRun(Base):
+    """一次晨抓执行记录（聚合）。"""
+    __tablename__ = "morning_crawl_runs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    trigger_type: Mapped[str] = mapped_column(String(30))   # scheduled | manual | patrol_resend
+    status: Mapped[str] = mapped_column(String(20), default="running")  # running | success | partial | failed
+    run_date: Mapped[str | None] = mapped_column(String(10), nullable=True)  # 北京日期 marker
+    total_methods: Mapped[int] = mapped_column(Integer, default=0)
+    success_methods: Mapped[int] = mapped_column(Integer, default=0)
+    failed_methods: Mapped[int] = mapped_column(Integer, default=0)
+    stored_count: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class MorningCrawlRunMethod(Base):
+    """晨抓单条 discovery method 的执行明细。"""
+    __tablename__ = "morning_crawl_run_methods"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("morning_crawl_runs.id"), index=True)
+    method_id: Mapped[int] = mapped_column(ForeignKey("crawl_methods.id"), index=True)
+    domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="ok")  # ok | empty | failed
+    discovered_count: Mapped[int] = mapped_column(Integer, default=0)
+    stored_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
