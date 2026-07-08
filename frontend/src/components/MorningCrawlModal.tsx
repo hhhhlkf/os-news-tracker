@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { MorningCrawlStatusPanel } from "./MorningCrawlStatusPanel";
+import { MorningCrawlTimelinePanel } from "./MorningCrawlTimelinePanel";
 
 type MorningCrawlTab = "status" | "timeline";
 
 const tabMeta: Array<{ key: MorningCrawlTab; label: string; description: string; icon: string }> = [
-  { key: "status", label: "状态与配置", description: "今日状态、晨抓配置、立即执行", icon: "◧" },
+  { key: "status", label: "状态与配置", description: "今日状态、定时抓取配置、立即执行", icon: "◧" },
   { key: "timeline", label: "时间线与失败", description: "今日时间线与失败方式", icon: "◷" },
 ];
 
@@ -55,7 +56,7 @@ export function MorningCrawlModal(props: { open: boolean; onClose: () => void })
           }}
         >
           <div>
-            <div style={{ fontSize: 24, fontWeight: 800, color: "#101828" }}>系统晨抓</div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: "#101828" }}>系统定时抓取</div>
             <div style={{ fontSize: 13, color: "#667085", marginTop: 6 }}>按北京时间定时运行全部启用中的爬取方式，查看今日状态与执行明细。</div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -74,7 +75,7 @@ export function MorningCrawlModal(props: { open: boolean; onClose: () => void })
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: navCollapsed ? "56px minmax(0,1fr)" : "230px minmax(0,1fr)", minHeight: 0 }}>
+        <div style={{ display: "grid", gridTemplateColumns: navCollapsed ? "56px minmax(0,1fr)" : "230px minmax(0,1fr)", height: "clamp(480px, 64vh, 720px)", minHeight: 0 }}>
           <div
             style={{
               borderRight: "1px solid #eaecf0",
@@ -120,13 +121,9 @@ export function MorningCrawlModal(props: { open: boolean; onClose: () => void })
             })}
           </div>
 
-          <div style={{ padding: 14, overflowY: "auto", background: "#fff" }}>
+          <div style={{ padding: 14, overflowY: "auto", background: "#fff", minHeight: 0 }}>
             {activeTab === "status" && <MorningCrawlStatusPanel />}
-            {activeTab === "timeline" && (
-              <div style={{ color: "#667085", fontSize: 13, padding: 24, textAlign: "center" }}>
-                时间线与失败方式即将上线（Task 6）。
-              </div>
-            )}
+            {activeTab === "timeline" && <MorningCrawlTimelinePanel />}
           </div>
         </div>
       </div>

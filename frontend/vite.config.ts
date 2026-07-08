@@ -38,6 +38,14 @@ export default defineConfig({
         target: "http://backend:8000",
         changeOrigin: true,
       },
+      "/mail": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
+      "/system-morning-crawl": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
     },
   },
 });

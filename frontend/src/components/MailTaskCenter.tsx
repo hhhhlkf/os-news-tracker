@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import type { ItemQueryParams } from "../api/client";
-import { fetchMailTemplates } from "../mail/api";
 import { MailImmediateSendPanel } from "./MailImmediateSendPanel";
+import { MailTemplateListPanel } from "./MailTemplateListPanel";
+import { MailScheduleListPanel, type ScheduleDraft } from "./MailScheduleListPanel";
 
 type MailTab = "immediate" | "templates" | "schedules";
 
@@ -20,13 +21,8 @@ export function MailTaskCenter(props: {
   const { open, onClose, homeFilters } = props;
   const [activeTab, setActiveTab] = useState<MailTab>("immediate");
   const [navCollapsed, setNavCollapsed] = useState(false);
+  const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraft | null>(null);
   const queryClient = useQueryClient();
-  const templatesQuery = useQuery({
-    queryKey: ["mail-templates"],
-    queryFn: fetchMailTemplates,
-    enabled: open,
-    retry: false,
-  });
 
   if (!open) return null;
 
@@ -155,34 +151,23 @@ export function MailTaskCenter(props: {
             )}
 
             {activeTab === "templates" && (
-              <div style={{ display: "grid", gap: 12 }}>
-                <section style={{ border: "1px solid #eaecf0", borderRadius: 12, padding: 14 }}>
-                  <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: "#667085", fontWeight: 700, marginBottom: 10 }}>
-                    模板列表骨架
-                  </div>
-                  {templatesQuery.isLoading && <div style={{ color: "#667085", fontSize: 13 }}>正在加载模板…</div>}
-                  {templatesQuery.isError && <div style={{ color: "#b42318", fontSize: 13 }}>模板列表加载失败</div>}
-                  {!templatesQuery.isLoading && !templatesQuery.isError && (
-                    <div style={{ display: "grid", gap: 10 }}>
-                      {(templatesQuery.data ?? []).map((template) => (
-                        <div key={template.id} style={{ border: "1px solid #dde4ec", borderRadius: 12, padding: "12px 14px", background: "#fff" }}>
-                          <div style={{ fontWeight: 800, color: "#101828" }}>{template.name}</div>
-                          <div style={{ fontSize: 12, color: "#667085", marginTop: 6 }}>{template.subject}</div>
-                        </div>
-                      ))}
-                      {(templatesQuery.data ?? []).length === 0 && (
-                        <div style={{ color: "#667085", fontSize: 13 }}>还没有邮件模板，Task 2/3 会接入从当前筛选保存模板的完整流程。</div>
-                      )}
-                    </div>
-                  )}
-                </section>
-              </div>
+              <MailTemplateListPanel
+                collapsedNav={navCollapsed}
+                onCreateSchedule={(template) => {
+                  setScheduleDraft({
+                    templateId: template.id,
+                    name: template.name,
+                    subject: template.subject,
+                    recipients: template.recipients ?? [],
+                    filter_snapshot: template.filter_snapshot,
+                  });
+                  setActiveTab("schedules");
+                }}
+              />
             )}
 
             {activeTab === "schedules" && (
-              <section style={{ border: "1px solid #eaecf0", borderRadius: 12, padding: 14, background: "#f8fafc", color: "#667085", fontSize: 13 }}>
-                Task 1 仅接入已预定发送的容器页。任务列表、状态摘要和执行日志会在 Task 4 落地。
-              </section>
+              <MailScheduleListPanel initialDraft={scheduleDraft} onDraftConsumed={() => setScheduleDraft(null)} />
             )}
           </div>
         </div>

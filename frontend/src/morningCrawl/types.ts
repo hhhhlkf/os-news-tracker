@@ -43,3 +43,25 @@ export interface MorningCrawlDashboard {
   recent_runs: MorningCrawlRunSummary[];
   is_running: boolean;
 }
+
+export interface MorningCrawlRunMethodDetail {
+  id: number;
+  method_id: number;
+  domain: string | null;
+  status: string;
+  discovered_count: number;
+  stored_count: number;
+  error_message: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface MorningCrawlRunDetail {
+  run: MorningCrawlRunSummary;
+  methods: MorningCrawlRunMethodDetail[];
+}
+
+export interface MorningCrawlRunsResponse {
+  runs: MorningCrawlRunSummary[];
+  default_run_id: number | null;
+}

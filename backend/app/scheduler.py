@@ -262,12 +262,12 @@ def _run_system_morning_crawl(*, trigger_type: str, patrol: bool) -> None:
 
 
 def run_system_morning_crawl() -> None:
-    """晨抓主任务：到点且当天未成功、且无进行中的 run 时，执行全部 active discovery methods。"""
+    """定时抓取主任务：到点且当天未成功、且无进行中的 run 时，执行全部 active discovery methods。"""
     _run_system_morning_crawl(trigger_type="scheduled", patrol=False)
 
 
 def patrol_system_morning_crawl() -> None:
-    """晨抓巡检：兜底补跑当天到点却漏跑/未成功的晨抓。"""
+    """定时抓取巡检：兜底补跑当天到点却漏跑/未成功的定时抓取。"""
     _run_system_morning_crawl(trigger_type="patrol_resend", patrol=True)
 
 
@@ -287,9 +287,9 @@ def register_morning_crawl_jobs(scheduler: BackgroundScheduler) -> None:
 
 
 def start_morning_crawl_scheduler() -> BackgroundScheduler:
-    """轻量调度器：只跑系统晨抓 tick / patrol，由独立开关 ENABLE_MORNING_CRAWL_SCHEDULER 控制。
+    """轻量调度器：只跑系统定时抓取 tick / patrol，由独立开关 ENABLE_MORNING_CRAWL_SCHEDULER 控制。
 
-    与 ENABLE_SCHEDULER（新闻源 cron）解耦，便于开发态单独验证晨抓。
+    与 ENABLE_SCHEDULER（新闻源 cron）解耦，便于开发态单独验证定时抓取。
     """
     scheduler = BackgroundScheduler()
     register_morning_crawl_jobs(scheduler)

@@ -3,77 +3,7 @@ import { fetchItemDetail, ApiError } from "../api/client";
 import type { ItemDetail as ItemDetailRecord } from "../types";
 import { ImportanceBadge } from "./ImportanceBadge";
 import { InfoTypeBadge } from "./InfoTypeBadge";
-
-function parseTechHighlight(text: string): { keyword: string; detail: string } | null {
-  const match = text.match(/^\[(.+?)\]\s*(.*)/);
-  if (match) {
-    return { keyword: match[1], detail: match[2] };
-  }
-  return null;
-}
-
-function domainFromUrl(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return url;
-  }
-}
-
-function truncateLinkText(text: string): string {
-  return text.length > 10 ? `${text.slice(0, 9)}…` : text;
-}
-
-function SourceCta({ url }: { url: string }) {
-  const domain = domainFromUrl(url);
-
-  return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      title={url}
-      aria-label={`阅读原文：${url}`}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        padding: "6px 9px",
-        border: "1px solid #d0d5dd",
-        borderRadius: 8,
-        background: "#fff",
-        color: "#344054",
-        fontSize: 12,
-        textDecoration: "none",
-        lineHeight: 1,
-        maxWidth: 168,
-        width: "fit-content",
-        whiteSpace: "nowrap",
-      }}
-    >
-      <span>阅读原文</span>
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width={14}
-        height={14}
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.8}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-      >
-        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-        <polyline points="15 3 21 3 21 9" />
-        <line x1="10" y1="14" x2="21" y2="3" />
-      </svg>
-      <span style={{ color: "#98a2b3", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis" }}>
-        {truncateLinkText(domain)}
-      </span>
-    </a>
-  );
-}
+import { HotspotTags, SourceCta, TechHighlightsList } from "./ItemMetaBlocks";
 
 function ItemDetailBody({ data }: { data: ItemDetailRecord }) {
   const dedupedSourceLinks = Array.from(
@@ -106,32 +36,7 @@ function ItemDetailBody({ data }: { data: ItemDetailRecord }) {
       {data.key_points.filter((kp) => !kp.startsWith("__type:")).length > 0 && (
         <section style={{ marginBottom: 16 }}>
           <h4 style={{ color: "#475467" }}>技术要点</h4>
-          <div>
-            {data.key_points.filter((kp) => !kp.startsWith("__type:")).map((kp, i) => {
-              const parsed = parseTechHighlight(kp);
-              return (
-                <div
-                  key={i}
-                  style={{
-                    border: "1px solid #eaecf0",
-                    borderRadius: 8,
-                    padding: "8px 12px",
-                    marginBottom: 6,
-                    background: "#fafafa",
-                  }}
-                >
-                  {parsed ? (
-                    <>
-                      <strong style={{ color: "#175cd3" }}>[{parsed.keyword}]</strong>{" "}
-                      {parsed.detail}
-                    </>
-                  ) : (
-                    kp
-                  )}
-                </div>
-              );
-            })}
-          </div>
+          <TechHighlightsList items={data.key_points} />
         </section>
       )}
 
@@ -147,13 +52,7 @@ function ItemDetailBody({ data }: { data: ItemDetailRecord }) {
           {data.sub_tags.length > 0 && (
             <div style={{ flex: "1 1 240px", minWidth: 0 }}>
               <h4 style={{ color: "#475467", margin: "0 0 8px" }}>技术热点</h4>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {data.sub_tags.map((tag, i) => (
-                  <span key={i} style={{
-                    background: "#f2f4f7", borderRadius: 6, padding: "2px 8px", fontSize: 12,
-                  }}>{tag}</span>
-                ))}
-              </div>
+              <HotspotTags tags={data.sub_tags} />
             </div>
           )}
 

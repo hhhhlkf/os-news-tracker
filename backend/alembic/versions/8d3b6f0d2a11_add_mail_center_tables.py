@@ -1,7 +1,7 @@
 """add_mail_center_tables
 
 Revision ID: 8d3b6f0d2a11
-Revises: f6a7b8c9d0e1
+Revises: a1488a70ac33
 Create Date: 2026-07-08 11:00:00.000000
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision: str = "8d3b6f0d2a11"
-down_revision: Union[str, Sequence[str], None] = "f6a7b8c9d0e1"
+down_revision: Union[str, Sequence[str], None] = "a1488a70ac33"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

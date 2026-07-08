@@ -339,3 +339,20 @@ class MorningCrawlDashboardResponse(BaseModel):
     today_run: MorningCrawlRunSummary | None = None
     recent_runs: list[MorningCrawlRunSummary] = Field(default_factory=list)
     is_running: bool = False
+
+
+class MorningCrawlRunMethodDetail(BaseModel):
+    id: int
+    method_id: int | None = None
+    domain: str | None = None
+    status: str
+    discovered_count: int
+    stored_count: int
+    error_message: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class MorningCrawlRunDetailResponse(BaseModel):
+    run: MorningCrawlRunSummary
+    methods: list[MorningCrawlRunMethodDetail] = Field(default_factory=list)

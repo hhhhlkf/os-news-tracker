@@ -17,6 +17,8 @@ const ENTRY_CARD_MIN_HEIGHT = 196;
 const MORNING_STATUS_META: Record<string, { text: string; bg: string; color: string }> = {
   not_run: { text: "今日未执行", bg: "#f2f4f7", color: "#475467" },
   running: { text: "执行中", bg: "#eff6ff", color: "#175cd3" },
+  stopping: { text: "停止中", bg: "#fffaeb", color: "#b54708" },
+  cancelled: { text: "已停止", bg: "#f2f4f7", color: "#475467" },
   success: { text: "今日已完成", bg: "#ecfdf3", color: "#067647" },
   partial: { text: "部分成功", bg: "#fffaeb", color: "#b54708" },
   failed: { text: "执行失败", bg: "#fef3f2", color: "#b42318" },
@@ -113,6 +115,16 @@ export function HomePage() {
   const filterChips = summarizeActiveFilters(filters);
   const templateCount = mailTemplatesQuery.data?.length ?? 0;
   const scheduleCount = mailSchedulesQuery.data?.length ?? 0;
+  const enabledScheduleCount = (mailSchedulesQuery.data ?? []).filter((s) => s.enabled).length;
+  const mailBadge = mailSchedulesQuery.isError
+    ? { text: "未连接", bg: "#fef3f2", color: "#b42318" }
+    : mailSchedulesQuery.isLoading
+      ? { text: "加载中", bg: "#f2f4f7", color: "#475467" }
+      : enabledScheduleCount > 0
+        ? { text: `${enabledScheduleCount} 个预定运行中`, bg: "#ecfdf3", color: "#067647" }
+        : scheduleCount > 0
+          ? { text: "预定全部暂停", bg: "#fffaeb", color: "#b54708" }
+          : { text: "暂无预定", bg: "#f2f4f7", color: "#475467" };
   const morningDashboard = morningCrawlQuery.data;
   const morningStatus = morningDashboard?.today_status ?? "not_run";
   const morningStatusMeta = MORNING_STATUS_META[morningStatus] ?? MORNING_STATUS_META.not_run;
@@ -255,8 +267,8 @@ export function HomePage() {
             >
               <div style={{ fontSize: 14, fontWeight: 800, color: "#101828", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                 邮件任务中心
-                <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "3px 8px", background: "#eff6ff", color: "#175cd3" }}>
-                  框架已接入
+                <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "3px 8px", background: mailBadge.bg, color: mailBadge.color }}>
+                  {mailBadge.text}
                 </span>
               </div>
 
@@ -327,7 +339,7 @@ export function HomePage() {
               }}
             >
               <div style={{ fontSize: 14, fontWeight: 800, color: "#101828", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                系统晨抓
+                系统定时抓取
                 <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "3px 8px", background: morningStatusMeta.bg, color: morningStatusMeta.color }}>
                   {morningStatusMeta.text}
                 </span>
@@ -367,7 +379,7 @@ export function HomePage() {
                   cursor: "pointer",
                 }}
               >
-                打开系统晨抓
+                打开系统定时抓取
               </button>
             </div>
 

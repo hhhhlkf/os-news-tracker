@@ -399,7 +399,7 @@ class SiteDiscoveryRun(Base):
 # --- System morning crawl (runs all active discovery methods on a schedule) ---
 
 class MorningCrawlConfig(Base):
-    """晨抓单例配置。所有时间字段以北京时间墙钟值语义存储。"""
+    """定时抓取单例配置。所有时间字段以北京时间墙钟值语义存储。"""
     __tablename__ = "morning_crawl_config"
     id: Mapped[int] = mapped_column(primary_key=True)
     enabled: Mapped[bool] = mapped_column(default=True)
@@ -416,7 +416,7 @@ class MorningCrawlConfig(Base):
 
 
 class MorningCrawlRun(Base):
-    """一次晨抓执行记录（聚合）。"""
+    """一次定时抓取执行记录（聚合）。"""
     __tablename__ = "morning_crawl_runs"
     id: Mapped[int] = mapped_column(primary_key=True)
     trigger_type: Mapped[str] = mapped_column(String(30))   # scheduled | manual | patrol_resend
@@ -432,11 +432,13 @@ class MorningCrawlRun(Base):
 
 
 class MorningCrawlRunMethod(Base):
-    """晨抓单条 discovery method 的执行明细。"""
+    """定时抓取单条 discovery method 的执行明细。"""
     __tablename__ = "morning_crawl_run_methods"
     id: Mapped[int] = mapped_column(primary_key=True)
     run_id: Mapped[int] = mapped_column(ForeignKey("morning_crawl_runs.id"), index=True)
-    method_id: Mapped[int] = mapped_column(ForeignKey("crawl_methods.id"), index=True)
+    method_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crawl_methods.id", ondelete="SET NULL"), index=True, nullable=True
+    )
     domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="ok")  # ok | empty | failed
     discovered_count: Mapped[int] = mapped_column(Integer, default=0)

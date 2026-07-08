@@ -61,12 +61,12 @@ def _startup(app: FastAPI) -> None:
                 name="startup-backfill",
             )
     # 邮件预定发送有独立开关，与 ENABLE_SCHEDULER（新闻源 cron）解耦，
-    # 便于开发态只跑邮件定时。后续系统晨抓同样应使用自己的独立开关。
+    # 便于开发态只跑邮件定时。后续系统定时抓取同样应使用自己的独立开关。
     if _env_flag("ENABLE_MAIL_SCHEDULER", "0"):
         from app.scheduler import start_mail_scheduler
 
         app.state.mail_scheduler = start_mail_scheduler()
-    # 系统晨抓有独立开关，与 ENABLE_SCHEDULER / ENABLE_MAIL_SCHEDULER 解耦。
+    # 系统定时抓取有独立开关，与 ENABLE_SCHEDULER / ENABLE_MAIL_SCHEDULER 解耦。
     if _env_flag("ENABLE_MORNING_CRAWL_SCHEDULER", "0"):
         from app.scheduler import start_morning_crawl_scheduler
 

@@ -4,7 +4,9 @@ import type {
   MorningCrawlConfig,
   MorningCrawlConfigUpdateRequest,
   MorningCrawlDashboard,
+  MorningCrawlRunDetail,
   MorningCrawlRunSummary,
+  MorningCrawlRunsResponse,
 } from "./types";
 
 const configuredBase = import.meta.env.VITE_API_BASE?.trim();
@@ -63,4 +65,22 @@ export async function runMorningCrawlNow(): Promise<MorningCrawlRunSummary> {
     headers: { ...authHeaders() },
   });
   return expectOk<MorningCrawlRunSummary>(r, "failed to trigger morning crawl");
+}
+
+export async function stopMorningCrawl(): Promise<MorningCrawlDashboard> {
+  const r = await fetch(`${BASE}/system-morning-crawl/stop`, {
+    method: "POST",
+    headers: { ...authHeaders() },
+  });
+  return expectOk<MorningCrawlDashboard>(r, "failed to stop morning crawl");
+}
+
+export async function fetchMorningCrawlRuns(limit = 20): Promise<MorningCrawlRunsResponse> {
+  const r = await fetch(`${BASE}/system-morning-crawl/runs?limit=${limit}`, { headers: { ...authHeaders() } });
+  return expectOk<MorningCrawlRunsResponse>(r, "failed to load morning crawl runs");
+}
+
+export async function fetchMorningCrawlRunDetail(runId: number): Promise<MorningCrawlRunDetail> {
+  const r = await fetch(`${BASE}/system-morning-crawl/runs/${runId}`, { headers: { ...authHeaders() } });
+  return expectOk<MorningCrawlRunDetail>(r, "failed to load morning crawl run detail");
 }

@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
-import type { ItemQueryParams } from "../api/client";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { fetchItems, type ItemQueryParams } from "../api/client";
 import {
   buildMailFilterSnapshot,
   createMailTemplate,
   previewImmediateMail,
   sendImmediateMail,
 } from "../mail/api";
-import type { MailImmediateSendRequest, MailPreviewResponse, MailTemplate } from "../mail/types";
+import type { MailImmediateSendRequest, MailPreviewResponse, MailProviderKind, MailTemplate } from "../mail/types";
+import { formatDateYmd, HotspotTags, SourceCta, TechHighlightsList } from "./ItemMetaBlocks";
 
 export function MailImmediateSendPanel(props: {
   homeFilters: ItemQueryParams;
@@ -15,10 +16,28 @@ export function MailImmediateSendPanel(props: {
 }) {
   const { homeFilters, onTemplateSaved } = props;
   const filterSnapshot = useMemo(() => buildMailFilterSnapshot(homeFilters), [homeFilters]);
+  const estimateParams = useMemo(
+    () => ({
+      ...homeFilters,
+      limit: 1,
+      offset: 0,
+    }),
+    [homeFilters],
+  );
   const [subject, setSubject] = useState("技术新闻筛选简报");
   const [recipientsText, setRecipientsText] = useState("");
+  const [sendTime, setSendTime] = useState("09:00");
+  const [sendFrequency, setSendFrequency] = useState<"once" | "daily" | "weekly">("once");
+  const [mailProvider, setMailProvider] = useState<MailProviderKind>("tof4");
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [previewData, setPreviewData] = useState<MailPreviewResponse | null>(null);
+  const [previewHeight, setPreviewHeight] = useState<number>(620);
+  const leftColumnRef = useRef<HTMLDivElement | null>(null);
+  const estimateQuery = useQuery({
+    queryKey: ["mail-immediate-estimate", estimateParams],
+    queryFn: () => fetchItems(estimateParams),
+    retry: false,
+  });
 
   const recipients = useMemo(
     () =>
@@ -31,12 +50,36 @@ export function MailImmediateSendPanel(props: {
 
   useEffect(() => {
     setPreviewData(null);
-  }, [homeFilters, subject, recipientsText]);
+  }, [homeFilters, subject, recipientsText, mailProvider]);
+
+  useEffect(() => {
+    const element = leftColumnRef.current;
+    if (!element) return;
+
+    const updateHeight = () => {
+      setPreviewHeight(Math.ceil(element.getBoundingClientRect().height));
+    };
+
+    updateHeight();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateHeight);
+      return () => window.removeEventListener("resize", updateHeight);
+    }
+
+    const observer = new ResizeObserver(() => updateHeight());
+    observer.observe(element);
+    window.addEventListener("resize", updateHeight);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateHeight);
+    };
+  }, [estimateQuery.data?.total, recipientsText, subject, statusMessage, previewData?.item_count, homeFilters, mailProvider]);
 
   const previewMutation = useMutation({
     mutationFn: async (request: MailImmediateSendRequest) => previewImmediateMail(request),
     onSuccess: (data) => {
-      setStatusMessage(`预览已生成，共 ${data.item_count} 条。`);
+      setStatusMessage(`预览已生成，共 ${data.item_count} 条，通道：${data.provider.toUpperCase()}。`);
       setPreviewData(data);
     },
     onError: (error) => {
@@ -47,7 +90,11 @@ export function MailImmediateSendPanel(props: {
   const sendMutation = useMutation({
     mutationFn: async (request: MailImmediateSendRequest) => sendImmediateMail(request),
     onSuccess: (data) => {
-      setStatusMessage(data.status === "sent" ? `发送成功，共 ${data.item_count} 条。` : `发送失败：${data.error_message ?? "未知错误"}`);
+      setStatusMessage(
+        data.status === "sent"
+          ? `发送成功，共 ${data.item_count} 条，通道：${data.provider.toUpperCase()}。`
+          : `发送失败（${data.provider.toUpperCase()}）：${data.error_message ?? "未知错误"}`,
+      );
     },
     onError: (error) => {
       setStatusMessage(error instanceof Error ? error.message : "发送失败");
@@ -76,23 +123,146 @@ export function MailImmediateSendPanel(props: {
     subject: subject.trim() || "技术新闻筛选简报",
     recipients,
     filter_snapshot: filterSnapshot,
+    provider: mailProvider,
   };
   const canSend = recipients.length > 0 && subject.trim().length > 0;
   const canSaveTemplate = subject.trim().length > 0;
+  const relativeWindow = useMemo(() => {
+    const after = filterSnapshot.published_after;
+    const before = filterSnapshot.published_before;
+    if (!after || before) return null;
+
+    const afterDate = new Date(`${after}T00:00:00Z`);
+    if (Number.isNaN(afterDate.getTime())) return null;
+
+    const now = new Date();
+    const nowUtcStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const afterUtcStart = Date.UTC(afterDate.getUTCFullYear(), afterDate.getUTCMonth(), afterDate.getUTCDate());
+    const diffDays = Math.round((nowUtcStart - afterUtcStart) / 86400000);
+
+    if (diffDays === 1) return "最近 24h";
+    if (diffDays === 7) return "最近 7d";
+    if (diffDays === 30) return "最近 30d";
+    return null;
+  }, [filterSnapshot.published_after, filterSnapshot.published_before]);
+
+  const snapshotSummary = useMemo(() => {
+    const rows: Array<{ label: string; value: string }> = [];
+    if (filterSnapshot.q) {
+      rows.push({ label: "关键词", value: filterSnapshot.q });
+    }
+    if (filterSnapshot.main_category) {
+      rows.push({ label: "主分类", value: filterSnapshot.main_category });
+    }
+    if (filterSnapshot.info_type) {
+      rows.push({ label: "信息类型", value: filterSnapshot.info_type });
+    }
+    if (filterSnapshot.importance) {
+      rows.push({ label: "重要程度", value: filterSnapshot.importance });
+    }
+    if (filterSnapshot.sub_tag) {
+      rows.push({ label: "技术热点", value: filterSnapshot.sub_tag });
+    }
+
+    let publishedLabel = "全部时间";
+    if (relativeWindow) {
+      publishedLabel = relativeWindow;
+    } else if (filterSnapshot.published_after || filterSnapshot.published_before) {
+      const afterLabel = filterSnapshot.published_after ? `从 ${filterSnapshot.published_after}` : "";
+      const beforeLabel = filterSnapshot.published_before ? `到 ${filterSnapshot.published_before}` : "";
+      publishedLabel = `${afterLabel}${afterLabel && beforeLabel ? " " : ""}${beforeLabel}`.trim();
+    }
+    rows.push({ label: "发布时间", value: publishedLabel });
+
+    if (relativeWindow) {
+      rows.push({ label: "窗口说明", value: `发送时按当下时间重算 ${relativeWindow.replace("最近 ", "")} 窗口` });
+    }
+
+    const sortByLabel = filterSnapshot.sort_by === "fetched_at" ? "入库时间" : "发布时间";
+    const sortDirLabel = filterSnapshot.sort_dir === "asc" ? "最早优先" : "最新优先";
+    rows.push({ label: "排序方式", value: `${sortByLabel} / ${sortDirLabel}` });
+
+    return rows;
+  }, [filterSnapshot, relativeWindow]);
+
+  const previewHeaderSummary = useMemo(() => {
+    const segments = [
+      filterSnapshot.main_category?.trim(),
+      filterSnapshot.importance?.trim(),
+      filterSnapshot.sub_tag?.trim(),
+      filterSnapshot.q?.trim(),
+      relativeWindow ??
+        (filterSnapshot.published_after || filterSnapshot.published_before
+          ? snapshotSummary.find((row) => row.label === "发布时间")?.value
+          : null),
+    ].filter((value): value is string => !!value);
+
+    if (segments.length > 0) {
+      return segments.join(" · ");
+    }
+    return "依据当前筛选快照生成";
+  }, [
+    filterSnapshot.main_category,
+    filterSnapshot.importance,
+    filterSnapshot.sub_tag,
+    filterSnapshot.q,
+    filterSnapshot.published_after,
+    filterSnapshot.published_before,
+    relativeWindow,
+    snapshotSummary,
+  ]);
+
+  const sendFrequencyLabel = useMemo(() => {
+    if (sendFrequency === "daily") return "每日";
+    if (sendFrequency === "weekly") return "每周";
+    return "单次发送";
+  }, [sendFrequency]);
+
+  const providerLabel = useMemo(() => (mailProvider === "tof4" ? "TOF4 API" : "SMTP"), [mailProvider]);
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "0.92fr 1.08fr", gap: 12, alignItems: "start" }}>
-      <div style={{ display: "grid", gap: 12 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "0.8fr 1.2fr", gap: 12, alignItems: "start" }}>
+      <div ref={leftColumnRef} style={{ display: "grid", gap: 12 }}>
         <section style={{ border: "1px solid #eaecf0", borderRadius: 12, padding: 14, background: "#fff" }}>
           <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: "#667085", fontWeight: 700, marginBottom: 10 }}>
             当前筛选快照
           </div>
-          <div style={{ display: "grid", gap: 8, fontSize: 12, color: "#475467", lineHeight: 1.45 }}>
-            {Object.entries(filterSnapshot).map(([key, value]) => (
-              <div key={key}>
-                {key}: {value === null || value === undefined || value === "" ? "-" : String(value)}
+          <div style={{ display: "grid", gap: 8 }}>
+            {snapshotSummary.map((row) => (
+              <div
+                key={row.label}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "84px minmax(0,1fr)",
+                  gap: 10,
+                  alignItems: "start",
+                  fontSize: 12,
+                  lineHeight: 1.45,
+                }}
+              >
+                <div style={{ color: "#667085", fontWeight: 700 }}>{row.label}</div>
+                <div style={{ color: "#344054" }}>{row.value}</div>
               </div>
             ))}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "84px minmax(0,1fr)",
+                gap: 10,
+                alignItems: "start",
+                fontSize: 12,
+                lineHeight: 1.45,
+              }}
+            >
+              <div style={{ color: "#667085", fontWeight: 700 }}>预计纳入</div>
+              <div style={{ color: estimateQuery.isError ? "#b42318" : "#344054" }}>
+                {estimateQuery.isLoading
+                  ? "计算中..."
+                  : estimateQuery.isError
+                    ? "查询失败"
+                    : `${estimateQuery.data?.total ?? 0} 条`}
+              </div>
+            </div>
           </div>
         </section>
 
@@ -115,14 +285,74 @@ export function MailImmediateSendPanel(props: {
               style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "10px 12px", fontSize: 13, color: "#344054", resize: "vertical" }}
             />
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "10px 12px", fontSize: 13, color: "#344054", background: "#fff" }}>发送时间：保存模板后在后续任务页配置</div>
-              <div style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "10px 12px", fontSize: 13, color: "#344054", background: "#fff" }}>频率：保存模板后在后续任务页配置</div>
+              <label style={{ display: "grid", gap: 6 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>发送时间</span>
+                <input
+                  type="time"
+                  value={sendTime}
+                  onChange={(e) => setSendTime(e.target.value)}
+                  style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "10px 12px", fontSize: 13, color: "#344054", background: "#fff" }}
+                />
+              </label>
+              <label style={{ display: "grid", gap: 6 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>频率</span>
+                <select
+                  value={sendFrequency}
+                  onChange={(e) => setSendFrequency(e.target.value as "once" | "daily" | "weekly")}
+                  style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "10px 12px", fontSize: 13, color: "#344054", background: "#fff" }}
+                >
+                  <option value="once">单次发送</option>
+                  <option value="daily">每日</option>
+                  <option value="weekly">每周</option>
+                </select>
+              </label>
+            </div>
+            <div style={{ display: "grid", gap: 6 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>发送通道</span>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {([
+                  { value: "tof4", label: "TOF4 API" },
+                  { value: "smtp", label: "SMTP" },
+                ] as const).map((option) => {
+                  const active = mailProvider === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setMailProvider(option.value)}
+                      style={{
+                        border: active ? "1px solid #175cd3" : "1px solid #d0d5dd",
+                        borderRadius: 999,
+                        padding: "8px 12px",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        color: active ? "#175cd3" : "#475467",
+                        background: active ? "#eff8ff" : "#fff",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button
                 onClick={() => previewMutation.mutate(requestPayload)}
                 disabled={previewMutation.isPending}
-                style={{ border: "none", borderRadius: 999, padding: "8px 14px", fontSize: 12, fontWeight: 700, color: "#fff", background: "#344054", cursor: previewMutation.isPending ? "wait" : "pointer", opacity: previewMutation.isPending ? 0.7 : 1 }}
+                style={{
+                  border: "none",
+                  borderRadius: 999,
+                  padding: "8px 14px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: "#fff",
+                  background: "linear-gradient(135deg,#475467 0%,#344054 100%)",
+                  cursor: previewMutation.isPending ? "wait" : "pointer",
+                  opacity: previewMutation.isPending ? 0.7 : 1,
+                  boxShadow: "0 8px 18px rgba(52, 64, 84, 0.18)",
+                }}
               >
                 {previewMutation.isPending ? "生成中..." : "生成预览"}
               </button>
@@ -136,9 +366,10 @@ export function MailImmediateSendPanel(props: {
                   fontSize: 12,
                   fontWeight: 700,
                   color: "#fff",
-                  background: "#175cd3",
+                  background: "linear-gradient(135deg,#2563eb 0%,#1d4ed8 100%)",
                   cursor: sendMutation.isPending ? "wait" : canSend ? "pointer" : "not-allowed",
                   opacity: sendMutation.isPending || !canSend ? 0.6 : 1,
+                  boxShadow: "0 10px 22px rgba(29, 78, 216, 0.22)",
                 }}
               >
                 {sendMutation.isPending ? "发送中..." : "立即发送"}
@@ -153,9 +384,10 @@ export function MailImmediateSendPanel(props: {
                   fontSize: 12,
                   fontWeight: 700,
                   color: "#fff",
-                  background: "#0f766e",
+                  background: "linear-gradient(135deg,#0f766e 0%,#0d9488 100%)",
                   cursor: saveTemplateMutation.isPending ? "wait" : canSaveTemplate ? "pointer" : "not-allowed",
                   opacity: saveTemplateMutation.isPending || !canSaveTemplate ? 0.6 : 1,
+                  boxShadow: "0 10px 22px rgba(13, 148, 136, 0.18)",
                 }}
               >
                 {saveTemplateMutation.isPending ? "保存中..." : "保存为模板"}
@@ -167,36 +399,69 @@ export function MailImmediateSendPanel(props: {
               </div>
             )}
             {statusMessage && (
-              <div style={{ fontSize: 12, color: statusMessage.includes("失败") ? "#b42318" : "#027a48" }}>{statusMessage}</div>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 6, fontSize: 12, color: statusMessage.includes("失败") ? "#b42318" : "#027a48" }}>
+                <span style={{ flex: 1 }}>{statusMessage}</span>
+                <button
+                  onClick={() => setStatusMessage(null)}
+                  aria-label="关闭提示"
+                  title="关闭"
+                  style={{ border: "none", background: "transparent", color: "inherit", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0, opacity: 0.7 }}
+                >
+                  ×
+                </button>
+              </div>
             )}
           </div>
         </section>
       </div>
 
-      <section style={{ border: "1px solid #d0d5dd", borderRadius: 16, overflow: "hidden", background: "#f8fafc" }}>
+      <section
+        style={{
+          border: "1px solid #d0d5dd",
+          borderRadius: 16,
+          overflow: "hidden",
+          background: "#f8fafc",
+          alignSelf: "start",
+          height: `${previewHeight}px`,
+          maxHeight: `${previewHeight}px`,
+          minHeight: 0,
+          display: "grid",
+          gridTemplateRows: "auto minmax(0, 1fr)",
+        }}
+      >
         <div style={{ background: "linear-gradient(135deg,#101828 0%,#1d2939 100%)", color: "#f8fafc", padding: "18px 20px" }}>
           <div style={{ fontSize: 12, color: "#98a2b3", marginBottom: 6 }}>HTML 邮件预览</div>
           <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>{previewData?.subject ?? subject ?? "技术新闻筛选简报"}</div>
           <div style={{ fontSize: 13, lineHeight: 1.7, color: "#d0d5dd" }}>
-            当前筛选生成的即时预览
+            筛选条件：{previewHeaderSummary}
+            <br />
+            发送时间：{sendTime} · 频率：{sendFrequencyLabel} · 通道：{previewData?.provider?.toUpperCase() ?? providerLabel}
             <br />
             {previewData ? `共 ${previewData.item_count} 条，准备发送给 ${previewData.recipients.length || 0} 个收件人。` : "点击“生成预览”后展示邮件内容。"}
           </div>
         </div>
-        <div style={{ padding: 14, display: "grid", gap: 12, maxHeight: "64vh", overflowY: "auto" }}>
+        <div style={{ padding: 14, display: "grid", gap: 12, minHeight: 0, overflowY: "auto" }}>
           {previewData?.items.length ? (
             previewData.items.map((item, index) => (
               <div key={`${item.source_url}-${index}`} style={{ background: "#fff", border: "1px solid #eaecf0", borderRadius: 12, padding: "14px 16px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 8 }}>
                   <div style={{ fontSize: 16, fontWeight: 800, color: "#101828" }}>{item.title}</div>
-                  <div style={{ fontSize: 11, color: "#667085", whiteSpace: "nowrap" }}>{item.published_at ?? "-"}</div>
+                  <div style={{ fontSize: 11, color: "#667085", whiteSpace: "nowrap" }}>{formatDateYmd(item.published_at)}</div>
                 </div>
-                <div style={{ display: "grid", gap: 6, fontSize: 13, color: "#475467", lineHeight: 1.7 }}>
-                  <div><strong style={{ color: "#101828" }}>推荐理由：</strong>{item.reason ?? "暂无"}</div>
+                <div style={{ display: "grid", gap: 10, fontSize: 13, color: "#475467", lineHeight: 1.7 }}>
                   <div><strong style={{ color: "#101828" }}>摘要：</strong>{item.summary ?? "暂无"}</div>
-                  <div><strong style={{ color: "#101828" }}>技术要点：</strong>{item.key_points.length ? item.key_points.join("；") : "暂无"}</div>
-                  <div><strong style={{ color: "#101828" }}>技术热点：</strong>{item.hotspots.length ? item.hotspots.join(" / ") : "暂无"}</div>
-                  <div><strong style={{ color: "#101828" }}>来源链接：</strong><span style={{ color: "#175cd3", wordBreak: "break-all" }}>{item.source_url}</span></div>
+                  <div>
+                    <strong style={{ color: "#101828", display: "block", marginBottom: 6 }}>技术要点</strong>
+                    <TechHighlightsList items={item.key_points} compact />
+                  </div>
+                  <div>
+                    <strong style={{ color: "#101828", display: "block", marginBottom: 6 }}>技术热点</strong>
+                    <HotspotTags tags={item.hotspots} />
+                  </div>
+                  <div>
+                    <strong style={{ color: "#101828", display: "block", marginBottom: 6 }}>来源链接</strong>
+                    <SourceCta url={item.source_url} />
+                  </div>
                 </div>
               </div>
             ))

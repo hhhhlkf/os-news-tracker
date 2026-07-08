@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchMorningCrawlDashboard,
   runMorningCrawlNow,
+  stopMorningCrawl,
   updateMorningCrawlConfig,
 } from "../morningCrawl/api";
 import type { MorningCrawlFrequency, MorningCrawlLookback } from "../morningCrawl/types";
@@ -26,6 +27,8 @@ const FIELD: React.CSSProperties = {
 const STATUS_META: Record<string, { text: string; bg: string; color: string }> = {
   not_run: { text: "今日未执行", bg: "#f2f4f7", color: "#475467" },
   running: { text: "执行中", bg: "#eff6ff", color: "#175cd3" },
+  stopping: { text: "停止中", bg: "#fffaeb", color: "#b54708" },
+  cancelled: { text: "已停止", bg: "#f2f4f7", color: "#475467" },
   success: { text: "今日已完成", bg: "#ecfdf3", color: "#067647" },
   partial: { text: "部分成功", bg: "#fffaeb", color: "#b54708" },
   failed: { text: "执行失败", bg: "#fef3f2", color: "#b42318" },
@@ -86,7 +89,7 @@ export function MorningCrawlStatusPanel() {
         patrol_interval_hours: patrolHours,
       }),
     onSuccess: () => {
-      setStatusMessage("晨抓配置已保存。");
+      setStatusMessage("定时抓取配置已保存。");
       setEditing(false);
       invalidate();
     },
@@ -96,26 +99,58 @@ export function MorningCrawlStatusPanel() {
   const runNowMutation = useMutation({
     mutationFn: async () => runMorningCrawlNow(),
     onSuccess: (run) => {
-      setStatusMessage(run.status === "running" ? "已开始执行晨抓，进度将自动刷新。" : `晨抓已触发（${run.status}）。`);
+      setStatusMessage(run.status === "running" ? "已开始执行定时抓取，进度将自动刷新。" : `定时抓取已触发（${run.status}）。`);
       invalidate();
     },
     onError: (error) => setStatusMessage(error instanceof Error ? error.message : "触发失败"),
   });
 
+  const stopMutation = useMutation({
+    mutationFn: async () => stopMorningCrawl(),
+    onSuccess: () => {
+      setStatusMessage("已发出停止请求，正在停止当前爬取（当前方式跑完后终止后续）。");
+      invalidate();
+    },
+    onError: (error) => setStatusMessage(error instanceof Error ? error.message : "停止失败"),
+  });
+
+  const toggleEnabledMutation = useMutation({
+    mutationFn: async (next: boolean) => updateMorningCrawlConfig({ enabled: next }),
+    onSuccess: (_data, next) => {
+      setStatusMessage(
+        next
+          ? "已开启定时抓取，到点将自动执行（需 ENABLE_MORNING_CRAWL_SCHEDULER 开启）。"
+          : "已关闭定时抓取，将不再到点自动执行（不影响手动「立即执行」）。",
+      );
+      setEditing(false);
+      invalidate();
+    },
+    onError: (error) => setStatusMessage(error instanceof Error ? error.message : "操作失败"),
+  });
+
   const status = dashboard?.today_status ?? "not_run";
   const statusMeta = STATUS_META[status] ?? STATUS_META.not_run;
   const running = dashboard?.is_running ?? false;
+  const scheduleEnabled = dashboard?.config.enabled ?? false;
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
       {statusMessage && (
-        <div style={{ fontSize: 13, color: "#175cd3", background: "#eff6ff", border: "1px solid #d3e3fb", borderRadius: 8, padding: "8px 12px" }}>
-          {statusMessage}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, color: "#175cd3", background: "#eff6ff", border: "1px solid #d3e3fb", borderRadius: 8, padding: "8px 12px" }}>
+          <span style={{ flex: 1 }}>{statusMessage}</span>
+          <button
+            onClick={() => setStatusMessage(null)}
+            aria-label="关闭提示"
+            title="关闭"
+            style={{ border: "none", background: "transparent", color: "inherit", cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 0, opacity: 0.7 }}
+          >
+            ×
+          </button>
         </div>
       )}
 
       {/* 顶部状态指标 */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 10 }}>
         <div style={{ ...PANEL, padding: "12px 14px" }}>
           <div style={{ ...PANEL_TITLE, marginBottom: 6 }}>今日状态</div>
           <span style={{ display: "inline-block", fontSize: 13, fontWeight: 800, borderRadius: 999, padding: "3px 10px", background: statusMeta.bg, color: statusMeta.color }}>
@@ -123,7 +158,7 @@ export function MorningCrawlStatusPanel() {
           </span>
           <div style={{ fontSize: 12, color: "#667085", marginTop: 6 }}>
             {dashboard?.today_run
-              ? `方式 ${dashboard.today_run.success_methods}/${dashboard.today_run.total_methods} · 入库 ${dashboard.today_run.stored_count}`
+              ? `方式 ${dashboard.today_run.success_methods}/${dashboard.today_run.total_methods}`
               : "今日尚无执行记录"}
           </div>
         </div>
@@ -133,16 +168,21 @@ export function MorningCrawlStatusPanel() {
           <div style={{ fontSize: 12, color: "#667085" }}>启用中 discovery methods</div>
         </div>
         <div style={{ ...PANEL, padding: "12px 14px" }}>
+          <div style={{ ...PANEL_TITLE, marginBottom: 6 }}>今日入库</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#101828" }}>{dashboard?.today_run?.stored_count ?? 0}</div>
+          <div style={{ fontSize: 12, color: "#667085" }}>今日新增入库条数</div>
+        </div>
+        <div style={{ ...PANEL, padding: "12px 14px" }}>
           <div style={{ ...PANEL_TITLE, marginBottom: 6 }}>下次执行</div>
           <div style={{ fontSize: 15, fontWeight: 800, color: "#101828" }}>{formatDateTime(dashboard?.config.next_run_at ?? null)}</div>
           <div style={{ fontSize: 12, color: "#667085" }}>北京时间 · {dashboard?.config.enabled ? "已启用" : "已停用"}</div>
         </div>
       </div>
 
-      {/* 晨抓配置表单 */}
+      {/* 定时抓取配置表单 */}
       <section style={PANEL}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <div style={PANEL_TITLE}>晨抓配置</div>
+          <div style={PANEL_TITLE}>定时抓取配置</div>
           {editing ? (
             <div style={{ display: "flex", gap: 8 }}>
               <button
@@ -197,7 +237,7 @@ export function MorningCrawlStatusPanel() {
 
         <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, fontSize: 13, color: "#344054", cursor: editing ? "pointer" : "default" }}>
           <input type="checkbox" checked={enabled} disabled={!editing} onChange={(e) => setEnabled(e.target.checked)} />
-          启用系统晨抓（到点自动执行；需开启 ENABLE_MORNING_CRAWL_SCHEDULER）
+          启用系统定时抓取（到点自动执行；需开启 ENABLE_MORNING_CRAWL_SCHEDULER）
         </label>
       </section>
 
@@ -205,29 +245,72 @@ export function MorningCrawlStatusPanel() {
       <section style={{ ...PANEL, background: "#f8fafc" }}>
         <div style={{ ...PANEL_TITLE, marginBottom: 8 }}>规则说明</div>
         <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: "#475467", lineHeight: 1.7 }}>
-          <li>晨抓只运行状态为 active 的 discovery methods，逐条执行、走正常入库富化流程。</li>
-          <li>单条方式失败不会阻断整次晨抓；只有整次无失败才记为「今日已完成」。</li>
+          <li>定时抓取只运行状态为 active 的 discovery methods，逐条执行、走正常入库富化流程。</li>
+          <li>单条方式失败不会阻断整次定时抓取；只有整次无失败才记为「今日已完成」。</li>
           <li>到点未成功时，巡检任务按设定间隔兜底补跑。</li>
           <li>所有时间按北京时间（UTC+8）判定与展示。</li>
         </ul>
       </section>
 
-      <button
-        onClick={() => runNowMutation.mutate()}
-        disabled={runNowMutation.isPending || running}
-        style={{
-          border: "none",
-          borderRadius: 10,
-          padding: "12px 16px",
-          fontSize: 14,
-          fontWeight: 800,
-          color: "#fff",
-          background: running ? "#98a2b3" : "#175cd3",
-          cursor: running ? "not-allowed" : "pointer",
-        }}
-      >
-        {running ? "晨抓执行中…" : "立即执行一次"}
-      </button>
+      <div style={{ display: "flex", gap: 10 }}>
+        <button
+          onClick={() => runNowMutation.mutate()}
+          disabled={runNowMutation.isPending || running}
+          style={{
+            flex: 1,
+            border: "none",
+            borderRadius: 10,
+            padding: "12px 16px",
+            fontSize: 14,
+            fontWeight: 800,
+            color: "#fff",
+            background: running ? "#98a2b3" : "#175cd3",
+            cursor: running ? "not-allowed" : "pointer",
+          }}
+        >
+          {running ? "定时抓取执行中…" : "立即执行一次"}
+        </button>
+        <button
+          onClick={() => stopMutation.mutate()}
+          disabled={stopMutation.isPending || !running}
+          title="停止所有正在进行的爬取（当前方式执行完后终止后续）"
+          style={{
+            flex: 1,
+            border: running ? "none" : "1px solid #f0c4c0",
+            borderRadius: 10,
+            padding: "12px 16px",
+            fontSize: 14,
+            fontWeight: 800,
+            color: running ? "#fff" : "#d0908b",
+            background: running ? "#d92d20" : "#fff",
+            cursor: running ? "pointer" : "not-allowed",
+          }}
+        >
+          {stopMutation.isPending ? "正在停止…" : "停止所有爬取"}
+        </button>
+        <button
+          onClick={() => toggleEnabledMutation.mutate(!scheduleEnabled)}
+          disabled={toggleEnabledMutation.isPending || !dashboard}
+          title={scheduleEnabled ? "关闭定时抓取：不再到点自动执行" : "开启定时抓取：到点自动执行"}
+          style={{
+            flex: 1,
+            borderRadius: 10,
+            padding: "12px 16px",
+            fontSize: 14,
+            fontWeight: 800,
+            cursor: toggleEnabledMutation.isPending || !dashboard ? "not-allowed" : "pointer",
+            border: scheduleEnabled ? "1px solid #f0c4c0" : "none",
+            color: scheduleEnabled ? "#b42318" : "#fff",
+            background: scheduleEnabled ? "#fff" : "#067647",
+          }}
+        >
+          {toggleEnabledMutation.isPending
+            ? "处理中…"
+            : scheduleEnabled
+              ? "关闭定时抓取"
+              : "开启定时抓取"}
+        </button>
+      </div>
     </div>
   );
 }

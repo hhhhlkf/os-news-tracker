@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     smtp_from_name: str = "OS News Tracker"
     smtp_use_tls: bool = False
     smtp_use_ssl: bool = False
+    mail_provider: str = "tof4"
+    tof4_paasid: str | None = None
+    tof4_token: str | None = None
+    tof4_url: str | None = None
+    tof4_from_email: str | None = None
+    tof4_from_name: str | None = None
 
 
 @lru_cache

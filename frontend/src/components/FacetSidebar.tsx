@@ -71,7 +71,7 @@ export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
 
   if (isLoading) {
     return (
-      <aside style={{ width: 260, paddingRight: 20 }}>
+      <aside style={{ width: "100%" }}>
         <div style={{ color: "#667085", fontSize: 14 }}>正在加载筛选项…</div>
       </aside>
     );
@@ -88,7 +88,7 @@ export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
   ];
 
   return (
-    <aside style={{ width: 260, paddingRight: 20, flexShrink: 0 }}>
+    <aside style={{ width: "100%" }}>
       {groups.map(([key, label]) => (
         <section
           key={key}
