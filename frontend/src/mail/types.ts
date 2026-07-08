@@ -40,3 +40,35 @@ export interface MailTemplateCreateRequest {
   filter_snapshot: MailFilterSnapshot;
   is_active?: boolean;
 }
+
+export interface MailPreviewItem {
+  title: string;
+  reason: string | null;
+  summary: string | null;
+  key_points: string[];
+  hotspots: string[];
+  source_url: string;
+  published_at: string | null;
+}
+
+export interface MailPreviewResponse {
+  subject: string;
+  filter_snapshot: MailFilterSnapshot;
+  recipients: string[];
+  item_count: number;
+  items: MailPreviewItem[];
+  rendered_html: string;
+}
+
+export interface MailImmediateSendRequest {
+  subject: string;
+  recipients: string[];
+  filter_snapshot: MailFilterSnapshot;
+}
+
+export interface MailImmediateSendResponse {
+  delivery_id: number;
+  status: string;
+  item_count: number;
+  error_message: string | null;
+}

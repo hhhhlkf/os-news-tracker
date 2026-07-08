@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ItemQueryParams } from "../api/client";
-import { buildMailFilterSnapshot, fetchMailTemplates } from "../mail/api";
+import { fetchMailTemplates } from "../mail/api";
+import { MailImmediateSendPanel } from "./MailImmediateSendPanel";
 
 type MailTab = "immediate" | "templates" | "schedules";
 
@@ -19,14 +20,13 @@ export function MailTaskCenter(props: {
   const { open, onClose, homeFilters } = props;
   const [activeTab, setActiveTab] = useState<MailTab>("immediate");
   const [navCollapsed, setNavCollapsed] = useState(false);
+  const queryClient = useQueryClient();
   const templatesQuery = useQuery({
     queryKey: ["mail-templates"],
     queryFn: fetchMailTemplates,
     enabled: open,
     retry: false,
   });
-
-  const filterSnapshot = useMemo(() => buildMailFilterSnapshot(homeFilters), [homeFilters]);
 
   if (!open) return null;
 
@@ -146,23 +146,12 @@ export function MailTaskCenter(props: {
 
           <div style={{ padding: 14, overflowY: "auto", background: "#fff" }}>
             {activeTab === "immediate" && (
-              <div style={{ display: "grid", gap: 12 }}>
-                <section style={{ border: "1px solid #eaecf0", borderRadius: 12, padding: 14 }}>
-                  <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: "#667085", fontWeight: 700, marginBottom: 10 }}>
-                    当前筛选快照
-                  </div>
-                  <div style={{ display: "grid", gap: 8, fontSize: 12, color: "#475467", lineHeight: 1.45 }}>
-                    {Object.entries(filterSnapshot).map(([key, value]) => (
-                      <div key={key}>
-                        {key}: {value === null || value === undefined || value === "" ? "-" : String(value)}
-                      </div>
-                    ))}
-                  </div>
-                </section>
-                <section style={{ border: "1px solid #eaecf0", borderRadius: 12, padding: 14, background: "#f8fafc", color: "#667085", fontSize: 13 }}>
-                  Task 1 仅接入框架。立即发送的表单、HTML 预览和真实发送能力会在 Task 2 落地。
-                </section>
-              </div>
+              <MailImmediateSendPanel
+                homeFilters={homeFilters}
+                onTemplateSaved={() => {
+                  void queryClient.invalidateQueries({ queryKey: ["mail-templates"] });
+                }}
+              />
             )}
 
             {activeTab === "templates" && (

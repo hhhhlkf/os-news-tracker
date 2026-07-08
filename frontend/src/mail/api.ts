@@ -1,7 +1,13 @@
 import { authHeaders } from "../auth";
 import type { ItemQueryParams } from "../api/client";
 import { ApiError } from "../api/client";
-import type { MailTemplate, MailTemplateCreateRequest } from "./types";
+import type {
+  MailImmediateSendRequest,
+  MailImmediateSendResponse,
+  MailPreviewResponse,
+  MailTemplate,
+  MailTemplateCreateRequest,
+} from "./types";
 
 const configuredBase = import.meta.env.VITE_API_BASE?.trim();
 const BASE = configuredBase ? configuredBase.replace(/\/+$/, "") : "";
@@ -69,4 +75,22 @@ export async function createMailTemplate(request: MailTemplateCreateRequest): Pr
     body: JSON.stringify(request),
   });
   return expectOk<MailTemplate>(r, "failed to create mail template");
+}
+
+export async function previewImmediateMail(request: MailImmediateSendRequest): Promise<MailPreviewResponse> {
+  const r = await fetch(`${BASE}/mail/immediate/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(request),
+  });
+  return expectOk<MailPreviewResponse>(r, "failed to preview immediate mail");
+}
+
+export async function sendImmediateMail(request: MailImmediateSendRequest): Promise<MailImmediateSendResponse> {
+  const r = await fetch(`${BASE}/mail/immediate/send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(request),
+  });
+  return expectOk<MailImmediateSendResponse>(r, "failed to send immediate mail");
 }

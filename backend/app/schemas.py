@@ -186,3 +186,35 @@ class MailTemplateResponse(BaseModel):
     last_send_count: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+class MailImmediatePreviewRequest(BaseModel):
+    subject: str
+    recipients: list[str] = Field(default_factory=list)
+    filter_snapshot: MailFilterSnapshot = Field(default_factory=MailFilterSnapshot)
+
+
+class MailPreviewItem(BaseModel):
+    title: str
+    reason: str | None = None
+    summary: str | None = None
+    key_points: list[str] = Field(default_factory=list)
+    hotspots: list[str] = Field(default_factory=list)
+    source_url: str
+    published_at: str | None = None
+
+
+class MailPreviewResponse(BaseModel):
+    subject: str
+    filter_snapshot: MailFilterSnapshot
+    recipients: list[str] = Field(default_factory=list)
+    item_count: int
+    items: list[MailPreviewItem] = Field(default_factory=list)
+    rendered_html: str
+
+
+class MailImmediateSendResponse(BaseModel):
+    delivery_id: int
+    status: str
+    item_count: int
+    error_message: str | None = None
