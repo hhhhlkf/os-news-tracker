@@ -4,6 +4,7 @@ import html
 import logging
 import re
 from datetime import datetime, timezone
+from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import httpx
@@ -24,7 +25,7 @@ _EMBEDDED_TS_PATTERNS = (
     re.compile(r"\b(?:publish_time|ct)\s*=\s*['\"]?(\d{10})['\"]?"),
     re.compile(r'"publish_time"\s*:\s*"?(\\d{10})"?'.replace("\\\\d", "\\d")),
 )
-DEFAULT_SEARCH_MAX_PAGES = 10
+DEFAULT_SEARCH_MAX_PAGES = 5
 
 
 def wechat_search_articles(
@@ -32,41 +33,78 @@ def wechat_search_articles(
     limit: int | None = None,
     max_pages: int | None = DEFAULT_SEARCH_MAX_PAGES,
     resolve_final_urls_limit: int | None = None,
+    progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> dict:
     """Search WeChat articles via Sogou WeChat search.
 
-    First tries httpx for speed; falls back to Playwright if the page
-    is JS-rendered (no article links in static HTML).
+    Default to Playwright so multi discovery is less likely to be blocked
+    by Sogou's anti-bot verification on plain HTTP requests.
     """
-    if resolve_final_urls_limit == 0:
-        result = _search_via_httpx(query, limit, max_pages=max_pages)
-        return result
-
-    # httpx got empty/CAPTCHA — try Playwright for JS-rendered content
-    logger.info("wechat_search_articles using Playwright because final URL resolution is required")
+    _emit_progress(
+        progress_callback,
+        "wechat_search_started",
+        query=query,
+        limit=limit,
+        max_pages=max_pages,
+        resolve_final_urls_limit=resolve_final_urls_limit,
+    )
+    logger.info("wechat_search_articles using Playwright by default")
     return _search_via_playwright(
         query,
         limit,
         max_pages=max_pages,
         resolve_final_urls_limit=resolve_final_urls_limit,
+        progress_callback=progress_callback,
     )
 
 
-def _search_via_httpx(query: str, limit: int | None = None, *, max_pages: int | None = DEFAULT_SEARCH_MAX_PAGES) -> dict:
+def _search_via_httpx(
+    query: str,
+    limit: int | None = None,
+    *,
+    max_pages: int | None = DEFAULT_SEARCH_MAX_PAGES,
+    progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
+) -> dict:
     items: list[dict] = []
     with httpx.Client(headers=DEFAULT_HEADERS, timeout=20, follow_redirects=True) as client:
         page_no = 1
         total_pages = max_pages or DEFAULT_SEARCH_MAX_PAGES
         while page_no <= total_pages:
+            _emit_progress(
+                progress_callback,
+                "wechat_search_page_started",
+                query=query,
+                page_no=page_no,
+                total_pages=total_pages,
+                fetched_count=len(items),
+                transport="httpx",
+            )
             params = {"type": "2", "query": query, "ie": "utf8"}
             if page_no > 1:
                 params["page"] = str(page_no)
             response = client.get(SOGOU_WEIXIN_URL, params=params)
             if response.status_code in {403, 429}:
+                _emit_progress(
+                    progress_callback,
+                    "wechat_search_rate_limited",
+                    query=query,
+                    page_no=page_no,
+                    raw_status=response.status_code,
+                    fetched_count=len(items),
+                    transport="httpx",
+                )
                 return {"status": "rate_limited", "items": items, "raw_status": response.status_code}
             response.raise_for_status()
             text = response.text
             if _is_sogou_captcha(text):
+                _emit_progress(
+                    progress_callback,
+                    "wechat_search_captcha_required",
+                    query=query,
+                    page_no=page_no,
+                    fetched_count=len(items),
+                    transport="httpx",
+                )
                 return {
                     "status": "captcha_required",
                     "items": items,
@@ -77,8 +115,25 @@ def _search_via_httpx(query: str, limit: int | None = None, *, max_pages: int | 
                 break
             page_items = _extract_articles_from_html(text, remaining)
             if not page_items:
+                _emit_progress(
+                    progress_callback,
+                    "wechat_search_page_empty",
+                    query=query,
+                    page_no=page_no,
+                    fetched_count=len(items),
+                    transport="httpx",
+                )
                 break
             items.extend(page_items)
+            _emit_progress(
+                progress_callback,
+                "wechat_search_page_finished",
+                query=query,
+                page_no=page_no,
+                page_items=len(page_items),
+                fetched_count=len(items),
+                transport="httpx",
+            )
             if limit is not None and len(items) >= limit:
                 items = items[:limit]
                 break
@@ -86,6 +141,14 @@ def _search_via_httpx(query: str, limit: int | None = None, *, max_pages: int | 
                 break
             page_no += 1
     status = "ok" if items else "empty"
+    _emit_progress(
+        progress_callback,
+        "wechat_search_finished",
+        query=query,
+        fetched_count=len(items),
+        status=status,
+        transport="httpx",
+    )
     return {
         "status": status,
         "items": items,
@@ -99,6 +162,7 @@ def _search_via_playwright(
     *,
     max_pages: int | None = DEFAULT_SEARCH_MAX_PAGES,
     resolve_final_urls_limit: int | None = None,
+    progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> dict:
     """Use Playwright to render Sogou WeChat search page and extract article links."""
     from playwright.sync_api import sync_playwright
@@ -123,6 +187,15 @@ def _search_via_playwright(
             total_pages = max_pages or DEFAULT_SEARCH_MAX_PAGES
             resolved_count = 0
             while page_no <= total_pages:
+                _emit_progress(
+                    progress_callback,
+                    "wechat_search_page_started",
+                    query=query,
+                    page_no=page_no,
+                    total_pages=total_pages,
+                    fetched_count=len(items),
+                    transport="playwright",
+                )
                 target_url = f"{SOGOU_WEIXIN_URL}?type=2&query={query}&ie=utf8"
                 if page_no > 1:
                     target_url += f"&page={page_no}"
@@ -143,6 +216,14 @@ def _search_via_playwright(
                 content = page.content()
                 if _is_sogou_captcha(content):
                     browser.close()
+                    _emit_progress(
+                        progress_callback,
+                        "wechat_search_captcha_required",
+                        query=query,
+                        page_no=page_no,
+                        fetched_count=len(items),
+                        transport="playwright",
+                    )
                     return {
                         "status": "captcha_required",
                         "items": items,
@@ -162,8 +243,26 @@ def _search_via_playwright(
                 )
                 resolved_count += sum(1 for item in page_items if "mp.weixin.qq.com/" in str(item.get("url") or ""))
                 if not page_items:
+                    _emit_progress(
+                        progress_callback,
+                        "wechat_search_page_empty",
+                        query=query,
+                        page_no=page_no,
+                        fetched_count=len(items),
+                        transport="playwright",
+                    )
                     break
                 items.extend(page_items)
+                _emit_progress(
+                    progress_callback,
+                    "wechat_search_page_finished",
+                    query=query,
+                    page_no=page_no,
+                    page_items=len(page_items),
+                    fetched_count=len(items),
+                    resolved_count=resolved_count,
+                    transport="playwright",
+                )
                 if limit is not None and len(items) >= limit:
                     items = items[:limit]
                     break
@@ -173,15 +272,41 @@ def _search_via_playwright(
             browser.close()
     except Exception as exc:
         logger.warning("Playwright Sogou search failed: %s", exc)
+        _emit_progress(
+            progress_callback,
+            "wechat_search_failed",
+            query=query,
+            fetched_count=len(items),
+            transport="playwright",
+            error=str(exc),
+        )
         return {"status": "error", "items": [], "error": str(exc),
                 "fetched_at": datetime.now(timezone.utc).isoformat()}
 
     status = "ok" if items else "empty"
+    _emit_progress(
+        progress_callback,
+        "wechat_search_finished",
+        query=query,
+        fetched_count=len(items),
+        status=status,
+        transport="playwright",
+    )
     return {
         "status": status,
         "items": items,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _emit_progress(
+    callback: Callable[[str, dict[str, Any]], None] | None,
+    event: str,
+    **payload: Any,
+) -> None:
+    if callback is None:
+        return
+    callback(event, payload)
 
 
 def _extract_articles_from_dom(page, limit: int | None, resolve_final_urls_limit: int | None = None) -> list[dict]:
@@ -406,7 +531,7 @@ def wechat_fetch_account_history(
     account_id: str | None,
     fakeid: str | None,
     biz: str | None,
-    limit: int = 100,
+    limit: int = 30,
     fetch_content: bool = False,
     auth_ref: str = "wechat_mp_default",
 ) -> dict:
@@ -491,7 +616,12 @@ def wechat_fetch_article_content(url: str, auth_ref: str | None = None) -> dict:
     auth = resolve_wechat_auth_profile(auth_ref) if auth_ref else {"status": "pending_auth"}
     if auth.get("status") == "ok":
         headers["Cookie"] = auth["cookie"]
-    with httpx.Client(headers=headers, timeout=20, follow_redirects=True) as client:
+    # 收紧超时并限制重定向跳数：src=11/src=3 跳转链每跳各自超时会把单篇累加到数十秒，
+    # 用较短的 connect/read 超时 + 最多 3 跳重定向，把单篇上限压到 ~10s 级别。
+    timeout = httpx.Timeout(10.0, connect=5.0)
+    with httpx.Client(
+        headers=headers, timeout=timeout, follow_redirects=True, max_redirects=3
+    ) as client:
         response = client.get(url)
     if response.status_code in {403, 429}:
         return {"status": "rate_limited", "content": ""}
@@ -530,19 +660,46 @@ def wechat_fetch_article_content(url: str, auth_ref: str | None = None) -> dict:
     }
 
 
+WECHAT_ENRICH_MAX_WORKERS = 6
+
+
 def wechat_enrich_articles(
     items: list[dict],
     *,
     fetch_content: bool = True,
     fill_missing_only: bool = True,
     max_items: int | None = None,
+    progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
+    max_workers: int = WECHAT_ENRICH_MAX_WORKERS,
 ) -> dict:
-    enriched: list[dict] = []
-    enriched_count = 0
-    statuses: set[str] = set()
-    attempted_count = 0
+    """逐篇补抓微信文章正文。有界并发（默认 6）抓取，避免串行长等待；
+    抓取前先按 url 去重，避免同一批重复抓取同一链接。"""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    # 1) 抓取前去重：同一批内相同 url 只保留首个（无 url 的原样保留）
+    deduped: list[dict] = []
+    seen_urls: set[str] = set()
     for item in items:
-        next_item = dict(item)
+        url = str(item.get("url") or "")
+        if url:
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+        deduped.append(dict(item))
+
+    _emit_progress(
+        progress_callback,
+        "wechat_enrich_started",
+        total_items=len(deduped),
+        fetch_content=fetch_content,
+        fill_missing_only=fill_missing_only,
+        max_items=max_items,
+    )
+
+    # 2) 选出需要抓取的条目（受 max_items 限额），按原始顺序取前 N 条
+    fetch_indices: list[int] = []
+    for idx, next_item in enumerate(deduped):
         need_fetch = not fill_missing_only
         if fill_missing_only:
             need_fetch = (
@@ -550,31 +707,83 @@ def wechat_enrich_articles(
                 or not next_item.get("summary")
                 or (fetch_content and not next_item.get("content"))
             )
-        if need_fetch and next_item.get("url") and (max_items is None or attempted_count < max_items):
-            attempted_count += 1
+        if need_fetch and next_item.get("url") and (max_items is None or len(fetch_indices) < max_items):
+            fetch_indices.append(idx)
+
+    statuses: set[str] = set()
+    lock = threading.Lock()
+    counters = {"attempted": 0, "enriched": 0}
+
+    def _work(idx: int) -> None:
+        next_item = deduped[idx]  # 每个 idx 仅由一个任务处理，字段写入无需加锁
+        with lock:
+            counters["attempted"] += 1
+            my_attempt = counters["attempted"]
+        _emit_progress(
+            progress_callback,
+            "wechat_enrich_item_started",
+            attempted_count=my_attempt,
+            max_items=max_items,
+            title=next_item.get("title"),
+            url=next_item.get("url"),
+        )
+        try:
             article = wechat_fetch_article_content(str(next_item["url"]))
-            statuses.add(article.get("status", "unknown"))
-            if article.get("status") in {"ok", "empty"}:
-                if article.get("resolved_url"):
-                    next_item["url"] = article["resolved_url"]
-                if article.get("published_at") and not next_item.get("published_at"):
-                    next_item["published_at"] = article["published_at"]
-                if article.get("summary") and not next_item.get("summary"):
-                    next_item["summary"] = article["summary"]
-                if fetch_content and article.get("content") and not next_item.get("content"):
-                    next_item["content"] = article["content"]
-                if article.get("title") and not next_item.get("title"):
-                    next_item["title"] = article["title"]
-                enriched_count += 1
-        enriched.append(next_item)
+        except Exception:  # noqa: BLE001 - 单篇抓取失败不影响其他并发任务
+            article = {"status": "error", "content": ""}
+        st = article.get("status", "unknown")
+        did_enrich = False
+        if st in {"ok", "empty"}:
+            if article.get("resolved_url"):
+                next_item["url"] = article["resolved_url"]
+            if article.get("published_at") and not next_item.get("published_at"):
+                next_item["published_at"] = article["published_at"]
+            if article.get("summary") and not next_item.get("summary"):
+                next_item["summary"] = article["summary"]
+            if fetch_content and article.get("content") and not next_item.get("content"):
+                next_item["content"] = article["content"]
+            if article.get("title") and not next_item.get("title"):
+                next_item["title"] = article["title"]
+            did_enrich = True
+        with lock:
+            statuses.add(st)
+            if did_enrich:
+                counters["enriched"] += 1
+            cur_enriched = counters["enriched"]
+        _emit_progress(
+            progress_callback,
+            "wechat_enrich_item_finished",
+            attempted_count=my_attempt,
+            enriched_count=cur_enriched,
+            title=next_item.get("title"),
+            url=next_item.get("url"),
+            status=st,
+        )
+
+    if fetch_indices:
+        workers = max(1, min(max_workers, len(fetch_indices)))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            list(executor.map(_work, fetch_indices))
+
+    attempted_count = counters["attempted"]
+    enriched_count = counters["enriched"]
     status = "ok"
     if statuses and statuses <= {"rate_limited"}:
         status = "rate_limited"
-    elif statuses and statuses <= {"unsupported", "empty"} and enriched_count == 0:
+    elif statuses and statuses <= {"unsupported", "empty", "error"} and enriched_count == 0:
         status = "empty"
+    _emit_progress(
+        progress_callback,
+        "wechat_enrich_finished",
+        status=status,
+        attempted_count=attempted_count,
+        enriched_count=enriched_count,
+        total_items=len(deduped),
+        fetch_content=fetch_content,
+    )
     return {
         "status": status,
-        "items": enriched,
+        "items": deduped,
         "enriched_count": enriched_count,
         "attempted_count": attempted_count,
         "fetch_content": fetch_content,

@@ -14,6 +14,60 @@ type RowState =
   | { kind: "error"; msg: string };
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50];
+const STORAGE_KEY = "crawl-method-list-state:v1";
+
+type SummaryState = { text: string; tone: "success" | "danger"; showItemsLink: boolean } | null;
+
+type PersistedViewState = {
+  selectedIds: number[];
+  rowStates: Record<number, RowState>;
+  summary: SummaryState;
+  batchRunning: boolean;
+  batchCancelling: boolean;
+  batchDeleting: boolean;
+  page: number;
+  pageSize: number;
+};
+
+const DEFAULT_VIEW_STATE: PersistedViewState = {
+  selectedIds: [],
+  rowStates: {},
+  summary: null,
+  batchRunning: false,
+  batchCancelling: false,
+  batchDeleting: false,
+  page: 1,
+  pageSize: PAGE_SIZE_OPTIONS[0],
+};
+
+function readPersistedViewState(): PersistedViewState {
+  if (typeof window === "undefined") return DEFAULT_VIEW_STATE;
+  try {
+    const raw = window.sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return DEFAULT_VIEW_STATE;
+    const parsed = JSON.parse(raw) as Partial<PersistedViewState>;
+    const pageSize = PAGE_SIZE_OPTIONS.includes(Number(parsed.pageSize))
+      ? Number(parsed.pageSize)
+      : DEFAULT_VIEW_STATE.pageSize;
+    return {
+      selectedIds: Array.isArray(parsed.selectedIds) ? parsed.selectedIds.map(Number).filter(Number.isFinite) : [],
+      rowStates: parsed.rowStates && typeof parsed.rowStates === "object" ? parsed.rowStates as Record<number, RowState> : {},
+      summary: parsed.summary ?? null,
+      batchRunning: Boolean(parsed.batchRunning),
+      batchCancelling: Boolean(parsed.batchCancelling),
+      batchDeleting: Boolean(parsed.batchDeleting),
+      page: Math.max(1, Number(parsed.page) || 1),
+      pageSize,
+    };
+  } catch {
+    return DEFAULT_VIEW_STATE;
+  }
+}
+
+function writePersistedViewState(state: PersistedViewState) {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
 
 export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
   onOpenMethod?: (id: number) => void;
@@ -21,19 +75,34 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
   runLimitState: NewsRunFormState;
 }) {
   const qc = useQueryClient();
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [rowStates, setRowStates] = useState<Record<number, RowState>>({});
-  const [summary, setSummary] = useState<{ text: string; tone: "success" | "danger"; showItemsLink: boolean } | null>(null);
-  const [batchRunning, setBatchRunning] = useState(false);
-  const [batchCancelling, setBatchCancelling] = useState(false);
-  const [batchDeleting, setBatchDeleting] = useState(false);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
+  const [viewState, setViewState] = useState<PersistedViewState>(() => readPersistedViewState());
   const abortRef = useRef<AbortController | null>(null);
   const cancelledRef = useRef(false);
+  const mountedRef = useRef(true);
+  const viewStateRef = useRef(viewState);
+
+  function commitViewState(next: PersistedViewState) {
+    viewStateRef.current = next;
+    writePersistedViewState(next);
+    if (mountedRef.current) {
+      setViewState(next);
+    }
+  }
+
+  function updateViewState(updater: (prev: PersistedViewState) => PersistedViewState) {
+    commitViewState(updater(viewStateRef.current));
+  }
 
   const list = useQuery({ queryKey: ["discovery-methods"], queryFn: listDiscoveryMethods });
   const methods = useMemo(() => list.data ?? [], [list.data]);
+  const selected = useMemo(() => new Set(viewState.selectedIds), [viewState.selectedIds]);
+  const rowStates = viewState.rowStates;
+  const summary = viewState.summary;
+  const batchRunning = viewState.batchRunning;
+  const batchCancelling = viewState.batchCancelling;
+  const batchDeleting = viewState.batchDeleting;
+  const page = viewState.page;
+  const pageSize = viewState.pageSize;
   const totalPages = Math.max(1, Math.ceil(methods.length / pageSize));
   const pageStart = (page - 1) * pageSize;
   const pageMethods = methods.slice(pageStart, pageStart + pageSize);
@@ -42,10 +111,45 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
   const allPageSelected = selectablePageIds.length > 0 && pageSelectedCount === selectablePageIds.length;
 
   useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    viewStateRef.current = viewState;
+  }, [viewState]);
+
+  useEffect(() => {
     if (page > totalPages) {
-      setPage(totalPages);
+      updateViewState((prev) => ({ ...prev, page: totalPages }));
     }
   }, [page, totalPages]);
+
+  useEffect(() => {
+    const staleIds = new Set(methods.map((method) => method.id));
+    if (viewState.selectedIds.some((id) => !staleIds.has(id))) {
+      updateViewState((prev) => ({
+        ...prev,
+        selectedIds: prev.selectedIds.filter((id) => staleIds.has(id)),
+      }));
+    }
+  }, [methods]);
+
+  useEffect(() => {
+    if (!viewState.batchRunning) return;
+    const timer = window.setInterval(() => {
+      const persisted = readPersistedViewState();
+      if (JSON.stringify(persisted) !== JSON.stringify(viewStateRef.current)) {
+        viewStateRef.current = persisted;
+        if (mountedRef.current) {
+          setViewState(persisted);
+        }
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [viewState.batchRunning]);
 
   const fetchMut = useMutation({
     mutationFn: ({ id, request, signal }: { id: number; request: ReturnType<typeof buildManualNewsRunRequest>; signal?: AbortSignal }) =>
@@ -59,16 +163,20 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
     const ids = [...selected];
     const request = buildManualNewsRunRequest(runLimitState);
     if (!request) {
-      setSummary({ text: "抓取限制无效，请先补全时间范围和目标条目数。", tone: "danger", showItemsLink: false });
+      updateViewState((prev) => ({
+        ...prev,
+        summary: { text: "抓取限制无效，请先补全时间范围和目标条目数。", tone: "danger", showItemsLink: false },
+      }));
       return;
     }
     if (ids.length === 0) {
-      setSummary({ text: "请先选择至少一个爬取方式。", tone: "danger", showItemsLink: false });
+      updateViewState((prev) => ({
+        ...prev,
+        summary: { text: "请先选择至少一个爬取方式。", tone: "danger", showItemsLink: false },
+      }));
       return;
     }
-    setSummary(null);
-    setBatchRunning(true);
-    setBatchCancelling(false);
+    updateViewState((prev) => ({ ...prev, summary: null, batchRunning: true, batchCancelling: false }));
     cancelledRef.current = false;
     let totalDisc = 0;
     let totalStored = 0;
@@ -77,38 +185,64 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
         if (cancelledRef.current) break;
         const controller = new AbortController();
         abortRef.current = controller;
-        setRowStates((s) => ({ ...s, [id]: { kind: "running" } }));
+        updateViewState((prev) => ({
+          ...prev,
+          rowStates: {
+            ...prev.rowStates,
+            [id]: { kind: prev.batchCancelling ? "cancelled" : "running" },
+          },
+        }));
         try {
           const r = await fetchMut.mutateAsync({ id, request, signal: controller.signal });
           if (cancelledRef.current || controller.signal.aborted) {
-            setRowStates((s) => ({ ...s, [id]: { kind: "cancelled" } }));
+            updateViewState((prev) => ({
+              ...prev,
+              rowStates: { ...prev.rowStates, [id]: { kind: "cancelled" } },
+            }));
             break;
           }
           totalDisc += r.discovered_count;
           totalStored += r.stored_count;
-          setRowStates((s) => ({ ...s, [id]: { kind: "done", discovered: r.discovered_count, stored: r.stored_count } }));
+          updateViewState((prev) => ({
+            ...prev,
+            rowStates: {
+              ...prev.rowStates,
+              [id]: { kind: "done", discovered: r.discovered_count, stored: r.stored_count },
+            },
+          }));
         } catch (e) {
           const aborted = controller.signal.aborted || e instanceof DOMException && e.name === "AbortError";
           if (aborted || cancelledRef.current) {
-            setRowStates((s) => ({ ...s, [id]: { kind: "cancelled" } }));
+            updateViewState((prev) => ({
+              ...prev,
+              rowStates: { ...prev.rowStates, [id]: { kind: "cancelled" } },
+            }));
             break;
           }
-          setRowStates((s) => ({ ...s, [id]: { kind: "error", msg: e instanceof ApiError ? e.message : "抓取失败" } }));
+          updateViewState((prev) => ({
+            ...prev,
+            rowStates: {
+              ...prev.rowStates,
+              [id]: { kind: "error", msg: e instanceof ApiError ? e.message : "运行失败" },
+            },
+          }));
         } finally {
           if (abortRef.current === controller) {
             abortRef.current = null;
           }
         }
       }
-      setSummary({
-        text: cancelledRef.current ? `已取消抓取 · 已处理 ${totalDisc} 条 · 入库 ${totalStored} 条` : `本次抓取 ${totalDisc} 条 · 入库 ${totalStored} 条`,
-        tone: "success",
-        showItemsLink: true,
-      });
+      updateViewState((prev) => ({
+        ...prev,
+        summary: {
+          text: cancelledRef.current ? `已取消抓取 · 已查询 ${totalDisc} 条 · 入库 ${totalStored} 条` : `本次查询 ${totalDisc} 条 · 入库 ${totalStored} 条`,
+          tone: cancelledRef.current ? "danger" : "success",
+          showItemsLink: true,
+        },
+      }));
       await qc.invalidateQueries({ queryKey: ["discovery-methods"] });
     } finally {
-      setBatchRunning(false);
-      setBatchCancelling(false);
+      updateViewState((prev) => ({ ...prev, batchRunning: false, batchCancelling: false }));
       abortRef.current = null;
     }
   }
@@ -116,55 +250,78 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
   function cancelBatch() {
     if (!batchRunning) return;
     cancelledRef.current = true;
-    setBatchCancelling(true);
+    updateViewState((prev) => ({ ...prev, batchCancelling: true }));
     abortRef.current?.abort();
-    setSummary({ text: "正在取消当前抓取批次…", tone: "danger", showItemsLink: false });
+    updateViewState((prev) => ({
+      ...prev,
+      summary: { text: "正在取消当前抓取批次…", tone: "danger", showItemsLink: false },
+    }));
   }
 
   async function batchDelete() {
     const ids = [...selected];
     if (ids.length === 0) {
-      setSummary({ text: "请先选择至少一个爬取方式。", tone: "danger", showItemsLink: false });
+      updateViewState((prev) => ({
+        ...prev,
+        summary: { text: "请先选择至少一个爬取方式。", tone: "danger", showItemsLink: false },
+      }));
       return;
     }
     const confirmed = window.confirm(`删除选中的 ${ids.length} 个链接方式？此操作会从方式库移除它们。`);
     if (!confirmed) return;
-    setSummary(null);
-    setBatchDeleting(true);
+    updateViewState((prev) => ({ ...prev, summary: null, batchDeleting: true }));
     let deletedCount = 0;
     try {
       for (const id of ids) {
         await deleteMut.mutateAsync(id);
         deletedCount += 1;
       }
-      setSelected(new Set());
-      setRowStates((states) => {
-        const next = { ...states };
+      updateViewState((prev) => {
+        const nextRowStates = { ...prev.rowStates };
         for (const id of ids) {
-          delete next[id];
+          delete nextRowStates[id];
         }
-        return next;
+        return {
+          ...prev,
+          selectedIds: [],
+          rowStates: nextRowStates,
+          summary: { text: `已批量删除 ${deletedCount} 个链接方式`, tone: "success", showItemsLink: false },
+        };
       });
-      setSummary({ text: `已批量删除 ${deletedCount} 个链接方式`, tone: "success", showItemsLink: false });
       await qc.invalidateQueries({ queryKey: ["discovery-methods"] });
     } catch (error) {
-      setSummary({ text: error instanceof ApiError ? error.message : "批量删除失败", tone: "danger", showItemsLink: false });
+      updateViewState((prev) => ({
+        ...prev,
+        summary: { text: error instanceof ApiError ? error.message : "批量删除失败", tone: "danger", showItemsLink: false },
+      }));
     } finally {
-      setBatchDeleting(false);
+      updateViewState((prev) => ({ ...prev, batchDeleting: false }));
     }
   }
 
   function toggle(id: number, enabled: boolean) {
-    setSelected((s) => { const n = new Set(s); enabled ? n.add(id) : n.delete(id); return n; });
+    updateViewState((prev) => {
+      const next = new Set(prev.selectedIds);
+      if (enabled) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return { ...prev, selectedIds: [...next] };
+    });
   }
 
   function toggleCurrentPage(enabled: boolean) {
-    setSelected((s) => {
-      const n = new Set(s);
+    updateViewState((prev) => {
+      const n = new Set(prev.selectedIds);
       for (const id of selectablePageIds) {
-        enabled ? n.add(id) : n.delete(id);
+        if (enabled) {
+          n.add(id);
+        } else {
+          n.delete(id);
+        }
       }
-      return n;
+      return { ...prev, selectedIds: [...n] };
     });
   }
 
@@ -226,7 +383,7 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
         )}
         {pageMethods.map((m) => (
           <MethodRow key={m.id} m={m} selected={selected.has(m.id)} state={rowStates[m.id]}
-            onToggle={(en) => toggle(m.id, en)} onOpen={() => onOpenMethod?.(m.id)} highlight={highlightId === m.id} busy={batchRunning || batchDeleting} />
+            onToggle={(en) => toggle(m.id, en)} onOpen={() => onOpenMethod?.(m.id)} highlight={highlightId === m.id} busy={batchRunning || batchDeleting} batchCancelling={batchCancelling} />
         ))}
         {list.data && methods.length === 0 && (
           <div style={{ border: "1px dashed #d0d5dd", borderRadius: 8, padding: 16, color: "#667085", fontSize: 13 }}>
@@ -245,19 +402,29 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
               <select
                 value={pageSize}
                 onChange={(e) => {
-                  setPageSize(Number(e.target.value));
-                  setPage(1);
+                  const nextPageSize = Number(e.target.value);
+                  updateViewState((prev) => ({ ...prev, pageSize: nextPageSize, page: 1 }));
                 }}
                 style={selectStyle}
               >
                 {PAGE_SIZE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
               </select>
             </label>
-            <button type="button" style={page <= 1 ? pagerButtonDisabled : pagerButton} disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+            <button
+              type="button"
+              style={page <= 1 ? pagerButtonDisabled : pagerButton}
+              disabled={page <= 1}
+              onClick={() => updateViewState((prev) => ({ ...prev, page: Math.max(1, prev.page - 1) }))}
+            >
               上一页
             </button>
             <span style={{ minWidth: 56, textAlign: "center", color: "#475467" }}>{page} / {totalPages}</span>
-            <button type="button" style={page >= totalPages ? pagerButtonDisabled : pagerButton} disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>
+            <button
+              type="button"
+              style={page >= totalPages ? pagerButtonDisabled : pagerButton}
+              disabled={page >= totalPages}
+              onClick={() => updateViewState((prev) => ({ ...prev, page: Math.min(totalPages, prev.page + 1) }))}
+            >
               下一页
             </button>
           </div>
@@ -267,12 +434,28 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
   );
 }
 
-function MethodRow({ m, selected, state, onToggle, onOpen, highlight, busy }: {
+function formatIdleStatus(method: CrawlMethod) {
+  if (method.last_run_status === "ok") return "最近运行成功";
+  if (method.last_run_status === "empty") return "最近查询 0 条";
+  if (method.last_run_status === "failed") return "最近运行失败";
+  return "未运行";
+}
+
+function formatRowStatus(state: RowState | undefined, method: CrawlMethod, batchCancelling: boolean) {
+  if (state?.kind === "running") return { text: batchCancelling ? "取消中…" : "运行中", color: "#175cd3" };
+  if (state?.kind === "done") return { text: `查询 ${state.discovered} 条 · 入库 ${state.stored} 条`, color: "#475467" };
+  if (state?.kind === "cancelled") return { text: "已取消", color: "#b54708" };
+  if (state?.kind === "error") return { text: state.msg || "运行失败", color: "#b42318" };
+  return { text: formatIdleStatus(method), color: "#475467" };
+}
+
+function MethodRow({ m, selected, state, onToggle, onOpen, highlight, busy, batchCancelling }: {
   m: CrawlMethod; selected: boolean; state?: RowState;
-  onToggle: (enabled: boolean) => void; onOpen: () => void; highlight: boolean; busy: boolean;
+  onToggle: (enabled: boolean) => void; onOpen: () => void; highlight: boolean; busy: boolean; batchCancelling: boolean;
 }) {
   const disabled = m.status === "disabled";
   const primaryLabel = m.source_name?.trim() || m.domain;
+  const status = formatRowStatus(state, m, batchCancelling);
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12, border: `1px solid ${selected ? "#b9d4ff" : highlight ? "#175cd3" : "#eaecf0"}`,
       borderRadius: 9, padding: "9px 11px", background: selected ? "#f8fbff" : highlight ? "#eff6ff" : "#fff" }}>
@@ -285,12 +468,8 @@ function MethodRow({ m, selected, state, onToggle, onOpen, highlight, busy }: {
           {m.domain !== primaryLabel ? `${m.domain} · ` : ""}{m.entry_url}
         </div>
       </div>
-      <div style={{ fontSize: 12, color: "#475467", textAlign: "right", minWidth: 150 }}>
-        {state?.kind === "running" && <span style={{ color: "#175cd3" }}>抓取中…</span>}
-        {state?.kind === "done" && <>抓取 {state.discovered} · 入库 {state.stored}</>}
-        {state?.kind === "cancelled" && <span style={{ color: "#b54708" }}>已取消</span>}
-        {state?.kind === "error" && <span style={{ color: "#b42318" }}>{state.msg}</span>}
-        {(!state || state.kind === "idle") && (m.last_run_status ? `${m.last_run_status}` : "未运行")}
+      <div style={{ fontSize: 12, color: status.color, textAlign: "right", minWidth: 180 }}>
+        {status.text}
       </div>
     </div>
   );

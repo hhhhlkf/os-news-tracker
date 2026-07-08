@@ -33,7 +33,7 @@ def test_multi_run_wechat_keyword_search_generates_fetchable_method():
     _log(
         1,
         "POST /discovery/multi-run  "
-        f"(input={query!r}, hints.source_kind=wechat, wechat_mode=search, template_variant={template_variant!r}, max_pages={max_pages})",
+        f"(input={query!r}, hints.source_kind=wechat_search, template_variant={template_variant!r}, max_pages={max_pages})",
     )
     with httpx.Client(base_url=API_BASE, timeout=MULTI_RUN_TIMEOUT) as client:
         response = client.post(
@@ -43,8 +43,7 @@ def test_multi_run_wechat_keyword_search_generates_fetchable_method():
                 "force": True,
                 "name": f"微信搜索: {query}",
                 "hints": {
-                    "source_kind": "wechat",
-                    "wechat_mode": "search",
+                    "source_kind": "wechat_search",
                     "max_pages": max_pages,
                     "template_variant": template_variant,
                     "fetch_content": fetch_content,

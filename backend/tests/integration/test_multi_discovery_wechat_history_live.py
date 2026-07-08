@@ -27,7 +27,7 @@ def test_multi_run_wechat_account_history_generates_fetchable_method():
     print(f"{'='*60}")
 
     # ── Step 1: Multi-run (history) ─────────────────────────────────
-    _log(1, f"POST /discovery/multi-run  (input={account!r}, hints.source_kind=wechat)")
+    _log(1, f"POST /discovery/multi-run  (input={account!r}, hints.source_kind=wechat_history)")
     with httpx.Client(base_url=API_BASE, timeout=30) as client:
         response = client.post(
             "/discovery/multi-run",
@@ -35,7 +35,7 @@ def test_multi_run_wechat_account_history_generates_fetchable_method():
                 "input": account,
                 "force": True,
                 "name": f"公众号: {account}",
-                "hints": {"source_kind": "wechat", "limit": limit, "fetch_content": fetch_content},
+                "hints": {"source_kind": "wechat_history", "limit": limit, "fetch_content": fetch_content},
             },
         )
     assert response.status_code == 200, f"multi-run failed: {response.status_code} {response.text[:300]}"

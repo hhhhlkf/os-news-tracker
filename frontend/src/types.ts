@@ -352,3 +352,53 @@ export interface DiscoverRunResponse {
     dsl_recipe: Record<string, unknown>; last_run_at: string | null; last_run_status: string | null;
   };
 }
+
+// ---- Multi-Type Discovery (V2) ----
+export type DiscoveryRouteType = "website" | "wechat_search" | "wechat_history" | "internal_forum";
+
+export type DiscoveryRouteSource = "explicit" | "inferred";
+
+export interface DiscoveryRouteInfo {
+  selected_route_type: DiscoveryRouteType | null;
+  resolved_route_type: DiscoveryRouteType | null;
+  route_source: DiscoveryRouteSource;
+}
+
+export interface MultiDiscoveryStartRequest extends DiscoveryRouteInfo {
+  input: string;
+  display_input?: string | null;
+  force: boolean;
+  name?: string | null;
+}
+
+export interface MultiDiscoveryNameRequest extends DiscoveryRouteInfo {
+  input: string;
+  display_input?: string | null;
+}
+
+export interface MultiDiscoveryStartResponse {
+  status: "started" | "duplicate" | "completed" | "accepted";
+  run_id?: number | null;
+  method_id?: number | null;
+  name?: string;
+  route?: {
+    kind: string;
+    input_type: string;
+    normalized_input: string;
+  };
+  resolved_route_type?: DiscoveryRouteType | null;
+  route_source?: DiscoveryRouteSource;
+  existing_method?: {
+    method_id: number;
+    domain: string;
+    signature: string;
+    dsl_recipe: Record<string, unknown>;
+    last_run_at: string | null;
+    last_run_status: string | null;
+  };
+}
+
+export interface MultiDiscoveryNameResponse {
+  name: string;
+  resolved_route_type: DiscoveryRouteType | null;
+}

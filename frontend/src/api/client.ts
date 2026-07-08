@@ -20,12 +20,14 @@ import type {
   SourceDetectResponse,
   DiscoverRequest,
   DiscoverResponse,
-  DiscoverRunResponse,
   DiscoveryFetchResult,
   DiscoveryRun,
   DiscoveryRunSummary,
   CreateFromProbeRequest,
-  SuggestNameResponse,
+  MultiDiscoveryStartRequest,
+  MultiDiscoveryStartResponse,
+  MultiDiscoveryNameRequest,
+  MultiDiscoveryNameResponse,
 } from "../types";
 import { authHeaders } from "../auth";
 
@@ -381,14 +383,14 @@ export async function triggerAgentRunFromCandidate(
 }
 
 export async function startDiscoveryRun(
-  url: string, name?: string, force = false,
-): Promise<DiscoverRunResponse> {
-  const r = await fetch(`${DISCOVERY_BASE}/run`, {
+  request: MultiDiscoveryStartRequest,
+): Promise<MultiDiscoveryStartResponse> {
+  const r = await fetch(`${DISCOVERY_BASE}/multi-run`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ url, name: name ?? null, force }),
+    body: JSON.stringify(request),
   });
-  return expectOk<DiscoverRunResponse>(r, "failed to start discovery run");
+  return expectOk<MultiDiscoveryStartResponse>(r, "failed to start discovery run");
 }
 
 export async function getDiscoveryRun(runId: number): Promise<DiscoveryRun> {
@@ -409,13 +411,19 @@ export async function listDiscoveryRuns(limit = 20): Promise<DiscoveryRunSummary
   return expectOk<DiscoveryRunSummary[]>(r, "failed to load discovery runs");
 }
 
-export async function suggestDiscoveryName(url: string): Promise<SuggestNameResponse> {
-  const r = await fetchWithTimeout(`${DISCOVERY_BASE}/suggest-name`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ url }),
-  }, SUGGEST_NAME_TIMEOUT_MS);
-  return expectOk<SuggestNameResponse>(r, "failed to suggest name");
+export async function suggestDiscoveryName(
+  request: MultiDiscoveryNameRequest,
+): Promise<MultiDiscoveryNameResponse> {
+  const r = await fetchWithTimeout(
+    `${DISCOVERY_BASE}/suggest-name`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(request),
+    },
+    SUGGEST_NAME_TIMEOUT_MS,
+  );
+  return expectOk<MultiDiscoveryNameResponse>(r, "failed to suggest name");
 }
 
 export async function listDiscoveryMethods(): Promise<CrawlMethod[]> {

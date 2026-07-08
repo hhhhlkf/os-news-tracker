@@ -15,10 +15,18 @@ from app.discovery.graph import (
     dsl_writer,
     start_discovery_run,
 )
+from app.discovery.naming import (
+    default_website_display_name,
+    format_wechat_search_display_name,
+    format_wechat_history_display_name,
+    format_internal_forum_display_name,
+)
 
 logger = logging.getLogger(__name__)
 
 BranchKind = Literal["website", "wechat", "internal_mcp", "unsupported"]
+DEFAULT_WECHAT_SEARCH_MAX_PAGES = 2
+DEFAULT_WECHAT_HISTORY_LIMIT = 30
 
 
 class SourceRoute(BaseModel):
@@ -49,7 +57,7 @@ def normalize_input(raw_input: str) -> str:
 def source_router_for_input(raw_input: str, hints: dict[str, Any] | None = None) -> SourceRoute:
     normalized = normalize_input(raw_input)
     hints = hints or {}
-    hinted_kind = hints.get("source_kind")
+    hinted_kind = str(hints.get("source_kind") or "").strip().lower()
     lower = normalized.lower()
     markers: list[str] = []
 
@@ -69,13 +77,18 @@ def source_router_for_input(raw_input: str, hints: dict[str, Any] | None = None)
             suggested_branch="internal_mcp",
         )
 
-    if hinted_kind == "wechat":
+    if hinted_kind in {"wechat", "wechat_search", "wechat_history"}:
+        input_type = _classify_wechat_input(normalized)
+        if hinted_kind == "wechat_search":
+            input_type = "wechat_search"
+        elif hinted_kind == "wechat_history":
+            input_type = "wechat_history"
         return SourceRoute(
             kind="wechat",
             confidence=1.0,
             normalized_input=normalized,
-            input_type=_classify_wechat_input(normalized),
-            reason="source_kind hint requested wechat",
+            input_type=input_type,
+            reason=f"source_kind hint requested {hinted_kind}",
             suggested_branch="wechat",
         )
 
@@ -101,12 +114,12 @@ def source_router_for_input(raw_input: str, hints: dict[str, Any] | None = None)
         )
 
     return SourceRoute(
-        kind="unsupported",
-        confidence=0.7,
+        kind="wechat",
+        confidence=0.6,
         normalized_input=normalized,
-        input_type="keyword",
-        reason="plain keyword input needs an explicit source_kind hint",
-        suggested_branch="unsupported",
+        input_type="wechat_search",
+        reason="plain text defaults to wechat_search when source_kind is omitted",
+        suggested_branch="wechat",
     )
 
 
@@ -114,14 +127,14 @@ def _classify_wechat_input(value: str) -> str:
     parsed = urlparse(value)
     if parsed.scheme in {"http", "https"}:
         return "wechat_history_url"
-    return "wechat_account"
+    return "wechat_search"
 
 
 def build_wechat_search_recipe(
     entry: str,
     *,
     limit: int | None = None,
-    max_pages: int | None = 10,
+    max_pages: int | None = DEFAULT_WECHAT_SEARCH_MAX_PAGES,
     template_variant: str = "search_then_article_enrich",
     fetch_content: bool = True,
     resolve_final_urls_limit: int | None = None,
@@ -183,7 +196,7 @@ def build_wechat_history_recipe(
     entry: str,
     artifact: dict[str, Any],
     *,
-    limit: int = 100,
+    limit: int = DEFAULT_WECHAT_HISTORY_LIMIT,
     fetch_content: bool = False,
 ) -> dict[str, Any]:
     return {
@@ -261,6 +274,10 @@ def _compute_multi_signature(recipe: dict[str, Any]) -> str:
     return hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
+def _is_wechat_history_input(input_type: str) -> bool:
+    return input_type in {"wechat_history", "wechat_history_url", "wechat_account"}
+
+
 def _run_and_save_multi_recipe(
     *,
     route: SourceRoute,
@@ -273,11 +290,120 @@ def _run_and_save_multi_recipe(
     from app.db import SessionLocal
     from app.discovery.multi_dsl import MultiDslRecipe
     from app.discovery.multi_interpreter import MultiDslInterpreter
+    from app.run_logs import append_run_log
 
     effective_run_recipe = run_recipe or recipe
-    output = MultiDslInterpreter().run(MultiDslRecipe(**effective_run_recipe))
+    source_label = name or route.normalized_input
+
+    def _log_progress(event: str, payload: dict[str, Any]) -> None:
+        if event == "wechat_search_started":
+            append_run_log(
+                "探查",
+                "开始执行微信搜索",
+                source=source_label,
+                query=payload.get("query"),
+                max_pages=payload.get("max_pages"),
+                limit=payload.get("limit"),
+            )
+        elif event == "wechat_search_page_started":
+            append_run_log(
+                "探查",
+                "微信搜索开始抓取分页",
+                source=source_label,
+                query=payload.get("query"),
+                page_no=payload.get("page_no"),
+                total_pages=payload.get("total_pages"),
+                fetched_count=payload.get("fetched_count"),
+                transport=payload.get("transport"),
+            )
+        elif event == "wechat_search_page_finished":
+            append_run_log(
+                "探查",
+                "微信搜索分页抓取完成",
+                source=source_label,
+                query=payload.get("query"),
+                page_no=payload.get("page_no"),
+                page_items=payload.get("page_items"),
+                fetched_count=payload.get("fetched_count"),
+                resolved_count=payload.get("resolved_count"),
+                transport=payload.get("transport"),
+            )
+        elif event == "wechat_search_page_empty":
+            append_run_log(
+                "探查",
+                "微信搜索当前分页未提取到结果",
+                source=source_label,
+                query=payload.get("query"),
+                page_no=payload.get("page_no"),
+                fetched_count=payload.get("fetched_count"),
+                transport=payload.get("transport"),
+            )
+        elif event == "wechat_search_rate_limited":
+            append_run_log(
+                "探查",
+                "微信搜索触发限流",
+                source=source_label,
+                query=payload.get("query"),
+                page_no=payload.get("page_no"),
+                raw_status=payload.get("raw_status"),
+                fetched_count=payload.get("fetched_count"),
+                transport=payload.get("transport"),
+                level="warning",
+            )
+        elif event == "wechat_search_captcha_required":
+            append_run_log(
+                "探查",
+                "微信搜索触发验证码",
+                source=source_label,
+                query=payload.get("query"),
+                page_no=payload.get("page_no"),
+                fetched_count=payload.get("fetched_count"),
+                transport=payload.get("transport"),
+                level="warning",
+            )
+        elif event == "wechat_search_failed":
+            append_run_log(
+                "探查",
+                "微信搜索执行失败",
+                source=source_label,
+                query=payload.get("query"),
+                fetched_count=payload.get("fetched_count"),
+                transport=payload.get("transport"),
+                error=payload.get("error"),
+                level="error",
+            )
+        elif event == "wechat_search_finished":
+            append_run_log(
+                "探查",
+                "微信搜索执行完成",
+                source=source_label,
+                query=payload.get("query"),
+                fetched_count=payload.get("fetched_count"),
+                status=payload.get("status"),
+                transport=payload.get("transport"),
+            )
+
+    append_run_log(
+        "探查",
+        "开始执行多源探查配方",
+        source=source_label,
+        input_type=route.input_type,
+        branch_kind=route.kind,
+        recipe_type=effective_run_recipe.get("recipe_type"),
+    )
+    output = MultiDslInterpreter().run(
+        MultiDslRecipe(**effective_run_recipe),
+        progress_callback=_log_progress,
+    )
     items = output.get("items") or []
     status = (output.get("stats") or {}).get("status")
+    append_run_log(
+        "探查",
+        "多源探查配方执行结束",
+        source=source_label,
+        discovered_count=len(items),
+        status=status,
+    )
 
     # Classify method status
     if status in {"pending_auth", "auth_invalid"}:
@@ -298,16 +424,20 @@ def _run_and_save_multi_recipe(
         from app.enums import SourceType, Stream
         from app.models import CrawlMethod, CrawlMethodDomain, Source
 
-        if urlparse(route.normalized_input).scheme:
+        if route.kind == "wechat" and _is_wechat_history_input(route.input_type):
+            if urlparse(route.normalized_input).scheme:
+                # History URL inputs should not collapse into the shared mp.weixin.qq.com host.
+                domain = f"wechat_mp_{hashlib.sha256(route.normalized_input.encode()).hexdigest()[:16]}"
+            else:
+                # Account history — one domain per account input.
+                domain = f"wechat_mp_{route.normalized_input}"
+        elif route.kind == "wechat" and route.input_type == "wechat_search":
+            # Keyword search — one domain per search query/method.
+            domain = f"wechat_search_{hashlib.sha256(route.normalized_input.encode()).hexdigest()[:16]}"
+        elif urlparse(route.normalized_input).scheme:
             domain = urlparse(route.normalized_input).netloc
-        elif route.kind == "wechat" and not recipe.get("requires_auth"):
-            # Keyword search — shared domain across all search queries
-            domain = "wechat_search"
-        elif route.input_type == "wechat_account":
-            # Account history — one domain per account
-            domain = f"wechat_mp_{route.normalized_input}"
         else:
-            domain = "wechat_search"
+            domain = route.kind
         if not domain:
             domain = route.kind
 
@@ -315,15 +445,23 @@ def _run_and_save_multi_recipe(
             display_name = name
         elif route.kind == "wechat":
             if recipe.get("requires_auth"):
-                display_name = f"公众号: {route.normalized_input}"
+                display_name = format_wechat_history_display_name(route.normalized_input)
             else:
-                display_name = f"微信搜索: {route.normalized_input}"
+                display_name = format_wechat_search_display_name(route.normalized_input)
         else:
             display_name = route.normalized_input[:80]
 
         existing_domain = db.query(CrawlMethodDomain).filter_by(domain=domain).first()
 
         if existing_domain is not None and force:
+            append_run_log(
+                "存库",
+                "覆盖更新现有多源爬取方式",
+                source=source_label,
+                domain=domain,
+                method_status=method_status,
+                discovered_count=len(items),
+            )
             m = db.get(CrawlMethod, existing_domain.method_id)
             m.dsl_recipe = sanitized_recipe
             m.signature = sig
@@ -343,6 +481,15 @@ def _run_and_save_multi_recipe(
 
         if existing_domain is not None:
             m = db.get(CrawlMethod, existing_domain.method_id)
+            append_run_log(
+                "存库",
+                "复用已有多源爬取方式",
+                source=source_label,
+                domain=domain,
+                method_id=m.id,
+                method_status=m.status,
+                discovered_count=len(items),
+            )
             return {
                 "status": "completed",
                 "method_id": m.id,
@@ -375,6 +522,15 @@ def _run_and_save_multi_recipe(
 
         db.add(CrawlMethodDomain(domain=domain, method_id=m.id))
         db.commit()
+        append_run_log(
+            "存库",
+            "已新建多源爬取方式",
+            source=source_label,
+            domain=domain,
+            method_id=m.id,
+            method_status=method_status,
+            discovered_count=len(items),
+        )
 
         return {
             "status": "completed",
@@ -393,22 +549,38 @@ def start_multi_discovery_run(
     force: bool = False,
     name: str | None = None,
     hints: dict[str, Any] | None = None,
+    selected_route_type: str | None = None,
+    route_source: str = "inferred",
 ) -> dict[str, Any]:
     route = source_router_for_input(raw_input, hints)
 
-    if route.kind == "website":
-        run_id = start_discovery_run(route.normalized_input, force=force, name=name)
+    # Honor explicit route selection from the frontend
+    if selected_route_type == "website":
+        # Force website semantics: extract URL from input
+        normalized = route.normalized_input
+        route.kind = "website"
+        route.input_type = "url"
+        route.reason = "explicit website route from frontend"
+        route.suggested_branch = "website"
+        display_name = name or default_website_display_name(normalized)
+        run_id = start_discovery_run(normalized, force=force, name=display_name)
         return {
             "status": "started",
             "run_id": run_id,
             "route": route.model_dump(),
             "delegated": "website_discovery",
+            "resolved_route_type": "website",
+            "route_source": route_source,
         }
 
-    if route.kind == "wechat" and (hints or {}).get("wechat_mode") == "search":
+    if selected_route_type == "wechat_search":
+        route.kind = "wechat"
+        route.input_type = "wechat_search"
+        route.reason = "explicit wechat_search route from frontend"
+        route.suggested_branch = "wechat"
         template_variant = str((hints or {}).get("template_variant") or "search_then_article_enrich")
         fetch_content = bool((hints or {}).get("fetch_content", True))
-        max_pages = int((hints or {}).get("max_pages") or 10)
+        max_pages = int((hints or {}).get("max_pages") or DEFAULT_WECHAT_SEARCH_MAX_PAGES)
         recipe = build_wechat_search_recipe(
             route.normalized_input,
             limit=None,
@@ -427,16 +599,23 @@ def start_multi_discovery_run(
             resolve_final_urls_limit=0,
             enrich_max_items=0 if template_variant == "search_then_article_enrich" else None,
         )
-        return _run_and_save_multi_recipe(
+        result = _run_and_save_multi_recipe(
             route=route,
             recipe=recipe,
             run_recipe=validation_recipe,
             force=force,
             name=name,
         )
+        result["resolved_route_type"] = "wechat_search"
+        result["route_source"] = route_source
+        return result
 
-    if route.kind == "wechat":
-        limit = int((hints or {}).get("limit") or 100)
+    if selected_route_type == "wechat_history":
+        route.kind = "wechat"
+        route.input_type = "wechat_history"
+        route.reason = "explicit wechat_history route from frontend"
+        route.suggested_branch = "wechat"
+        limit = int((hints or {}).get("limit") or DEFAULT_WECHAT_HISTORY_LIMIT)
         fetch_content = bool((hints or {}).get("fetch_content", False))
         artifact = {
             "source_kind": "wechat",
@@ -446,14 +625,92 @@ def start_multi_discovery_run(
         recipe = build_wechat_history_recipe(
             route.normalized_input, artifact, limit=limit, fetch_content=fetch_content
         )
-        return _run_and_save_multi_recipe(route=route, recipe=recipe, force=force, name=name)
+        result = _run_and_save_multi_recipe(route=route, recipe=recipe, force=force, name=name)
+        result["resolved_route_type"] = "wechat_history"
+        result["route_source"] = route_source
+        return result
 
-    return {
+    if selected_route_type == "internal_forum":
+        return {
+            "status": "accepted",
+            "run_id": None,
+            "route": route.model_dump(),
+            "branch_artifact": _contract_artifact(route),
+            "resolved_route_type": "internal_forum",
+            "route_source": route_source,
+        }
+
+    # Fallback: implicit routing from source_router_for_input
+    if route.kind == "website":
+        display_name = name or default_website_display_name(route.normalized_input)
+        run_id = start_discovery_run(route.normalized_input, force=force, name=display_name)
+        return {
+            "status": "started",
+            "run_id": run_id,
+            "route": route.model_dump(),
+            "delegated": "website_discovery",
+            "resolved_route_type": "website",
+            "route_source": route_source,
+        }
+
+    if route.kind == "wechat" and route.input_type == "wechat_search":
+        template_variant = str((hints or {}).get("template_variant") or "search_then_article_enrich")
+        fetch_content = bool((hints or {}).get("fetch_content", True))
+        max_pages = int((hints or {}).get("max_pages") or DEFAULT_WECHAT_SEARCH_MAX_PAGES)
+        recipe = build_wechat_search_recipe(
+            route.normalized_input,
+            limit=None,
+            max_pages=max_pages,
+            template_variant=template_variant,
+            fetch_content=fetch_content,
+            resolve_final_urls_limit=None,
+            enrich_max_items=None,
+        )
+        validation_recipe = build_wechat_search_recipe(
+            route.normalized_input,
+            limit=None,
+            max_pages=max_pages,
+            template_variant=template_variant,
+            fetch_content=False,
+            resolve_final_urls_limit=0,
+            enrich_max_items=0 if template_variant == "search_then_article_enrich" else None,
+        )
+        result = _run_and_save_multi_recipe(
+            route=route,
+            recipe=recipe,
+            run_recipe=validation_recipe,
+            force=force,
+            name=name,
+        )
+        result["resolved_route_type"] = "wechat_search"
+        result["route_source"] = route_source
+        return result
+
+    if route.kind == "wechat":
+        limit = int((hints or {}).get("limit") or DEFAULT_WECHAT_HISTORY_LIMIT)
+        fetch_content = bool((hints or {}).get("fetch_content", False))
+        artifact = {
+            "source_kind": "wechat",
+            "nickname": route.normalized_input,
+            "auth_ref": "wechat_mp_default",
+        }
+        recipe = build_wechat_history_recipe(
+            route.normalized_input, artifact, limit=limit, fetch_content=fetch_content
+        )
+        result = _run_and_save_multi_recipe(route=route, recipe=recipe, force=force, name=name)
+        result["resolved_route_type"] = "wechat_history"
+        result["route_source"] = route_source
+        return result
+
+    result = {
         "status": "accepted",
         "run_id": None,
         "route": route.model_dump(),
         "branch_artifact": _contract_artifact(route),
     }
+    result["resolved_route_type"] = selected_route_type
+    result["route_source"] = route_source
+    return result
 
 
 def _contract_artifact(route: SourceRoute) -> dict[str, Any]:

@@ -2,17 +2,28 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ApiError, cancelDiscoveryRun, getDiscoveryRun, startDiscoveryRun, suggestDiscoveryName } from "../api/client";
-import type { DiscoveryRun } from "../types";
+import type {
+  DiscoveryRouteType,
+  DiscoveryRun,
+  MultiDiscoveryStartRequest,
+  MultiDiscoveryNameRequest,
+} from "../types";
 import { DiscoveryFlowChart } from "./DiscoveryFlowChart";
 import { DiscoveryNodeDetail } from "./DiscoveryNodeDetail";
 import { DiscoveryLogPanel } from "./DiscoveryLogPanel";
 import { useDiscoveryLogs } from "../hooks/useDiscoveryLogs";
 import { currentAttemptRound, type FlowNodeId } from "../discovery/flowState";
+import {
+  resolveDiscoveryRouteState,
+  ROUTE_TYPE_LABELS,
+  type RouteInputState,
+} from "../discovery/routeInput";
 
 const DISCOVERY_PANEL_STORAGE_KEY = "os-news-tracker.discovery-panel";
 
 interface DiscoveryPanelPersistedState {
-  url?: string;
+  rawInput?: string;
+  selectedRouteType?: DiscoveryRouteType | null;
   name?: string;
   runId?: number | null;
   selectedNode?: FlowNodeId | null;
@@ -24,12 +35,24 @@ function readDiscoveryPanelState(): DiscoveryPanelPersistedState {
   try {
     const raw = window.localStorage.getItem(DISCOVERY_PANEL_STORAGE_KEY);
     if (!raw) return {};
-    const parsed = JSON.parse(raw) as DiscoveryPanelPersistedState;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const validRouteTypes = new Set(["website", "wechat_search", "wechat_history", "internal_forum"]);
+    const validNodeIds = new Set<FlowNodeId>([
+      "fetch_homepage", "capture_network", "explorer",
+      "validator", "dsl_writer", "auditor", "save_method",
+    ]);
+    const st = typeof parsed.selectedRouteType === "string" && validRouteTypes.has(parsed.selectedRouteType)
+      ? (parsed.selectedRouteType as DiscoveryRouteType)
+      : null;
+    const sn = typeof parsed.selectedNode === "string" && validNodeIds.has(parsed.selectedNode as FlowNodeId)
+      ? (parsed.selectedNode as FlowNodeId)
+      : null;
     return {
-      url: typeof parsed.url === "string" ? parsed.url : undefined,
+      rawInput: typeof parsed.rawInput === "string" ? parsed.rawInput : undefined,
+      selectedRouteType: st,
       name: typeof parsed.name === "string" ? parsed.name : undefined,
       runId: typeof parsed.runId === "number" ? parsed.runId : null,
-      selectedNode: typeof parsed.selectedNode === "string" ? parsed.selectedNode : null,
+      selectedNode: sn,
       expanded: typeof parsed.expanded === "boolean" ? parsed.expanded : undefined,
     };
   } catch {
@@ -44,7 +67,10 @@ function writeDiscoveryPanelState(state: DiscoveryPanelPersistedState): void {
 
 export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: number) => void }) {
   const [persistedState] = useState<DiscoveryPanelPersistedState>(() => readDiscoveryPanelState());
-  const [url, setUrl] = useState(persistedState.url ?? "");
+  const [rawInput, setRawInput] = useState(persistedState.rawInput ?? "");
+  const [selectedRouteType, setSelectedRouteType] = useState<DiscoveryRouteType | null>(
+    persistedState.selectedRouteType ?? null,
+  );
   const [name, setName] = useState(persistedState.name ?? "");
   const [nameError, setNameError] = useState<string | null>(null);
   const [runId, setRunId] = useState<number | null>(persistedState.runId ?? null);
@@ -54,6 +80,9 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
   const [expanded, setExpanded] = useState(persistedState.expanded ?? true);
   const [startLocked, setStartLocked] = useState(false);
   const startLockRef = useRef(false);
+
+  // Derive route state — single source of truth for disabled states
+  const routeState: RouteInputState = resolveDiscoveryRouteState(rawInput, selectedRouteType);
 
   const runQuery = useQuery({
     queryKey: ["discovery-run", runId],
@@ -74,15 +103,22 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
   });
 
   const startMut = useMutation({
-    mutationFn: (vars: { url: string; name?: string; force: boolean }) =>
-      startDiscoveryRun(vars.url, vars.name, vars.force),
+    mutationFn: (request: MultiDiscoveryStartRequest) => startDiscoveryRun(request),
     onSuccess: (res) => {
       startLockRef.current = false;
       setStartLocked(false);
       setError(null);
-      if (res.status === "started" && res.run_id != null) { setDup(null); setRunId(res.run_id); }
-      else if (res.status === "duplicate" && res.existing_method) {
-        setDup({ method_id: res.existing_method.method_id, domain: res.existing_method.domain });
+      if (res.status === "started" && res.run_id != null) {
+        setDup(null);
+        setRunId(res.run_id);
+      } else if (res.status === "completed" && res.method_id != null) {
+        setDup(null);
+        if (onMethodAdded) onMethodAdded(res.method_id);
+      } else if (res.status === "duplicate" && res.existing_method) {
+        setDup({
+          method_id: res.existing_method.method_id,
+          domain: res.existing_method.domain,
+        });
       }
     },
     onError: (e) => {
@@ -93,7 +129,7 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
   });
 
   const nameMut = useMutation({
-    mutationFn: (u: string) => suggestDiscoveryName(u),
+    mutationFn: (request: MultiDiscoveryNameRequest) => suggestDiscoveryName(request),
     onSuccess: (r) => {
       setName(r.name);
       setNameError(null);
@@ -112,19 +148,32 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
   const failed = runQuery.data?.status === "failed";
   const cancelled = runQuery.data?.status === "cancelled";
   const startPending = startMut.isPending;
-  const startBusy = running || startPending || startLocked || startLockRef.current;
-  const startDisabled = !url || startBusy;
   const cancelBusy = cancelMut.isPending;
+  const startBusy = running || startPending || startLocked || startLockRef.current;
+
+  // Disabled states from parser
+  const startDisabled = Boolean(routeState.validationError) || startBusy;
+  const autoNameDisabled = Boolean(routeState.validationError) || !routeState.value || nameMut.isPending;
 
   function startRun(force: boolean) {
-    if (!url || running || startMut.isPending || startLockRef.current) return;
+    if (routeState.validationError || running || startMut.isPending || startLockRef.current) return;
+    if (!routeState.resolvedRouteType) return;
     startLockRef.current = true;
     setStartLocked(true);
     if (force) setDup(null);
-    startMut.mutate({ url, name: name || undefined, force });
+    const request: MultiDiscoveryStartRequest = {
+      input: routeState.value,
+      display_input: routeState.displayValue,
+      selected_route_type: selectedRouteType,
+      resolved_route_type: routeState.resolvedRouteType,
+      route_source: routeState.routeSource,
+      name: name || undefined,
+      force,
+    };
+    startMut.mutate(request);
   }
 
-  // 完成后通知新方式（useEffect + ref 守卫，避免渲染期副作用）
+  // 完成后通知新方式
   const notifiedRef = useRef<number | null>(null);
   useEffect(() => {
     const mid = runQuery.data?.resulting_method_id;
@@ -134,15 +183,17 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
     }
   }, [completed, runQuery.data?.resulting_method_id, onMethodAdded]);
 
+  // Persist state
   useEffect(() => {
     writeDiscoveryPanelState({
-      url,
+      rawInput,
+      selectedRouteType,
       name,
       runId,
       selectedNode,
       expanded,
     });
-  }, [url, name, runId, selectedNode, expanded]);
+  }, [rawInput, selectedRouteType, name, runId, selectedNode, expanded]);
 
   useEffect(() => {
     if (!(runQuery.error instanceof ApiError) || runQuery.error.status !== 404 || runId == null) {
@@ -153,7 +204,7 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
 
   const displayRun: DiscoveryRun = runQuery.data ?? {
     id: 0,
-    site_url: url || "",
+    site_url: rawInput || "",
     status: "cancelled",
     resulting_method_id: null,
     llm_token_usage: 0,
@@ -165,6 +216,11 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
     error_message: null,
   };
   const selectedEntry = displayRun.node_trace.findLast((e) => e.step === selectedNode);
+
+  // Resolved route display label for the inferred badge
+  const resolvedLabel = routeState.resolvedRouteType
+    ? ROUTE_TYPE_LABELS[routeState.resolvedRouteType]
+    : null;
 
   return (
     <section style={{ background: "#fff", border: "1px solid #d0d5dd", borderRadius: 10, padding: 16 }}>
@@ -188,29 +244,84 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
       </div>
 
       <div style={controlGrid}>
-        <div style={{ display: "grid", gap: 10, minWidth: 0 }}>
-          <input placeholder="站点 URL，如 openanolis.cn/blog" value={url}
-            onChange={(e) => {
-              setUrl(e.target.value);
-              setNameError(null);
-            }} style={{ ...inputBase, width: "100%", minWidth: 0, boxSizing: "border-box" }} />
+        <div style={routeColumn}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <select
+              value={selectedRouteType ?? ""}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedRouteType(val ? (val as DiscoveryRouteType) : null);
+              }}
+              style={selectBase}
+            >
+              <option value="">自动推断</option>
+              <option value="website">网页</option>
+              <option value="wechat_search">微信搜索</option>
+              <option value="wechat_history">微信公众号</option>
+              <option value="internal_forum">司内论坛</option>
+            </select>
+            <input
+              placeholder="输入探查内容，如 URL、公众号名、搜索关键词"
+              value={rawInput}
+              onChange={(e) => {
+                setRawInput(e.target.value);
+                setNameError(null);
+              }}
+              style={{ ...inputBase, flex: 1 }}
+            />
+          </div>
+          {resolvedLabel && routeState.routeSource === "inferred" && (
+            <div style={{ fontSize: 12, color: "#475467" }}>
+              自动推断为 <span style={{ fontWeight: 600, color: "#175cd3" }}>{resolvedLabel}</span>
+            </div>
+          )}
+          {resolvedLabel && routeState.routeSource === "explicit" && selectedRouteType && (
+            <div style={{ fontSize: 12, color: "#475467" }}>
+              已锁定 <span style={{ fontWeight: 600, color: "#059669" }}>{resolvedLabel}</span>
+            </div>
+          )}
+          {routeState.validationError && (
+            <div style={{ color: "#b42318", fontSize: 13 }}>{routeState.validationError}</div>
+          )}
         </div>
-        <div style={{ display: "grid", gap: 10, minWidth: 0 }}>
+        <div style={actionColumn}>
           <div style={{ display: "flex", gap: 6, minWidth: 0, alignItems: "center", flexWrap: "nowrap" }}>
-            <input placeholder="名称（选填）" value={name}
+            <input
+              placeholder="名称（选填）"
+              value={name}
               onChange={(e) => {
                 setName(e.target.value);
                 setNameError(null);
-              }} style={{ ...inputBase, flex: "1 1 auto", minWidth: 0, width: "100%" }} />
-            <button type="button" onClick={() => {
-              if (!url) return;
-              setNameError(null);
-              nameMut.mutate(url);
-            }}
-              disabled={!url || nameMut.isPending}
-              style={{ ...btnGhost, flexShrink: 0 }}>{nameMut.isPending ? "命名中…" : "✨ 自动"}</button>
-            <button type="button" disabled={startDisabled} onClick={() => startRun(false)}
-              style={{ ...(startDisabled ? btnDisabled : btnPrimary), flexShrink: 0 }}>{running ? "探查中…" : startBusy ? "启动中…" : "开始探查"}</button>
+              }}
+              style={{ ...inputBase, flex: "1 1 auto", minWidth: 0, width: "100%" }}
+            />
+            <button
+              type="button"
+              onClick={() => {
+                if (autoNameDisabled) return;
+                setNameError(null);
+                const request: MultiDiscoveryNameRequest = {
+                  input: routeState.value,
+                  display_input: routeState.displayValue,
+                  selected_route_type: selectedRouteType,
+                  resolved_route_type: routeState.resolvedRouteType,
+                  route_source: routeState.routeSource,
+                };
+                nameMut.mutate(request);
+              }}
+              disabled={autoNameDisabled}
+              style={autoNameDisabled ? { ...btnGhost, cursor: "not-allowed", opacity: 0.5 } : btnGhost}
+            >
+              {nameMut.isPending ? "命名中…" : "✨ 自动"}
+            </button>
+            <button
+              type="button"
+              disabled={startDisabled}
+              onClick={() => startRun(false)}
+              style={startDisabled ? btnDisabled : btnPrimary}
+            >
+              {running ? "探查中…" : startBusy ? "启动中…" : "开始探查"}
+            </button>
           </div>
           {running && runId != null && (
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-start", justifyContent: "flex-start" }}>
@@ -290,11 +401,23 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
 const inputBase: CSSProperties = {
   border: "1px solid #d0d5dd", borderRadius: 8, padding: "10px 12px",
   fontSize: 14, color: "#101828", background: "#fff",
+  minWidth: 0, boxSizing: "border-box",
 };
-const btnPrimary: CSSProperties = { border: "none", borderRadius: 999, padding: "9px 16px", background: "#175cd3", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" };
-const btnDisabled: CSSProperties = { ...btnPrimary, background: "#98a2b3", cursor: "not-allowed" };
+const selectBase: CSSProperties = {
+  border: "1px solid #d0d5dd",
+  borderRadius: 8,
+  padding: "10px 12px",
+  fontSize: 14,
+  color: "#101828",
+  background: "#fff",
+  flexShrink: 0,
+  minWidth: 110,
+  boxSizing: "border-box" as const,
+};
+const btnPrimary: CSSProperties = { border: "none", borderRadius: 999, padding: "9px 16px", background: "#175cd3", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", flexShrink: 0 };
+const btnDisabled: CSSProperties = { ...btnPrimary, background: "#98a2b3", cursor: "not-allowed", flexShrink: 0 };
 const btnDanger: CSSProperties = { ...btnPrimary, background: "#dc2626" };
-const btnGhost: CSSProperties = { border: "1px solid #d0d5dd", background: "#fff", borderRadius: 8, padding: "9px 11px", fontSize: 12, color: "#475467", cursor: "pointer" };
+const btnGhost: CSSProperties = { border: "1px solid #d0d5dd", background: "#fff", borderRadius: 8, padding: "9px 11px", fontSize: 12, color: "#475467", cursor: "pointer", flexShrink: 0 };
 const toggleBtn: CSSProperties = { border: "1px solid #d0d5dd", background: "#fff", borderRadius: 999, padding: "8px 14px", fontSize: 12, color: "#344054", fontWeight: 700, cursor: "pointer" };
 const WORKSPACE_HEIGHT = 760;
 const controlGrid: CSSProperties = {
@@ -303,4 +426,16 @@ const controlGrid: CSSProperties = {
   gap: 14,
   alignItems: "start",
   marginBottom: 14,
+};
+const routeColumn: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  minWidth: 0,
+};
+const actionColumn: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+  minWidth: 0,
 };

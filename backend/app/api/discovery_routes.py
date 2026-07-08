@@ -4,6 +4,8 @@
 """
 
 from datetime import datetime, timedelta, timezone
+from enum import Enum
+import json
 
 import logging
 
@@ -13,7 +15,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from typing import Any
+from typing import Any, Callable
 
 from app.discovery.dsl import DslRecipe
 from app.discovery.cancel import request_cancel
@@ -21,17 +23,23 @@ from app.discovery.graph import check_existing_method, start_discovery_run
 from app.discovery.ingester import CrawlOutputIngester
 from app.discovery.interpreter import DslInterpreter
 from app.discovery.multi_dsl import MultiDslRecipe
-from app.discovery.multi_graph import start_multi_discovery_run
+from app.discovery.multi_graph import DEFAULT_WECHAT_SEARCH_MAX_PAGES, start_multi_discovery_run
 from app.discovery.multi_interpreter import MultiDslInterpreter
+from app.discovery.naming import (
+    default_website_display_name,
+    format_website_display_name,
+    normalize_site_name,
+)
 from app.llm.client import LlmClient
 from app.manual_news_run import _build_not_stored_log_fields
-from app.models import CrawlMethod, CrawlMethodDomain, SiteDiscoveryRun
+from app.models import CrawlMethod, CrawlMethodDomain, MorningCrawlRunMethod, SiteDiscoveryRun
 from app.schemas import ManualNewsRunRequest
 
 router = APIRouter(prefix="/discovery", tags=["discovery"])
 logger = logging.getLogger(__name__)
 SUGGEST_NAME_LLM_TIMEOUT_SECONDS = 5.0
-MAX_SUGGEST_NAME_LENGTH = 20
+# 微信补正文单条方式的抓取上限（封顶），防止被 target_count 放大成几百篇。
+WECHAT_ENRICH_MAX_ITEMS = 20
 _RELATIVE_RANGE_TO_DELTA = {
     "24h": timedelta(days=1),
     "7d": timedelta(days=7),
@@ -45,22 +53,54 @@ class DiscoverRequest(BaseModel):
     name: str | None = None  # 站点别名（选填，不填自动用域名）
 
 
+class RouteType(str, Enum):
+    WEBSITE = "website"
+    WECHAT_SEARCH = "wechat_search"
+    WECHAT_HISTORY = "wechat_history"
+    INTERNAL_FORUM = "internal_forum"
+
+
+class RouteSource(str, Enum):
+    EXPLICIT = "explicit"
+    INFERRED = "inferred"
+
+
 class MultiDiscoverRequest(BaseModel):
     input: str
+    display_input: str | None = None
     force: bool = False
     name: str | None = None
     hints: dict[str, Any] | None = None
+    selected_route_type: RouteType | None = None
+    resolved_route_type: RouteType | None = None
+    route_source: RouteSource = RouteSource.INFERRED
 
 
-def run_method(recipe: DslRecipe | MultiDslRecipe | dict) -> dict:
+def _route_type_to_hints(route_type: RouteType | None) -> dict[str, Any]:
+    if route_type == RouteType.WEBSITE:
+        return {"source_kind": "website"}
+    if route_type == RouteType.WECHAT_SEARCH:
+        return {"source_kind": "wechat_search"}
+    if route_type == RouteType.WECHAT_HISTORY:
+        return {"source_kind": "wechat_history"}
+    if route_type == RouteType.INTERNAL_FORUM:
+        return {"source_kind": "internal_forum"}
+    return {}
+
+
+def run_method(
+    recipe: DslRecipe | MultiDslRecipe | dict,
+    *,
+    progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
+) -> dict:
     """运行命执行核心：按 DSL Recipe 纯确定性抓取。供 discovery_fetch 调用 + 测试 mock。"""
     if isinstance(recipe, dict):
         recipe_type = recipe.get("recipe_type")
         if recipe_type == "multi_dsl":
-            return MultiDslInterpreter().run(MultiDslRecipe(**recipe))
+            return MultiDslInterpreter().run(MultiDslRecipe(**recipe), progress_callback=progress_callback)
         return DslInterpreter().run(DslRecipe(**recipe))
     if isinstance(recipe, MultiDslRecipe):
-        return MultiDslInterpreter().run(recipe)
+        return MultiDslInterpreter().run(recipe, progress_callback=progress_callback)
     return DslInterpreter().run(recipe)
 
 
@@ -100,29 +140,84 @@ def _apply_fetch_limits(items: list[dict], request: ManualNewsRunRequest | None)
     return [item for _, item in filtered[:request.target_count]]
 
 
+def _prepare_fetch_recipe(recipe: dict[str, Any], request: ManualNewsRunRequest | None) -> dict[str, Any]:
+    prepared = json.loads(json.dumps(recipe, ensure_ascii=False, default=str))
+    if prepared.get("recipe_type") != "multi_dsl":
+        return prepared
+
+    target_count = request.target_count if request else None
+    for action in prepared.get("actions") or []:
+        if action.get("op") == "wechat_search_articles":
+            if action.get("max_pages") is None:
+                action["max_pages"] = DEFAULT_WECHAT_SEARCH_MAX_PAGES
+        if action.get("op") == "enrich_wechat_articles" and action.get("max_items") is None:
+            # 微信补正文（逐篇抓全文）是重活，不要被 target_count（定时抓取默认 500）放大。
+            # 统一封顶在 WECHAT_ENRICH_MAX_ITEMS，避免单条方式抓几百篇正文导致的慢和高占用。
+            desired = max(1, target_count) if target_count else 5
+            action["max_items"] = min(desired, WECHAT_ENRICH_MAX_ITEMS)
+    return prepared
+
+
 @router.post("/run")
 def discover_run(body: DiscoverRequest, db: Session = Depends(get_db)):
     """生成命：force=false 先查重，重复返回 duplicate；无重复/force=true 异步启动，返回 run_id 供轮询。"""
-    from urllib.parse import urlparse
     site_url = str(body.url)
     if not body.force:
         existing = check_existing_method(site_url, db)
         if existing:
             return {"status": "duplicate", "existing_method": existing}
-    # 别名：前端选填，不填自动用域名（复用 _domain_name 同款逻辑）
-    name = body.name or urlparse(site_url).netloc.removeprefix("www.")
+    # 别名：前端选填，不填自动用"网站：..."命名
+    name = body.name or default_website_display_name(site_url)
     run_id = start_discovery_run(site_url, force=body.force, name=name)
     return {"status": "started", "run_id": run_id, "name": name}
 
 
 @router.post("/multi-run")
 def discover_multi_run(body: MultiDiscoverRequest):
-    return start_multi_discovery_run(
+    from app.run_logs import append_run_log
+
+    effective_route = body.resolved_route_type or body.selected_route_type
+    hints = _route_type_to_hints(effective_route)
+    display_input = body.display_input or body.input
+
+    append_run_log(
+        "路由",
+        "已锁定最终路由",
+        input=display_input,
+        effective_input=body.input,
+        selected_route_type=body.selected_route_type.value if body.selected_route_type else None,
+        resolved_route_type=effective_route.value if effective_route else None,
+        route_source=body.route_source.value,
+    )
+
+    append_run_log(
+        "探查",
+        "已按已保存分支启动",
+        input=display_input,
+        effective_input=body.input,
+        resolved_route_type=effective_route.value if effective_route else None,
+        route_source=body.route_source.value,
+        name=body.name,
+    )
+
+    # Merge explicit hints with any user-provided hints
+    merged_hints: dict[str, Any] = {**hints}
+    if body.hints:
+        merged_hints.update(body.hints)
+
+    result = start_multi_discovery_run(
         body.input,
         force=body.force,
         name=body.name,
-        hints=body.hints,
+        hints=merged_hints,
+        selected_route_type=effective_route.value if effective_route else None,
+        route_source=body.route_source.value,
     )
+
+    # Attach resolved route metadata to response
+    result["resolved_route_type"] = effective_route.value if effective_route else None
+    result["route_source"] = body.route_source.value
+    return result
 
 
 @router.get("/runs")
@@ -237,6 +332,11 @@ def delete_method(method_id: int, db: Session = Depends(get_db)):
         .where(SiteDiscoveryRun.resulting_method_id == method_id)
         .values(resulting_method_id=None)
     )
+    db.execute(
+        update(MorningCrawlRunMethod)
+        .where(MorningCrawlRunMethod.method_id == method_id)
+        .values(method_id=None)
+    )  # 保留定时抓取运行历史（domain 已冗余存储），仅解除外键关联
     db.query(CrawlMethodDomain).filter_by(method_id=method_id).delete()  # 级联清映射
     db.delete(m); db.commit()
 
@@ -255,7 +355,7 @@ def discovery_fetch(
     m = db.get(CrawlMethod, method_id)
     if not m:
         raise HTTPException(404, "method not found")
-    recipe = m.dsl_recipe
+    recipe = _prepare_fetch_recipe(m.dsl_recipe, request)
     append_run_log(
         "抓方式",
         "开始抓取爬取方式",
@@ -271,7 +371,101 @@ def discovery_fetch(
     )
     stored = 0
     try:
-        output = run_method(recipe)  # 纯确定性执行（可被测试 mock）
+        def _log_fetch_progress(event: str, payload: dict[str, Any]) -> None:
+            if event == "wechat_search_started":
+                append_run_log(
+                    "抓方式",
+                    "开始执行微信搜索 DSL",
+                    source=m.domain,
+                    method_id=m.id,
+                    query=payload.get("query"),
+                    max_pages=payload.get("max_pages"),
+                )
+            elif event == "wechat_search_page_started":
+                append_run_log(
+                    "抓方式",
+                    "微信搜索开始抓取分页",
+                    source=m.domain,
+                    method_id=m.id,
+                    query=payload.get("query"),
+                    page_no=payload.get("page_no"),
+                    total_pages=payload.get("total_pages"),
+                    fetched_count=payload.get("fetched_count"),
+                    transport=payload.get("transport"),
+                )
+            elif event == "wechat_search_page_finished":
+                append_run_log(
+                    "抓方式",
+                    "微信搜索分页抓取完成",
+                    source=m.domain,
+                    method_id=m.id,
+                    query=payload.get("query"),
+                    page_no=payload.get("page_no"),
+                    page_items=payload.get("page_items"),
+                    fetched_count=payload.get("fetched_count"),
+                    transport=payload.get("transport"),
+                )
+            elif event in {"wechat_search_page_empty", "wechat_search_rate_limited", "wechat_search_captcha_required", "wechat_search_failed", "wechat_search_finished"}:
+                message_map = {
+                    "wechat_search_page_empty": "微信搜索当前分页未提取到结果",
+                    "wechat_search_rate_limited": "微信搜索触发限流",
+                    "wechat_search_captcha_required": "微信搜索触发验证码",
+                    "wechat_search_failed": "微信搜索执行失败",
+                    "wechat_search_finished": "微信搜索执行完成",
+                }
+                append_run_log(
+                    "抓方式",
+                    message_map[event],
+                    source=m.domain,
+                    method_id=m.id,
+                    **payload,
+                )
+            elif event == "wechat_enrich_started":
+                append_run_log(
+                    "抓方式",
+                    "开始补抓微信文章内容",
+                    source=m.domain,
+                    method_id=m.id,
+                    total_items=payload.get("total_items"),
+                    max_items=payload.get("max_items"),
+                    fetch_content=payload.get("fetch_content"),
+                )
+            elif event == "wechat_enrich_item_started":
+                append_run_log(
+                    "抓方式",
+                    "微信文章补抓进行中",
+                    source=m.domain,
+                    method_id=m.id,
+                    attempted_count=payload.get("attempted_count"),
+                    max_items=payload.get("max_items"),
+                    title=payload.get("title"),
+                    url=payload.get("url"),
+                )
+            elif event == "wechat_enrich_item_finished":
+                append_run_log(
+                    "抓方式",
+                    "微信文章补抓完成",
+                    source=m.domain,
+                    method_id=m.id,
+                    attempted_count=payload.get("attempted_count"),
+                    enriched_count=payload.get("enriched_count"),
+                    title=payload.get("title"),
+                    url=payload.get("url"),
+                    status=payload.get("status"),
+                )
+            elif event == "wechat_enrich_finished":
+                append_run_log(
+                    "抓方式",
+                    "微信文章补抓阶段完成",
+                    source=m.domain,
+                    method_id=m.id,
+                    status=payload.get("status"),
+                    attempted_count=payload.get("attempted_count"),
+                    enriched_count=payload.get("enriched_count"),
+                    total_items=payload.get("total_items"),
+                )
+
+        output = run_method(recipe, progress_callback=_log_fetch_progress)  # 纯确定性执行（可被测试 mock）
         raw_items = list(output.get("items", []))
         append_run_log(
             "抓方式",
@@ -378,7 +572,12 @@ def discovery_fetch(
 
 
 class SuggestNameRequest(BaseModel):
-    url: HttpUrl
+    input: str
+    display_input: str | None = None
+    selected_route_type: RouteType | None = None
+    resolved_route_type: RouteType | None = None
+    route_source: RouteSource = RouteSource.INFERRED
+    url: HttpUrl | None = None  # legacy: website URL for backward compat
 
 
 def _extract_title(html: str) -> str | None:
@@ -390,24 +589,12 @@ def _extract_title(html: str) -> str | None:
     return title or None
 
 
-def _normalize_site_name(value: str | None) -> str | None:
-    import re
-
-    if not value:
-        return None
-    cleaned = value.strip().strip("'\"“”‘’`")
-    cleaned = re.sub(r"\s+", " ", cleaned)
-    cleaned = re.sub(r"[。！？!?,，；;：:]+$", "", cleaned).strip()
-    cleaned = cleaned[:MAX_SUGGEST_NAME_LENGTH].strip()
-    return cleaned or None
-
-
 def _suggest_name_with_llm(site_url: str, domain: str, title: str | None) -> str | None:
     prompt = (
         "你是一个网站命名助手。"
         "请根据给定的网站信息，生成一个适合作为站点名称的短标题。"
         "要求：\n"
-        f"1. 最终结果不超过{MAX_SUGGEST_NAME_LENGTH}个字符；\n"
+        "1. 最终结果不超过20个字符；\n"
         "2. 可以是中文、英文或中英文混合短语；\n"
         "3. 像站点名，不要写解释；\n"
         "4. 只输出名称本身。\n\n"
@@ -420,15 +607,65 @@ def _suggest_name_with_llm(site_url: str, domain: str, title: str | None) -> str
         temperature=0.1,
         timeout=SUGGEST_NAME_LLM_TIMEOUT_SECONDS,
     )
-    return _normalize_site_name(result)
+    return normalize_site_name(result)
 
 
 @router.post("/suggest-name")
 def suggest_name(body: SuggestNameRequest):
-    """优先用 LLM 生成站点短名；失败时回退<title>，再回退域名。"""
+    from app.run_logs import append_run_log
+
+    resolved_route_type = (body.resolved_route_type or body.selected_route_type)
+    display_input = body.display_input or body.input
+
+    # Route-aware naming for non-website types
+    if resolved_route_type == RouteType.WECHAT_SEARCH:
+        from app.discovery.naming import format_wechat_search_display_name
+        value = body.input.strip()
+        name = format_wechat_search_display_name(value)
+        append_run_log(
+            "命名",
+            "自动生成名称",
+            input=display_input,
+            effective_input=body.input,
+            resolved_route_type=resolved_route_type.value,
+            name=name,
+        )
+        return {"name": name, "resolved_route_type": resolved_route_type.value}
+
+    if resolved_route_type == RouteType.WECHAT_HISTORY:
+        from app.discovery.naming import format_wechat_history_display_name
+        value = body.input.strip()
+        name = format_wechat_history_display_name(value)
+        append_run_log(
+            "命名",
+            "自动生成名称",
+            input=display_input,
+            effective_input=body.input,
+            resolved_route_type=resolved_route_type.value,
+            name=name,
+        )
+        return {"name": name, "resolved_route_type": resolved_route_type.value}
+
+    if resolved_route_type == RouteType.INTERNAL_FORUM:
+        from app.discovery.naming import format_internal_forum_display_name
+        value = body.input.strip()
+        name = format_internal_forum_display_name(value)
+        append_run_log(
+            "命名",
+            "自动生成名称",
+            input=display_input,
+            effective_input=body.input,
+            resolved_route_type=resolved_route_type.value,
+            name=name,
+        )
+        return {"name": name, "resolved_route_type": resolved_route_type.value}
+
+    # Website: legacy path using LLM + title fetch
     from urllib.parse import urlparse
     import httpx
-    site_url = str(body.url)
+
+    site_url = body.input.strip()
+
     domain = urlparse(site_url).netloc.removeprefix("www.")
     title = None
     try:
@@ -457,10 +694,28 @@ def suggest_name(body: SuggestNameRequest):
         llm_name = _suggest_name_with_llm(site_url, domain, title)
         if llm_name:
             logger.info("suggest-name llm success url=%s name=%s", site_url, llm_name)
-            return {"name": llm_name}
+            name = format_website_display_name(llm_name, fallback_url=site_url)
+            append_run_log(
+                "命名",
+                "自动生成名称",
+                input=display_input,
+                effective_input=body.input,
+                resolved_route_type=resolved_route_type.value if resolved_route_type else "website",
+                name=name,
+            )
+            return {"name": name, "resolved_route_type": resolved_route_type.value if resolved_route_type else "website"}
     except Exception:
         logger.exception("suggest-name llm failed url=%s", site_url)
 
-    fallback = _normalize_site_name(title) or _normalize_site_name(domain) or domain[:MAX_SUGGEST_NAME_LENGTH]
+    fallback = normalize_site_name(title) or normalize_site_name(domain) or domain
+    name = format_website_display_name(fallback, fallback_url=site_url)
     logger.info("suggest-name fallback url=%s name=%s", site_url, fallback)
-    return {"name": fallback}
+    append_run_log(
+        "命名",
+        "自动生成名称",
+        input=display_input,
+        effective_input=body.input,
+        resolved_route_type=resolved_route_type.value if resolved_route_type else "website",
+        name=name,
+    )
+    return {"name": name, "resolved_route_type": resolved_route_type.value if resolved_route_type else "website"}

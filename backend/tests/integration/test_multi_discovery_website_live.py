@@ -18,7 +18,7 @@ def test_multi_run_delegates_website_to_existing_discovery():
     with httpx.Client(base_url=API_BASE, timeout=30) as client:
         response = client.post(
             "/discovery/multi-run",
-            json={"input": url, "force": True, "name": "multi website live"},
+            json={"input": url, "force": True},
         )
     assert response.status_code == 200
     payload = response.json()
@@ -40,3 +40,10 @@ def test_multi_run_delegates_website_to_existing_discovery():
     assert run_payload is not None
     assert run_payload["status"] == "completed", run_payload
     assert run_payload["resulting_method_id"]
+
+    method_id = run_payload["resulting_method_id"]
+    with httpx.Client(base_url=API_BASE, timeout=30) as client:
+        method_response = client.get(f"/discovery/methods/{method_id}")
+    assert method_response.status_code == 200
+    method_payload = method_response.json()
+    assert method_payload["source_name"].startswith("网站：")
