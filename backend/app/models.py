@@ -122,6 +122,60 @@ class Item(Base):
     entities: Mapped[list["Entity"]] = relationship(secondary="item_entities")
 
 
+# --- Mail center tables ---
+
+class MailTemplate(Base):
+    __tablename__ = "mail_templates"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    subject: Mapped[str] = mapped_column(String(500))
+    recipients_json: Mapped[list] = mapped_column(JSON, default=list)
+    filter_snapshot_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    last_send_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_send_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    last_send_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class MailSchedule(Base):
+    __tablename__ = "mail_schedules"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    template_id: Mapped[int | None] = mapped_column(ForeignKey("mail_templates.id"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    subject: Mapped[str] = mapped_column(String(500))
+    recipients_json: Mapped[list] = mapped_column(JSON, default=list)
+    filter_snapshot_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    frequency: Mapped[str] = mapped_column(String(50), default="daily")
+    send_time: Mapped[str] = mapped_column(String(10), default="09:00")
+    enabled: Mapped[bool] = mapped_column(default=True)
+    last_sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_result_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    last_result_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_sent_marker_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    patrol_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class MailDelivery(Base):
+    __tablename__ = "mail_deliveries"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    schedule_id: Mapped[int | None] = mapped_column(ForeignKey("mail_schedules.id"), nullable=True, index=True)
+    template_id: Mapped[int | None] = mapped_column(ForeignKey("mail_templates.id"), nullable=True, index=True)
+    trigger_type: Mapped[str] = mapped_column(String(50))
+    status: Mapped[str] = mapped_column(String(50), default="pending")
+    item_count: Mapped[int] = mapped_column(Integer, default=0)
+    subject: Mapped[str] = mapped_column(String(500))
+    recipients_json: Mapped[list] = mapped_column(JSON, default=list)
+    filter_snapshot_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 # --- Structured-data stream tables (no LLM; parsed straight from APIs) ---
 
 class SecurityAdvisory(Base):

@@ -142,3 +142,47 @@ class ManualNewsRunStatus(BaseModel):
     finished_at: datetime | None = None
     last_error: str | None = None
     time_filter_stats: TimeFilterStats | None = None
+
+
+MailRelativeRange = Literal["24h", "7d", "30d"]
+MailSortBy = Literal["published_at", "fetched_at"]
+MailSortDir = Literal["desc", "asc"]
+MailBoundaryMode = Literal["none", "absolute", "relative"]
+
+
+class MailFilterSnapshot(BaseModel):
+    q: str | None = None
+    main_category: str | None = None
+    info_type: str | None = None
+    importance: str | None = None
+    sub_tag: str | None = None
+    sort_by: MailSortBy = "published_at"
+    sort_dir: MailSortDir = "desc"
+    published_after_mode: MailBoundaryMode = "none"
+    published_after_value: MailRelativeRange | None = None
+    published_after: str | None = None
+    published_before_mode: MailBoundaryMode = "none"
+    published_before_value: MailRelativeRange | None = None
+    published_before: str | None = None
+
+
+class MailTemplateCreateRequest(BaseModel):
+    name: str
+    subject: str
+    recipients: list[str] = Field(default_factory=list)
+    filter_snapshot: MailFilterSnapshot = Field(default_factory=MailFilterSnapshot)
+    is_active: bool = True
+
+
+class MailTemplateResponse(BaseModel):
+    id: int
+    name: str
+    subject: str
+    recipients: list[str] = Field(default_factory=list)
+    filter_snapshot: MailFilterSnapshot
+    is_active: bool
+    last_send_at: datetime | None = None
+    last_send_status: str | None = None
+    last_send_count: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None

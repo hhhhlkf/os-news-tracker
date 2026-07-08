@@ -4,6 +4,7 @@ import { fetchFacets, fetchItems } from "../api/client";
 import { FacetSidebar } from "../components/FacetSidebar";
 import { ItemList } from "../components/ItemList";
 import { ItemDetail } from "../components/ItemDetail";
+import { MailTaskCenter } from "../components/MailTaskCenter";
 import { demoItems } from "../demoData";
 import { buildDemoFacets, filterDemoItems, makeListResponse, resolveHomeDataMode } from "./homeData";
 
@@ -13,6 +14,7 @@ export function HomePage() {
   const [filters, setFilters] = useState<Record<string, string>>({ q: "", sort_by: "published_at", sort_dir: "desc" });
   const [page, setPage] = useState(1);
   const [openId, setOpenId] = useState<number | null>(null);
+  const [mailOpen, setMailOpen] = useState(false);
 
   const setFilter = (key: string, value: string) => {
     setPage(1);
@@ -182,12 +184,51 @@ export function HomePage() {
         </section>
 
         <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
-          <FacetSidebar
-            facets={facets ?? { main_category: [], info_type: [], importance: [], sub_tags: [] }}
-            isLoading={mode === "live" && facetsQuery.isLoading}
-            selected={filters}
-            onSelect={setFilter}
-          />
+          <div style={{ width: 280, flexShrink: 0, display: "grid", gap: 16 }}>
+            <div
+              style={{
+                border: "1px solid #bfd7ff",
+                background: "linear-gradient(180deg,#f8fbff 0%,#ffffff 100%)",
+                borderRadius: 14,
+                boxShadow: "0 12px 26px rgba(16,24,40,0.05)",
+                padding: 16,
+              }}
+            >
+              <div style={{ fontSize: 15, fontWeight: 800, color: "#101828", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                邮件任务中心
+                <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "3px 8px", background: "#eff6ff", color: "#175cd3" }}>
+                  框架已接入
+                </span>
+              </div>
+              <div style={{ display: "grid", gap: 8, fontSize: 12, color: "#475467", lineHeight: 1.45 }}>
+                <div>当前筛选可直接带入邮件中心。</div>
+                <div>Task 1 已接入弹窗框架、模板列表骨架与左侧可折叠导航。</div>
+              </div>
+              <button
+                onClick={() => setMailOpen(true)}
+                style={{
+                  marginTop: 12,
+                  border: "none",
+                  borderRadius: 999,
+                  padding: "8px 14px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: "#fff",
+                  background: "#175cd3",
+                  cursor: "pointer",
+                }}
+              >
+                打开窗口
+              </button>
+            </div>
+
+            <FacetSidebar
+              facets={facets ?? { main_category: [], info_type: [], importance: [], sub_tags: [] }}
+              isLoading={mode === "live" && facetsQuery.isLoading}
+              selected={filters}
+              onSelect={setFilter}
+            />
+          </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             {hasLiveEmptyState && (
               <div
@@ -230,6 +271,8 @@ export function HomePage() {
             </div>
           </div>
         )}
+
+        <MailTaskCenter open={mailOpen} onClose={() => setMailOpen(false)} homeFilters={params} />
       </div>
     </div>
   );

@@ -1,0 +1,1 @@
+"""Mail center package."""

@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     wechat_mp_cookie: str | None = None
     wechat_mp_token: str | None = None
     wechat_mp_profile_name: str = "wechat_mp_default"
+    smtp_host: str = "localhost"
+    smtp_port: int = 25
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from_email: str = "no-reply@example.com"
+    smtp_from_name: str = "OS News Tracker"
+    smtp_use_tls: bool = False
+    smtp_use_ssl: bool = False
 
 
 @lru_cache
