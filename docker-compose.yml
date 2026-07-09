@@ -3,14 +3,14 @@ services:
     image: postgres:16
     environment:
       POSTGRES_DB: osnews
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: osnews_app
+      POSTGRES_PASSWORD: OsNewsTracker2026DbA7K9M4
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "15432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d osnews"]
+      test: ["CMD-SHELL", "pg_isready -U osnews_app -d osnews"]
       interval: 2s
       timeout: 5s
       retries: 10
@@ -20,7 +20,7 @@ services:
     build: ./backend
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/osnews_empty_test
+      DATABASE_URL: postgresql+psycopg://osnews_app:OsNewsTracker2026DbA7K9M4@db:5432/osnews_empty_test
     depends_on:
       db:
         condition: service_healthy

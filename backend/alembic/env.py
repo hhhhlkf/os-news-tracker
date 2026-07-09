@@ -18,7 +18,9 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# Alembic Config 基于 ConfigParser，URL 中的 %xx（如密码 URL 编码）
+# 会被当作插值语法；这里需要转义成 %% 才能保留原始连接串。
+config.set_main_option("sqlalchemy.url", get_settings().database_url.replace("%", "%%"))
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

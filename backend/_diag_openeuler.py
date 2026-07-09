@@ -6,7 +6,7 @@ import json
 
 os.environ.setdefault(
     "DATABASE_URL",
-    "postgresql+psycopg://postgres:postgres@db:5432/osnews_empty_test",
+    "postgresql+psycopg://osnews_app:OsNewsTracker2026DbA7K9M4@db:5432/osnews_empty_test",
 )
 os.environ.setdefault("ENABLE_SCHEDULER", "0")
 

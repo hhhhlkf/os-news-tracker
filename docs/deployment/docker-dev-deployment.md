@@ -24,7 +24,7 @@
 
 - 前端：`5173`
 - 后端：`8000`
-- 数据库：`5432`
+- 数据库：`15432`
 
 ## 2. 热更新机制
 
@@ -96,7 +96,7 @@ cp .env.example .env
 然后编辑 `.env`，至少保证以下配置存在：
 
 ```ini
-DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/osnews_empty_test
+DATABASE_URL=postgresql+psycopg://osnews_app:OsNewsTracker2026DbA7K9M4@db:5432/osnews_empty_test
 LLM_BASE_URL=https://your-llm-gateway.example.com/v1
 LLM_API_KEY=sk-your-api-key
 LLM_MODEL=your-model

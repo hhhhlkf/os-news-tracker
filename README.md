@@ -129,7 +129,7 @@ vi .env
 LLM_BASE_URL=https://your-llm-gateway.example.com/v1
 LLM_API_KEY=sk-your-api-key-here
 LLM_MODEL=gpt-4o
-DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/osnews
+DATABASE_URL=postgresql+psycopg://osnews_app:OsNewsTracker2026DbA7K9M4@db:5432/osnews
 ```
 
 #### 4. 启动服务
@@ -362,7 +362,7 @@ docker compose up --build
 
 | 变量 | 默认值（开发） | Docker/生产推荐值 | 说明 |
 | --- | --- | --- | --- |
-| `DATABASE_URL` | `sqlite+pysqlite:///:memory:` | `postgresql+psycopg://postgres:postgres@db:5432/osnews` | 数据库连接串 |
+| `DATABASE_URL` | `sqlite+pysqlite:///:memory:` | `postgresql+psycopg://osnews_app:OsNewsTracker2026DbA7K9M4@db:5432/osnews` | 数据库连接串 |
 | `LLM_BASE_URL` | `http://llm.invalid/v1` | 司内 LLM 网关地址 | LLM 网关地址（OpenAI 兼容 API） |
 | `LLM_API_KEY` | `test-key` | 司内网关 API 密钥 | LLM 网关 API 密钥 |
 | `LLM_MODEL` | `test-model` | 司内默认模型名 | 使用的模型名称 |
