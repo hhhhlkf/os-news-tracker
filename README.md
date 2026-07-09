@@ -25,6 +25,25 @@
 | 趋势总结（Digest） | DigestAgent 多步 Chain，热点识别 + 新兴趋势，按群定时生成 |
 | 实时日志面板 | SSE + 环形缓冲，JetBrains Mono 风格，覆盖所有后端进程 |
 
+### 当前已落地的控制台能力
+
+- **首页新闻流**
+  - 支持搜索、主分类/信息类型/重要度筛选、时间窗口筛选、条目详情查看
+  - 已接入 **邮件任务中心** 与 **系统晨抓配置与执行窗口**
+- **智能探查 / 发现工作台**（`/discover`）
+  - 智能探查：把网站、微信搜索、公众号历史等输入路由成对应 discovery recipe
+  - 抓取模块 · 爬取方式库：批量复用已保存的 crawl methods 执行抓取
+  - 抓取模块 · Prompt 工作室：管理 discovery / enrich 相关 prompt 套餐，支持启用、停用、自定义覆盖
+  - 抓取模块 · 主分类修改：维护富集阶段可用主分类，并同步影响条目分类
+- **邮件任务中心**
+  - 支持基于当前首页筛选条件生成 HTML 邮件预览
+  - 支持立即发送、模板保存、模板列表、预定发送列表
+  - 邮件发送通道同时支持 `TOF4 API` 与 `SMTP`
+- **系统晨抓**
+  - 只面向 `抓取模块 · 爬取方式库` 中的 active discovery methods
+  - 支持晨抓配置、立即执行、停止执行、今日状态、运行时间线、失败方式明细
+  - 调度与巡检都会写入统一日志流
+
 详细设计文档：
 - V2 综合设计：[`docs/superpowers/specs/2026-06-15-v2-complete-design.md`](docs/superpowers/specs/2026-06-15-v2-complete-design.md)
 - 群组订阅设计：[`docs/superpowers/specs/2026-06-15-group-subscription-design.md`](docs/superpowers/specs/2026-06-15-group-subscription-design.md)
@@ -353,8 +372,38 @@ docker compose up --build
 | `FETCH_PER_HOST_DELAY_SECONDS` | `2.0` | `2.0` | 同主机请求间隔（秒） |
 | `ENABLE_SCHEDULER` | `1` | `1` | 是否启用定时任务调度（测试时设为 `0`） |
 | `JWT_SECRET_KEY` | `change-me-in-production-use-32+-chars` | 32 位以上随机字符串 | JWT 签名密钥（V2，必须修改）|
+| `WECHAT_MP_COOKIE` | 空 | 实际公众号平台 cookie | 微信公众号历史抓取鉴权 |
+| `WECHAT_MP_TOKEN` | 空 | 实际公众号平台 token | 微信公众号历史抓取鉴权 |
+| `MAIL_PROVIDER` | `tof4` | `tof4` / `smtp` | 默认邮件发送通道 |
+| `TOF4_PAASID` | 空 | 司内 TOF4 应用 ID | TOF4 邮件通道配置 |
+| `TOF4_TOKEN` | 空 | 司内 TOF4 token | TOF4 邮件通道配置 |
+| `TOF4_URL` | 空 | 实际 TOF4 发送地址 | TOF4 邮件通道配置 |
+| `SMTP_HOST` | `localhost` | 企业 SMTP 主机 | SMTP 发信主机 |
+| `SMTP_PORT` | `25` | `465` / `587` 等 | SMTP 发信端口 |
+| `SMTP_USERNAME` | 空 | 发件账号 | SMTP 登录用户名 |
+| `SMTP_PASSWORD` | 空 | SMTP 授权码/密码 | SMTP 登录密码 |
+| `SMTP_FROM_EMAIL` | `no-reply@example.com` | 实际发件邮箱 | SMTP 默认发件人 |
+| `SMTP_FROM_NAME` | `OS News Tracker` | 实际显示名 | SMTP 默认发件名 |
+| `SMTP_USE_TLS` | `0` | `0` / `1` | SMTP STARTTLS 开关 |
+| `SMTP_USE_SSL` | `0` | `0` / `1` | SMTP SSL 开关 |
 
 配置使用 pydantic-settings，自动从 `.env` 文件加载。
+
+### 邮件与微信相关示例
+
+`.env.example` 已内置两套邮件通道与微信抓取配置骨架：
+
+- **微信历史抓取**
+  - `WECHAT_MP_COOKIE`
+  - `WECHAT_MP_TOKEN`
+- **TOF4 邮件发送**
+  - `MAIL_PROVIDER=tof4`
+  - `TOF4_PAASID` / `TOF4_TOKEN` / `TOF4_URL`
+- **SMTP 邮件发送**
+  - `MAIL_PROVIDER=smtp`
+  - `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD`
+
+如果只做本地开发而不测试邮件或公众号历史抓取，这些字段可以先留空。
 
 ## 大模型 API 配置
 
@@ -476,3 +525,22 @@ curl -sS "$LLM_BASE_URL/chat/completions" \
 3. **Firecrawl 内容提取** — 内容提取层基于可插拔的 `ContentExtractor` 协议设计。默认使用 Scrapling。如需更高精度的提取（尤其是 JS 渲染页面），可接入 Firecrawl 作为替代提取器，但需注意其 AGPL 许可证的影响。
 
 4. **Alembic 生产迁移** — 当前开发模式下使用 `Base.metadata.create_all()` 在启动时自动建表。生产环境应使用 Alembic 迁移管理数据库 schema 变更。
+
+## Discovery 与晨抓说明
+
+### Discovery（智能探查 + 爬取方式库）
+
+- discovery 负责把输入沉淀为可复用的 `crawl method`
+- 当前支持的网站路径、微信搜索路径、微信公众号历史路径等多源 recipe
+- `Prompt 工作室` 管 discovery 与 enrich 的 prompt 套餐，不会直接改动代码默认模板
+- `主分类修改` 用于维护 enrich 阶段的主分类池
+
+### 系统晨抓
+
+- 晨抓只使用 **discovery methods**
+- 不再以旧 `/sources` 业务模型作为晨抓主入口
+- 每次晨抓会根据配置生成抓取请求，执行 active methods，并记录：
+  - 今日状态
+  - 最近运行记录
+  - 方法级成功/失败明细
+  - 日志时间线
