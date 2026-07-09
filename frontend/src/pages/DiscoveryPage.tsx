@@ -4,7 +4,9 @@ import { CrawlMethodDetail } from "../components/CrawlMethodDetail";
 import { CrawlMethodList } from "../components/CrawlMethodList";
 import { DiscoverNewsControlSection } from "../components/DiscoverNewsControlSection";
 import { DiscoveryPanel } from "../components/DiscoveryPanel";
+import { MainCategoryPanel } from "../components/MainCategoryPanel";
 import { buildNewsRunFormState } from "../components/NewsRunControl";
+import { PromptStudioPanel } from "../components/PromptStudioPanel";
 import { RunLimitCard } from "../components/RunLimitCard";
 
 export function DiscoveryPage() {
@@ -42,6 +44,8 @@ export function DiscoveryPage() {
         </div>
         <DiscoveryPanel onMethodAdded={handleMethodAdded} />
         <CrawlMethodList onOpenMethod={setOpenMethod} highlightId={highlightId} runLimitState={runLimitState} />
+        <PromptStudioPanel />
+        <MainCategoryPanel />
         <div data-testid="discover-methods-divider" style={methodsDivider} />
         <DiscoverNewsControlSection runLimitState={runLimitState} onRunLimitStateChange={setRunLimitState} />
 

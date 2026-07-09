@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.api.source_cleanup import delete_source_and_related
-from app.enums import MAIN_CATEGORIES, SourceType, Stream
+from app.categories import get_main_category_names
+from app.enums import SourceType, Stream
 from app.models import Source
 from app.sources.detector import SourceDetectionError, detect_source
 from app.sources.html_list_discovery import discover_html_list_source
@@ -112,7 +113,7 @@ def create_source(
     body: SourceCreateRequest,
     db: Session = Depends(get_db),
 ):
-    if body.main_category not in MAIN_CATEGORIES:
+    if body.main_category not in get_main_category_names(db):
         raise HTTPException(status_code=422, detail="未知内容类型")
 
     if body.type and body.type in _VALID_SOURCE_TYPES:
@@ -189,8 +190,9 @@ def discover_source_route(body: DiscoverRequest, db: Session = Depends(get_db)):
     if body.create_source:
         if not result.success or not result.api_url:
             raise HTTPException(status_code=422, detail="未能发现可用 API，无法创建来源")
-        main_category = body.main_category or (MAIN_CATEGORIES[0] if MAIN_CATEGORIES else None)
-        if main_category not in MAIN_CATEGORIES:
+        _category_names = get_main_category_names(db)
+        main_category = body.main_category or (_category_names[0] if _category_names else None)
+        if main_category not in _category_names:
             raise HTTPException(status_code=422, detail="未知内容类型")
         source = _upsert_api_source_from_probe(
             db,
@@ -220,7 +222,7 @@ def create_source_from_probe_route(body: CreateFromProbeRequest, db: Session = D
 
     同 URL 的已存在 api 来源会被覆盖更新，而非新建。
     """
-    if body.main_category not in MAIN_CATEGORIES:
+    if body.main_category not in get_main_category_names(db):
         raise HTTPException(status_code=422, detail="未知内容类型")
     if not body.api_url:
         raise HTTPException(status_code=422, detail="缺少 api_url")

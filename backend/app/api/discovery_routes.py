@@ -11,7 +11,7 @@ import logging
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, HttpUrl
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -32,7 +32,25 @@ from app.discovery.naming import (
 )
 from app.llm.client import LlmClient
 from app.manual_news_run import _build_not_stored_log_fields
-from app.models import CrawlMethod, CrawlMethodDomain, MorningCrawlRunMethod, SiteDiscoveryRun
+from app.enums import TagKind
+from app.models import (
+    CrawlMethod,
+    CrawlMethodDomain,
+    DiscoveryPromptSet,
+    Item,
+    ItemTag,
+    MainCategory,
+    MorningCrawlRunMethod,
+    SiteDiscoveryRun,
+    Tag,
+)
+from app.discovery.prompts import (
+    DEFAULT_NAMING,
+    STAGES,
+    get_stage_defaults,
+    resolve_prompt,
+    validate_prompts,
+)
 from app.schemas import ManualNewsRunRequest
 
 router = APIRouter(prefix="/discovery", tags=["discovery"])
@@ -40,6 +58,8 @@ logger = logging.getLogger(__name__)
 SUGGEST_NAME_LLM_TIMEOUT_SECONDS = 5.0
 # 微信补正文单条方式的抓取上限（封顶），防止被 target_count 放大成几百篇。
 WECHAT_ENRICH_MAX_ITEMS = 20
+# 站点命名 prompt（token 模版）；供 prompts.get_stage_defaults 引用，也是本模块默认。
+_NAMING_PROMPT = DEFAULT_NAMING
 _RELATIVE_RANGE_TO_DELTA = {
     "24h": timedelta(days=1),
     "7d": timedelta(days=7),
@@ -591,16 +611,10 @@ def _extract_title(html: str) -> str | None:
 
 def _suggest_name_with_llm(site_url: str, domain: str, title: str | None) -> str | None:
     prompt = (
-        "你是一个网站命名助手。"
-        "请根据给定的网站信息，生成一个适合作为站点名称的短标题。"
-        "要求：\n"
-        "1. 最终结果不超过20个字符；\n"
-        "2. 可以是中文、英文或中英文混合短语；\n"
-        "3. 像站点名，不要写解释；\n"
-        "4. 只输出名称本身。\n\n"
-        f"URL: {site_url}\n"
-        f"域名: {domain}\n"
-        f"页面标题: {title or '(无标题)'}\n"
+        resolve_prompt("naming", _NAMING_PROMPT)
+        .replace("{site_url}", site_url)
+        .replace("{domain}", domain)
+        .replace("{title}", title or "(无标题)")
     )
     result = LlmClient().complete(
         prompt,
@@ -719,3 +733,274 @@ def suggest_name(body: SuggestNameRequest):
         name=name,
     )
     return {"name": name, "resolved_route_type": resolved_route_type.value if resolved_route_type else "website"}
+
+
+# ---------------------------------------------------------------------------
+# Prompt Studio：站点发现 fetch 阶段的 LLM prompt 多套自定义
+# ---------------------------------------------------------------------------
+
+
+class PromptStageInfo(BaseModel):
+    key: str
+    label: str
+    description: str
+    required_tokens: list[str]
+    default_template: str
+
+
+class PromptSetResponse(BaseModel):
+    id: int
+    name: str
+    is_active: bool
+    prompts: dict[str, str]
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class PromptSetCreateRequest(BaseModel):
+    name: str
+    prompts: dict[str, str] = {}
+
+
+class PromptSetUpdateRequest(BaseModel):
+    name: str | None = None
+    prompts: dict[str, str] | None = None
+
+
+def _prompt_set_to_response(row: DiscoveryPromptSet) -> PromptSetResponse:
+    return PromptSetResponse(
+        id=row.id,
+        name=row.name,
+        is_active=row.is_active,
+        prompts=dict(row.prompts or {}),
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+@router.get("/prompt-stages", response_model=list[PromptStageInfo])
+def list_prompt_stages():
+    """各阶段元信息 + 内置默认模版（前端"新建"预填 / 恢复默认用）。"""
+    defaults = get_stage_defaults()
+    return [
+        PromptStageInfo(
+            key=stage.key,
+            label=stage.label,
+            description=stage.description,
+            required_tokens=list(stage.required_tokens),
+            default_template=defaults.get(stage.key, ""),
+        )
+        for stage in STAGES
+    ]
+
+
+@router.get("/prompt-sets", response_model=list[PromptSetResponse])
+def list_prompt_sets(db: Session = Depends(get_db)):
+    rows = db.scalars(select(DiscoveryPromptSet).order_by(DiscoveryPromptSet.id.desc())).all()
+    return [_prompt_set_to_response(r) for r in rows]
+
+
+@router.post("/prompt-sets", response_model=PromptSetResponse, status_code=201)
+def create_prompt_set(body: PromptSetCreateRequest, db: Session = Depends(get_db)):
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(422, "名称不能为空")
+    errors = validate_prompts(body.prompts)
+    if errors:
+        raise HTTPException(422, "；".join(errors))
+    row = DiscoveryPromptSet(name=name, prompts=dict(body.prompts or {}), is_active=False)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _prompt_set_to_response(row)
+
+
+@router.put("/prompt-sets/{set_id}", response_model=PromptSetResponse)
+def update_prompt_set(set_id: int, body: PromptSetUpdateRequest, db: Session = Depends(get_db)):
+    row = db.get(DiscoveryPromptSet, set_id)
+    if row is None:
+        raise HTTPException(404, "prompt set not found")
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(422, "名称不能为空")
+        row.name = name
+    if body.prompts is not None:
+        errors = validate_prompts(body.prompts)
+        if errors:
+            raise HTTPException(422, "；".join(errors))
+        row.prompts = dict(body.prompts)
+    db.commit()
+    db.refresh(row)
+    return _prompt_set_to_response(row)
+
+
+@router.delete("/prompt-sets/{set_id}", status_code=204)
+def delete_prompt_set(set_id: int, db: Session = Depends(get_db)):
+    row = db.get(DiscoveryPromptSet, set_id)
+    if row is None:
+        raise HTTPException(404, "prompt set not found")
+    db.delete(row)
+    db.commit()
+
+
+@router.post("/prompt-sets/{set_id}/activate", response_model=PromptSetResponse)
+def activate_prompt_set(set_id: int, db: Session = Depends(get_db)):
+    """启用某一套（其余自动停用）。"""
+    row = db.get(DiscoveryPromptSet, set_id)
+    if row is None:
+        raise HTTPException(404, "prompt set not found")
+    db.execute(update(DiscoveryPromptSet).values(is_active=False))
+    row.is_active = True
+    db.commit()
+    db.refresh(row)
+    return _prompt_set_to_response(row)
+
+
+@router.post("/prompt-sets/{set_id}/deactivate", response_model=PromptSetResponse)
+def deactivate_prompt_set(set_id: int, db: Session = Depends(get_db)):
+    """停用某一套（回退到内置默认 prompt）。"""
+    row = db.get(DiscoveryPromptSet, set_id)
+    if row is None:
+        raise HTTPException(404, "prompt set not found")
+    row.is_active = False
+    db.commit()
+    db.refresh(row)
+    return _prompt_set_to_response(row)
+
+
+# ---------------------------------------------------------------------------
+# 主分类管理：添加 / 改名（同步条目与标签）/ 删除（仅限空分类）
+# ---------------------------------------------------------------------------
+
+
+class MainCategoryResponse(BaseModel):
+    id: int
+    name: str
+    sort_order: int
+    item_count: int
+
+
+class MainCategoryCreateRequest(BaseModel):
+    name: str
+
+
+class MainCategoryUpdateRequest(BaseModel):
+    name: str
+
+
+def _main_category_counts(db: Session) -> dict[str, int]:
+    rows = db.execute(
+        select(Item.main_category, func.count()).group_by(Item.main_category)
+    ).all()
+    return {name: count for name, count in rows if name is not None}
+
+
+def _list_main_categories(db: Session) -> list[MainCategoryResponse]:
+    counts = _main_category_counts(db)
+    rows = db.scalars(
+        select(MainCategory).order_by(MainCategory.sort_order, MainCategory.id)
+    ).all()
+    return [
+        MainCategoryResponse(
+            id=r.id, name=r.name, sort_order=r.sort_order, item_count=counts.get(r.name, 0)
+        )
+        for r in rows
+    ]
+
+
+@router.get("/main-categories", response_model=list[MainCategoryResponse])
+def list_main_categories(db: Session = Depends(get_db)):
+    return _list_main_categories(db)
+
+
+@router.post("/main-categories", response_model=MainCategoryResponse, status_code=201)
+def create_main_category(body: MainCategoryCreateRequest, db: Session = Depends(get_db)):
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(422, "名称不能为空")
+    exists = db.scalar(select(MainCategory).where(MainCategory.name == name))
+    if exists is not None:
+        raise HTTPException(422, "该主分类已存在")
+    max_order = db.scalar(select(func.max(MainCategory.sort_order))) or 0
+    row = MainCategory(name=name, sort_order=max_order + 1)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return MainCategoryResponse(id=row.id, name=row.name, sort_order=row.sort_order, item_count=0)
+
+
+def _rename_main_category_tag(db: Session, old: str, new: str) -> None:
+    """把 kind=MAIN_CATEGORY 的标签 old→new；若 new 已存在则把关联并入 new 后删除 old。"""
+    old_tag = db.scalar(
+        select(Tag).where(Tag.kind == TagKind.MAIN_CATEGORY, Tag.name == old)
+    )
+    if old_tag is None:
+        return
+    new_tag = db.scalar(
+        select(Tag).where(Tag.kind == TagKind.MAIN_CATEGORY, Tag.name == new)
+    )
+    if new_tag is None or new_tag.id == old_tag.id:
+        old_tag.name = new
+        return
+    # 合并：把 old_tag 的条目关联迁到 new_tag（去重），再删 old_tag
+    existing_item_ids = set(
+        db.scalars(select(ItemTag.item_id).where(ItemTag.tag_id == new_tag.id)).all()
+    )
+    for link in db.scalars(select(ItemTag).where(ItemTag.tag_id == old_tag.id)).all():
+        if link.item_id in existing_item_ids:
+            db.delete(link)
+        else:
+            link.tag_id = new_tag.id
+            existing_item_ids.add(link.item_id)
+    db.flush()
+    db.delete(old_tag)
+
+
+@router.put("/main-categories/{category_id}", response_model=MainCategoryResponse)
+def update_main_category(
+    category_id: int, body: MainCategoryUpdateRequest, db: Session = Depends(get_db)
+):
+    row = db.get(MainCategory, category_id)
+    if row is None:
+        raise HTTPException(404, "main category not found")
+    new_name = (body.name or "").strip()
+    if not new_name:
+        raise HTTPException(422, "名称不能为空")
+    old_name = row.name
+    if new_name == old_name:
+        counts = _main_category_counts(db)
+        return MainCategoryResponse(
+            id=row.id, name=row.name, sort_order=row.sort_order, item_count=counts.get(row.name, 0)
+        )
+    clash = db.scalar(
+        select(MainCategory).where(MainCategory.name == new_name, MainCategory.id != category_id)
+    )
+    if clash is not None:
+        raise HTTPException(422, "已存在同名主分类")
+    # 同步：条目字段 + 主分类标签
+    db.execute(
+        update(Item).where(Item.main_category == old_name).values(main_category=new_name)
+    )
+    _rename_main_category_tag(db, old_name, new_name)
+    row.name = new_name
+    db.commit()
+    db.refresh(row)
+    counts = _main_category_counts(db)
+    return MainCategoryResponse(
+        id=row.id, name=row.name, sort_order=row.sort_order, item_count=counts.get(row.name, 0)
+    )
+
+
+@router.delete("/main-categories/{category_id}", status_code=204)
+def delete_main_category(category_id: int, db: Session = Depends(get_db)):
+    row = db.get(MainCategory, category_id)
+    if row is None:
+        raise HTTPException(404, "main category not found")
+    count = db.scalar(
+        select(func.count()).select_from(Item).where(Item.main_category == row.name)
+    ) or 0
+    if count > 0:
+        raise HTTPException(422, f"该主分类下还有 {count} 条条目，无法删除")
+    db.delete(row)
+    db.commit()

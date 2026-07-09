@@ -26,6 +26,10 @@ from app.discovery.cancel import (
     register_run,
     unregister_run,
 )
+from app.discovery.prompts import DEFAULT_SYNTHESIS, render_prompt, resolve_prompt
+
+# 探查结果整理 prompt（token 模版）；供 prompts.get_stage_defaults 引用，也是本模块默认。
+_SYNTHESIS_PROMPT = DEFAULT_SYNTHESIS
 
 logger = logging.getLogger(__name__)
 
@@ -625,7 +629,7 @@ def _run_explorer_tool_loop(*, llm, tools: list, user_message: str, max_rounds: 
     tool_map = {tool.name: tool for tool in tools}
     bound_llm = llm.bind_tools(tools) if hasattr(llm, "bind_tools") else llm
     full_messages: list = [
-        SystemMessage(content=EXPLORER_SYSTEM_PROMPT),
+        SystemMessage(content=resolve_prompt("explorer_system", EXPLORER_SYSTEM_PROMPT)),
         HumanMessage(content=user_message),
     ]
     model_messages: list = list(full_messages)
@@ -1493,40 +1497,14 @@ def _synthesize_exploration(*, site_url: str, result: dict, deterministic_candid
 
     evidence = _explorer_evidence_payload(result)
     ensure_not_cancelled()
-    prompt = (
-        "你是站点探查结果整理器。"
-        "请根据给定站点探查证据，输出一个 JSON object。"
-        "要求：\n"
-        "1. 只输出 JSON object，不要解释，不要 Markdown；\n"
-        "2. 所有字符串必须是合法 JSON 字符串；\n"
-        "3. 如果证据不足，如实返回 source_type=unknown, success=false；\n"
-        "4. 尽量保留证据中已经确认的字段和值。\n"
-        "4.1 下面会提供一个程序提取出的候选池，它们只是候选，不是最终答案；由你来选择最像文章列表的那个。\n"
-        "4.2 若候选像 tags/archives/count 统计接口，而不是文章列表，不要选它。\n"
-        "5. 若 success=true 且 source_type=json_api，必须同时给出：list_url、format_locator.value（json path）、"
-        "fields.title、至少 1 条 sample_items，以及 fields.url 或 fields.id 或 sample_items 中的 path/url。\n"
-        "5.1 对 JSON API：list_url 只放不带 query string 的接口 URL；URL 上的 ?a=b&page=1 等参数必须拆到 fetch.query；"
-        "POST 请求体参数必须放 fetch.json_body。不要把分页/筛选参数混在 list_url 里。\n"
-        "6. 若 success=true 且 source_type=rss/atom，必须给出 list_url 且 format_locator.kind=feed_entries。\n"
-        "7. 若 success=true 且 source_type=html，必须给出 html_selectors 四项和 sample_items。\n\n"
-        "输出 schema：\n"
-        "{\n"
-        '  "source_type": "json_api | rss | atom | html | unknown",\n'
-        '  "list_url": "string or null",\n'
-        '  "fetch": {"method": "GET | POST", "transport": "httpx | scrapling", "impersonate": null, "stealthy_headers": true, "headers": {}, "query": {}, "json_body": null},\n'
-        '  "format_locator": {"kind": "json_path | feed_entries | html_selector | unknown", "value": "string"},\n'
-        '  "fields": {"id": null, "title": null, "url": null, "published_at": null, "summary": null, "content": null},\n'
-        '  "html_selectors": {"item_selector": null, "link_selector": null, "title_selector": null, "date_selector": null},\n'
-        '  "sample_items": [{"id": null, "title": null, "raw_url": null, "url": null, "published_at": null, "raw": null}],\n'
-        '  "url_candidates": [],\n'
-        '  "pagination": {"type": "none | page_param | offset_limit | cursor | next_url | html_next | unknown", "page_param": null, "size_param": null, "offset_param": null, "limit_param": null, "cursor_param": null, "next_path": null, "has_more_path": null, "start": 1, "size": null, "notes": ""},\n'
-        '  "evidence": [],\n'
-        '  "notes": [],\n'
-        '  "success": true\n'
-        "}\n\n"
-        f"站点 URL: {site_url}\n"
-        f"程序提取的候选池（供你自行选择，不要机械接受）:\n{json.dumps(deterministic_candidates, ensure_ascii=False)}\n\n"
-        f"ReAct 证据轨迹:\n{json.dumps(evidence, ensure_ascii=False)}\n"
+    prompt = render_prompt(
+        "synthesis",
+        _SYNTHESIS_PROMPT,
+        {
+            "{site_url}": site_url,
+            "{deterministic_candidates}": json.dumps(deterministic_candidates, ensure_ascii=False),
+            "{evidence}": json.dumps(evidence, ensure_ascii=False),
+        },
     )
     raw = LlmClient().complete(
         prompt,
@@ -1922,9 +1900,14 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
     worker_feedback = None
     last_out: DiscoveryState | None = None
     for attempt in range(1, WORKER_RETRY_LIMIT + 1):
-        prompt = (VALIDATOR_PROMPT
-                  .replace("{site_url}", state["site_url"])
-                  .replace("{exploration}", json.dumps(exploration, ensure_ascii=False)))
+        prompt = render_prompt(
+            "validator",
+            VALIDATOR_PROMPT,
+            {
+                "{site_url}": state["site_url"],
+                "{exploration}": json.dumps(exploration, ensure_ascii=False),
+            },
+        )
         prompt = _append_worker_retry_prompt(prompt, "上一轮验证URL失败反馈", worker_feedback)
         try:
             if llm is None:
@@ -2410,11 +2393,16 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
             "notes": ["deterministic path_join recipe"],
         }
         return finalize_recipe(recipe_dict)
-    prompt = (DSL_WRITER_PROMPT
-              .replace("{site_url}", state["site_url"])
-              .replace("{url_rule}", json.dumps(url_rule, ensure_ascii=False))
-              .replace("{exploration}", json.dumps(exploration, ensure_ascii=False))
-              .replace("{retry_feedback}", json.dumps(retry_feedback, ensure_ascii=False)))
+    prompt = render_prompt(
+        "dsl_writer",
+        DSL_WRITER_PROMPT,
+        {
+            "{site_url}": state["site_url"],
+            "{url_rule}": json.dumps(url_rule, ensure_ascii=False),
+            "{exploration}": json.dumps(exploration, ensure_ascii=False),
+            "{retry_feedback}": json.dumps(retry_feedback, ensure_ascii=False),
+        },
+    )
     worker_feedback = None
     last_out: DiscoveryState | None = None
     for attempt in range(1, WORKER_RETRY_LIMIT + 1):
@@ -2644,13 +2632,17 @@ def _recipe_summary(recipe: DslRecipe) -> dict:
 def _llm_audit_quality(llm, site_url: str, recipe: DslRecipe, items: list, errors: list) -> tuple[str, dict]:
     """调 LLM 评判实跑抓取结果的价值/全面性/反爬/翻页，返回可见输出文本与 verdict dict。"""
     sample = _audit_items_sample(items)
-    prompt = _AUDIT_PROMPT.format(
-        site_url=site_url,
-        recipe_summary=json.dumps(_recipe_summary(recipe), ensure_ascii=False),
-        errors=json.dumps(errors, ensure_ascii=False),
-        items_sample=json.dumps(sample, ensure_ascii=False),
-        n=len(sample),
-        discovered_count=len(items),
+    prompt = render_prompt(
+        "auditor",
+        _AUDIT_PROMPT,
+        {
+            "{site_url}": site_url,
+            "{recipe_summary}": json.dumps(_recipe_summary(recipe), ensure_ascii=False),
+            "{errors}": json.dumps(errors, ensure_ascii=False),
+            "{items_sample}": json.dumps(sample, ensure_ascii=False),
+            "{n}": str(len(sample)),
+            "{discovered_count}": str(len(items)),
+        },
     )
     if llm is None:
         from app.llm.client import LlmClient

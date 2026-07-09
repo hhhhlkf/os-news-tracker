@@ -2,7 +2,7 @@ import uuid as _uuid
 from datetime import datetime
 from typing import Any
 from sqlalchemy import (
-    String, Text, Integer, DateTime, ForeignKey, Float, JSON, UniqueConstraint, CheckConstraint, func,
+    String, Text, Integer, DateTime, ForeignKey, Float, JSON, Boolean, UniqueConstraint, CheckConstraint, func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -446,3 +446,32 @@ class MorningCrawlRunMethod(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class MainCategory(Base):
+    """可管理的主分类（原为 enums.MAIN_CATEGORIES 硬编码）。
+
+    条目的 main_category 存字符串；本表提供 enricher 的分类选项与前端管理。
+    改名时需同步更新 items.main_category 与对应的 main_category Tag。
+    """
+    __tablename__ = "main_categories"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class DiscoveryPromptSet(Base):
+    """一套站点发现 fetch 阶段的 LLM prompt 覆盖配置。
+
+    prompts: {stage_key: 覆盖文本}，缺失或空的阶段回退到内置默认。同一时刻最多 1 套 is_active。
+    """
+    __tablename__ = "discovery_prompt_sets"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    prompts: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
