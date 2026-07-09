@@ -42,8 +42,17 @@ function splitDisplayInput(rawInput: string): {
   }
 
   const inputPrefix = match[1].trim();
-  const effectiveValue = match[2].trim();
   const prefixedRouteType = PREFIX_TO_ROUTE_TYPE[inputPrefix] ?? null;
+  if (!prefixedRouteType) {
+    return {
+      displayValue,
+      inputPrefix: null,
+      effectiveValue: displayValue,
+      prefixedRouteType: null,
+    };
+  }
+
+  const effectiveValue = match[2].trim();
   return {
     displayValue,
     inputPrefix,
