@@ -456,7 +456,7 @@ const btnDisabled: CSSProperties = { ...btnPrimary, background: "#98a2b3", curso
 const btnDanger: CSSProperties = { ...btnPrimary, background: "#dc2626" };
 const btnGhost: CSSProperties = { border: "1px solid #d0d5dd", background: "#fff", borderRadius: 8, padding: "9px 11px", fontSize: 12, color: "#475467", cursor: "pointer", flexShrink: 0 };
 const toggleBtn: CSSProperties = { border: "1px solid #d0d5dd", background: "#fff", borderRadius: 999, padding: "8px 14px", fontSize: 12, color: "#344054", fontWeight: 700, cursor: "pointer" };
-const resetBtn: CSSProperties = { ...toggleBtn, color: "#b42318", borderColor: "#fda29b", background: "#fffafa" };
+const resetBtn: CSSProperties = { ...toggleBtn, color: "#047857", borderColor: "#6ee7b7", background: "#ecfdf3" };
 const WORKSPACE_HEIGHT = 760;
 const controlGrid: CSSProperties = {
   display: "grid",
