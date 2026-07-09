@@ -1,6 +1,6 @@
 // frontend/src/components/DiscoveryPanel.tsx
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, cancelDiscoveryRun, getDiscoveryRun, startDiscoveryRun, suggestDiscoveryName } from "../api/client";
 import type {
   DiscoveryRouteType,
@@ -65,7 +65,13 @@ function writeDiscoveryPanelState(state: DiscoveryPanelPersistedState): void {
   window.localStorage.setItem(DISCOVERY_PANEL_STORAGE_KEY, JSON.stringify(state));
 }
 
+function clearDiscoveryPanelState(): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  window.localStorage.removeItem(DISCOVERY_PANEL_STORAGE_KEY);
+}
+
 export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: number) => void }) {
+  const queryClient = useQueryClient();
   const [persistedState] = useState<DiscoveryPanelPersistedState>(() => readDiscoveryPanelState());
   const [rawInput, setRawInput] = useState(persistedState.rawInput ?? "");
   const [selectedRouteType, setSelectedRouteType] = useState<DiscoveryRouteType | null>(
@@ -80,6 +86,8 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
   const [expanded, setExpanded] = useState(persistedState.expanded ?? true);
   const [startLocked, setStartLocked] = useState(false);
   const startLockRef = useRef(false);
+  const skipNextPersistRef = useRef(false);
+  const notifiedRef = useRef<number | null>(null);
 
   // Derive route state — single source of truth for disabled states
   const routeState: RouteInputState = resolveDiscoveryRouteState(rawInput, selectedRouteType);
@@ -173,8 +181,28 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
     startMut.mutate(request);
   }
 
+  function resetPanelState() {
+    startLockRef.current = false;
+    skipNextPersistRef.current = true;
+    notifiedRef.current = null;
+    clearDiscoveryPanelState();
+    setRawInput("");
+    setSelectedRouteType(null);
+    setName("");
+    setNameError(null);
+    setRunId(null);
+    setDup(null);
+    setError(null);
+    setSelectedNode(null);
+    setExpanded(true);
+    setStartLocked(false);
+    startMut.reset();
+    cancelMut.reset();
+    nameMut.reset();
+    queryClient.removeQueries({ queryKey: ["discovery-run"] });
+  }
+
   // 完成后通知新方式
-  const notifiedRef = useRef<number | null>(null);
   useEffect(() => {
     const mid = runQuery.data?.resulting_method_id;
     if (completed && mid != null && notifiedRef.current !== mid) {
@@ -185,6 +213,10 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
 
   // Persist state
   useEffect(() => {
+    if (skipNextPersistRef.current) {
+      skipNextPersistRef.current = false;
+      return;
+    }
     writeDiscoveryPanelState({
       rawInput,
       selectedRouteType,
@@ -238,9 +270,14 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
             </div>
           )}
         </div>
-        <button type="button" onClick={() => setExpanded((value) => !value)} style={toggleBtn}>
-          {expanded ? "收起" : "展开"}
-        </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <button type="button" onClick={resetPanelState} style={resetBtn}>
+            重置状态
+          </button>
+          <button type="button" onClick={() => setExpanded((value) => !value)} style={toggleBtn}>
+            {expanded ? "收起" : "展开"}
+          </button>
+        </div>
       </div>
 
       <div style={controlGrid}>
@@ -419,6 +456,7 @@ const btnDisabled: CSSProperties = { ...btnPrimary, background: "#98a2b3", curso
 const btnDanger: CSSProperties = { ...btnPrimary, background: "#dc2626" };
 const btnGhost: CSSProperties = { border: "1px solid #d0d5dd", background: "#fff", borderRadius: 8, padding: "9px 11px", fontSize: 12, color: "#475467", cursor: "pointer", flexShrink: 0 };
 const toggleBtn: CSSProperties = { border: "1px solid #d0d5dd", background: "#fff", borderRadius: 999, padding: "8px 14px", fontSize: 12, color: "#344054", fontWeight: 700, cursor: "pointer" };
+const resetBtn: CSSProperties = { ...toggleBtn, color: "#b42318", borderColor: "#fda29b", background: "#fffafa" };
 const WORKSPACE_HEIGHT = 760;
 const controlGrid: CSSProperties = {
   display: "grid",
