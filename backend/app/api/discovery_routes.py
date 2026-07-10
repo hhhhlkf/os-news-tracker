@@ -20,7 +20,7 @@ from typing import Any, Callable
 from app.discovery.dsl import DslRecipe
 from app.discovery.cancel import request_cancel
 from app.discovery.graph import check_existing_method, start_discovery_run
-from app.discovery.ingester import CrawlOutputIngester
+from app.discovery.ingester import parse_published_at
 from app.discovery.interpreter import DslInterpreter
 from app.discovery.multi_dsl import MultiDslRecipe
 from app.discovery.multi_graph import DEFAULT_WECHAT_SEARCH_MAX_PAGES, start_multi_discovery_run
@@ -31,7 +31,6 @@ from app.discovery.naming import (
     normalize_site_name,
 )
 from app.llm.client import LlmClient
-from app.manual_news_run import _build_not_stored_log_fields
 from app.enums import TagKind
 from app.models import (
     CrawlMethod,
@@ -137,14 +136,9 @@ def _apply_fetch_limits(items: list[dict], request: ManualNewsRunRequest | None)
     now = datetime.now(timezone.utc)
     filtered: list[tuple[datetime, dict]] = []
     for item in items:
-        published_at_raw = item.get("published_at")
-        if not isinstance(published_at_raw, str):
+        published_at = parse_published_at(item.get("published_at"))
+        if published_at is None:
             continue
-        try:
-            published_at = datetime.fromisoformat(published_at_raw.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        published_at = _as_utc(published_at)
         if request.time_mode == "relative":
             lower_bound = now - _RELATIVE_RANGE_TO_DELTA[request.relative_range]
             if published_at < lower_bound:
@@ -171,7 +165,7 @@ def _prepare_fetch_recipe(recipe: dict[str, Any], request: ManualNewsRunRequest 
             if action.get("max_pages") is None:
                 action["max_pages"] = DEFAULT_WECHAT_SEARCH_MAX_PAGES
         if action.get("op") == "enrich_wechat_articles" and action.get("max_items") is None:
-            # 微信补正文（逐篇抓全文）是重活，不要被 target_count（定时抓取默认 500）放大。
+            # 微信补正文（逐篇抓全文）是重活，不要被 target_count（定时抓取默认 200）放大。
             # 统一封顶在 WECHAT_ENRICH_MAX_ITEMS，避免单条方式抓几百篇正文导致的慢和高占用。
             desired = max(1, target_count) if target_count else 5
             action["max_items"] = min(desired, WECHAT_ENRICH_MAX_ITEMS)
@@ -367,228 +361,69 @@ def discovery_fetch(
     request: ManualNewsRunRequest | None = Body(default=None),
     db: Session = Depends(get_db),
 ):
-    """运行命：按 DSL Recipe 抓取 + 接现有 pipeline 入 items（走 LLM Enricher 富化+打分）。"""
-    from app.models import Source
-    from app.pipeline import Pipeline
-    from app.processing.enricher import Enricher
+    """运行命：按 DSL Recipe 抓取 + 接现有 pipeline 入 items（走 LLM Enricher 富化+打分）。
+
+    默认在可杀子进程中执行；取消时 terminate/kill 子进程，避免卡在网络 I/O。
+    测试环境（PYTEST_CURRENT_TEST / DISCOVERY_FETCH_SYNC=1）仍走进程内路径便于 mock。
+    """
+    from app.discovery.fetch_jobs import FetchCancelled, get_active_fetch_job_run_id, run_killable_fetch
+    from app.discovery.fetch_runs import ActiveMethodFetchError, get_active_method_fetch_run
     from app.run_logs import append_run_log
+
     m = db.get(CrawlMethod, method_id)
     if not m:
         raise HTTPException(404, "method not found")
-    recipe = _prepare_fetch_recipe(m.dsl_recipe, request)
+    request_payload = request.model_dump(mode="json") if request is not None else None
+    try:
+        return run_killable_fetch(method_id, request_payload, db=db)
+    except ActiveMethodFetchError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": str(exc),
+                "method_id": method_id,
+                "active_run_id": exc.active_run_id,
+            },
+        ) from exc
+    except FetchCancelled as exc:
+        active_run = get_active_method_fetch_run(method_id, db)
+        append_run_log(
+            "抓方式",
+            "爬取方式抓取已强制取消",
+            source=m.domain,
+            method_id=m.id,
+            run_id=exc.run_id or (active_run.id if active_run else get_active_fetch_job_run_id(method_id)),
+            level="warning",
+        )
+        raise HTTPException(status_code=499, detail="fetch cancelled") from None
+    except RuntimeError as exc:
+        if "already has an active fetch job" in str(exc):
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise
+
+
+@router.post("/methods/{method_id}/fetch/cancel")
+def discovery_fetch_cancel(method_id: int, db: Session = Depends(get_db)):
+    """强制杀掉当前 method 的抓取子进程（硬取消，不等协作式退出）。"""
+    from app.discovery.fetch_jobs import cancel_fetch_job, get_active_fetch_job_run_id
+    from app.discovery.fetch_runs import get_active_method_fetch_run
+    from app.run_logs import append_run_log
+
+    m = db.get(CrawlMethod, method_id)
+    if not m:
+        raise HTTPException(404, "method not found")
+    active_run = get_active_method_fetch_run(method_id, db)
+    active_run_id = active_run.id if active_run else get_active_fetch_job_run_id(method_id)
+    killed = cancel_fetch_job(method_id)
     append_run_log(
         "抓方式",
-        "开始抓取爬取方式",
+        "收到强制取消抓取请求",
         source=m.domain,
         method_id=m.id,
-        entry_url=m.entry_url,
-        status=m.status,
-        time_mode=request.time_mode if request else None,
-        relative_range=request.relative_range if request else None,
-        start_at=request.start_at.isoformat() if request and request.start_at else None,
-        end_at=request.end_at.isoformat() if request and request.end_at else None,
-        target_count=request.target_count if request else None,
+        run_id=active_run_id,
+        killed=killed,
     )
-    stored = 0
-    try:
-        def _log_fetch_progress(event: str, payload: dict[str, Any]) -> None:
-            if event == "wechat_search_started":
-                append_run_log(
-                    "抓方式",
-                    "开始执行微信搜索 DSL",
-                    source=m.domain,
-                    method_id=m.id,
-                    query=payload.get("query"),
-                    max_pages=payload.get("max_pages"),
-                )
-            elif event == "wechat_search_page_started":
-                append_run_log(
-                    "抓方式",
-                    "微信搜索开始抓取分页",
-                    source=m.domain,
-                    method_id=m.id,
-                    query=payload.get("query"),
-                    page_no=payload.get("page_no"),
-                    total_pages=payload.get("total_pages"),
-                    fetched_count=payload.get("fetched_count"),
-                    transport=payload.get("transport"),
-                )
-            elif event == "wechat_search_page_finished":
-                append_run_log(
-                    "抓方式",
-                    "微信搜索分页抓取完成",
-                    source=m.domain,
-                    method_id=m.id,
-                    query=payload.get("query"),
-                    page_no=payload.get("page_no"),
-                    page_items=payload.get("page_items"),
-                    fetched_count=payload.get("fetched_count"),
-                    transport=payload.get("transport"),
-                )
-            elif event in {"wechat_search_page_empty", "wechat_search_rate_limited", "wechat_search_captcha_required", "wechat_search_failed", "wechat_search_finished"}:
-                message_map = {
-                    "wechat_search_page_empty": "微信搜索当前分页未提取到结果",
-                    "wechat_search_rate_limited": "微信搜索触发限流",
-                    "wechat_search_captcha_required": "微信搜索触发验证码",
-                    "wechat_search_failed": "微信搜索执行失败",
-                    "wechat_search_finished": "微信搜索执行完成",
-                }
-                append_run_log(
-                    "抓方式",
-                    message_map[event],
-                    source=m.domain,
-                    method_id=m.id,
-                    **payload,
-                )
-            elif event == "wechat_enrich_started":
-                append_run_log(
-                    "抓方式",
-                    "开始补抓微信文章内容",
-                    source=m.domain,
-                    method_id=m.id,
-                    total_items=payload.get("total_items"),
-                    max_items=payload.get("max_items"),
-                    fetch_content=payload.get("fetch_content"),
-                )
-            elif event == "wechat_enrich_item_started":
-                append_run_log(
-                    "抓方式",
-                    "微信文章补抓进行中",
-                    source=m.domain,
-                    method_id=m.id,
-                    attempted_count=payload.get("attempted_count"),
-                    max_items=payload.get("max_items"),
-                    title=payload.get("title"),
-                    url=payload.get("url"),
-                )
-            elif event == "wechat_enrich_item_finished":
-                append_run_log(
-                    "抓方式",
-                    "微信文章补抓完成",
-                    source=m.domain,
-                    method_id=m.id,
-                    attempted_count=payload.get("attempted_count"),
-                    enriched_count=payload.get("enriched_count"),
-                    title=payload.get("title"),
-                    url=payload.get("url"),
-                    status=payload.get("status"),
-                )
-            elif event == "wechat_enrich_finished":
-                append_run_log(
-                    "抓方式",
-                    "微信文章补抓阶段完成",
-                    source=m.domain,
-                    method_id=m.id,
-                    status=payload.get("status"),
-                    attempted_count=payload.get("attempted_count"),
-                    enriched_count=payload.get("enriched_count"),
-                    total_items=payload.get("total_items"),
-                )
-
-        output = run_method(recipe, progress_callback=_log_fetch_progress)  # 纯确定性执行（可被测试 mock）
-        raw_items = list(output.get("items", []))
-        append_run_log(
-            "抓方式",
-            "DSL 执行完成",
-            source=m.domain,
-            method_id=m.id,
-            raw_count=len(raw_items),
-            stats_count=output.get("stats", {}).get("discovered_count"),
-        )
-        filtered_items = _apply_fetch_limits(raw_items, request)
-        output["items"] = filtered_items
-        append_run_log(
-            "抓方式",
-            "抓取限制已应用",
-            source=m.domain,
-            method_id=m.id,
-            input_count=len(raw_items),
-            kept_count=len(filtered_items),
-            dropped_count=max(len(raw_items) - len(filtered_items), 0),
-            limit_applied=bool(request),
-            time_mode=request.time_mode if request else None,
-            target_count=request.target_count if request else None,
-        )
-        # 转 RawItem → 走正常 pipeline 路径（调 Enricher LLM 富化：category/tags/summary/importance）
-        raws = CrawlOutputIngester().to_raw_items(output, source_id=m.source_id)
-        source = db.get(Source, m.source_id)
-        pipeline = Pipeline(session=db, extractor=None, enricher=Enricher())
-        append_run_log(
-            "process",
-            "开始处理抓取结果",
-            source=m.domain,
-            method_id=m.id,
-            count=len(raws),
-        )
-        processed_count = 0
-        for raw in raws:
-            processed_count += 1
-            result = pipeline.process_item_result(source, raw)
-            if result.stored:
-                stored += 1
-                append_run_log(
-                    "process",
-                    "候选已新增入库",
-                    source=source.name,
-                    method_id=m.id,
-                    title=raw.title,
-                    url=raw.url,
-                )
-            else:
-                append_run_log(
-                    "process",
-                    "候选未入库",
-                    source=source.name,
-                    method_id=m.id,
-                    title=raw.title,
-                    url=raw.url,
-                    **_build_not_stored_log_fields(result),
-                )
-        last_run_status = "ok" if stored > 0 else "empty"
-        append_run_log(
-            "process",
-            "抓取结果处理完成",
-            source=m.domain,
-            method_id=m.id,
-            processed_count=processed_count,
-            saved_count=stored,
-            rejected_count=max(processed_count - stored, 0),
-        )
-        append_run_log(
-            "抓方式",
-            "爬取方式抓取完成",
-            source=m.domain,
-            method_id=m.id,
-            discovered_count=len(raws),
-            stored_count=stored,
-            last_run_status=last_run_status,
-            summary=(
-                f"抓取 {len(raws)} 条，入库 {stored} 条"
-                if stored > 0
-                else f"抓取 {len(raws)} 条，未入库（可能重复或被富化拒绝）"
-            ),
-        )
-    except Exception as exc:
-        append_run_log(
-            "抓方式",
-            f"爬取方式抓取失败 · {exc}",
-            source=m.domain,
-            method_id=m.id,
-            level="error",
-            error_type=type(exc).__name__,
-        )
-        raise
-    m.last_run_at = datetime.now(timezone.utc)
-    m.last_run_status = "ok" if stored > 0 else "empty"
-    db.commit()
-    return {
-        "discovered_count": len(raws),
-        "stored_count": stored,
-        "items": output.get("items", []),
-        "stats": output.get("stats", {}),
-        "message": f"抓取 {len(raws)} 条，入库 {stored} 条" if stored > 0
-                   else f"抓取 {len(raws)} 条，未入库（可能重复或被富化拒绝）",
-    }
+    return {"cancelled": True, "killed": killed, "method_id": method_id, "run_id": active_run_id}
 
 
 class SuggestNameRequest(BaseModel):
