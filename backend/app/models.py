@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any
 from sqlalchemy import (
     String, Text, Integer, DateTime, ForeignKey, Float, JSON, Boolean, UniqueConstraint, CheckConstraint, func,
+    Index, text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -370,6 +371,30 @@ class CrawlMethod(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_run_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+
+class CrawlMethodRun(Base):
+    """Single manual run of one crawl method."""
+    __tablename__ = "crawl_method_runs"
+    __table_args__ = (
+        Index(
+            "uq_crawl_method_runs_active_method",
+            "method_id",
+            unique=True,
+            postgresql_where=text("status = 'running'"),
+            sqlite_where=text("status = 'running'"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    method_id: Mapped[int] = mapped_column(ForeignKey("crawl_methods.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
+    request_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    discovered_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    stored_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class CrawlMethodDomain(Base):
