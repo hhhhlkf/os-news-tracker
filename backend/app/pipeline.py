@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.enums import SourceType
@@ -143,7 +144,15 @@ class Pipeline:
                 detail=fields.reject_reason or "unknown",
             )
         fields = self._apply_category_constraints(source, fields)
-        self._repo.save_enriched(normalized, fields)
+        try:
+            self._repo.save_enriched(normalized, fields)
+        except IntegrityError:
+            self._session.rollback()
+            if self._repo.exists_by_canonical(normalized.canonical_url):
+                self._repo.merge_source_link(normalized.canonical_url, source.id, raw.url)
+                return ProcessItemResult(stored=False, reason="duplicate", detail="integrity_conflict")
+            logger.exception("save failed for %s", normalized.canonical_url)
+            return ProcessItemResult(stored=False, reason="save_failed", detail="integrity_conflict")
         return ProcessItemResult(stored=True, reason="stored")
 
     def _process_agent_item(self, source: Source, raw) -> ProcessItemResult:
@@ -155,7 +164,15 @@ class Pipeline:
         if self._repo.exists_by_canonical(raw.url):
             self._repo.merge_source_link(raw.url, source.id, raw.url)
             return ProcessItemResult(stored=False, reason="duplicate")
-        self._repo.save_agent_enriched(raw)
+        try:
+            self._repo.save_agent_enriched(raw)
+        except IntegrityError:
+            self._session.rollback()
+            if self._repo.exists_by_canonical(raw.url):
+                self._repo.merge_source_link(raw.url, source.id, raw.url)
+                return ProcessItemResult(stored=False, reason="duplicate", detail="integrity_conflict")
+            logger.exception("agent item save failed for %s", raw.url)
+            return ProcessItemResult(stored=False, reason="save_failed", detail="integrity_conflict")
         return ProcessItemResult(stored=True, reason="stored")
 
     def _extract_for(self, raw, source: Source):
