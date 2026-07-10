@@ -309,7 +309,7 @@ def _build_request(config: MorningCrawlConfig):
     return ManualNewsRunRequest(
         time_mode="relative",
         relative_range=config.lookback_window,
-        target_count=500,
+        target_count=200,
     )
 
 

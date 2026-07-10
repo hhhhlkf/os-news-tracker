@@ -45,6 +45,23 @@ def beijing_now() -> datetime:
     return datetime.now(BEIJING_TZ).replace(tzinfo=None)
 
 
+def with_send_date_suffix(subject: str, *, when: datetime | None = None) -> str:
+    """Append ·yyyy-mm-dd (Beijing calendar day) for preview/send subjects.
+
+    Templates/schedules keep the bare subject in DB; the date marks the send day
+    and is applied only when rendering preview HTML or dispatching mail.
+    """
+    base = (subject or "").strip()
+    day = (when or beijing_now()).strftime("%Y-%m-%d")
+    suffix = f"·{day}"
+    if base.endswith(suffix):
+        return base
+    # Replace a trailing ·yyyy-mm-dd from an earlier preview of another day.
+    if len(base) >= 11 and base[-11] == "·" and base[-10:].replace("-", "").isdigit():
+        base = base[:-11].rstrip()
+    return f"{base}{suffix}" if base else suffix
+
+
 def _compute_next_run(*, send_time: str, frequency: str, reference: datetime) -> datetime | None:
     """reference 应为北京时间墙钟值；返回的 next_run_at 同样是北京时间。"""
     try:
@@ -258,20 +275,37 @@ class MailService:
 
         return after, before
 
+    @staticmethod
+    def _split_filter_values(raw: str | None) -> list[str]:
+        if not raw:
+            return []
+        values: list[str] = []
+        seen: set[str] = set()
+        for part in str(raw).split(","):
+            value = part.strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            values.append(value)
+        return values
+
     def _build_item_stmt(self, snapshot: MailFilterSnapshot):
         stmt = select(Item)
-        if snapshot.main_category:
-            stmt = stmt.where(Item.main_category == snapshot.main_category)
+        main_categories = self._split_filter_values(snapshot.main_category)
+        if main_categories:
+            stmt = stmt.where(Item.main_category.in_(main_categories))
         if snapshot.info_type:
             stmt = stmt.where(Item.info_type == snapshot.info_type)
-        if snapshot.importance:
-            stmt = stmt.where(Item.importance == snapshot.importance)
-        if snapshot.sub_tag:
+        importances = self._split_filter_values(snapshot.importance)
+        if importances:
+            stmt = stmt.where(Item.importance.in_(importances))
+        sub_tags = self._split_filter_values(snapshot.sub_tag)
+        if sub_tags:
             stmt = stmt.where(
                 Item.id.in_(
                     select(ItemTag.item_id)
                     .join(Tag, Tag.id == ItemTag.tag_id)
-                    .where(Tag.kind == "sub_tag", Tag.name == snapshot.sub_tag)
+                    .where(Tag.kind == "sub_tag", Tag.name.in_(sub_tags))
                 )
             )
         if snapshot.q:
@@ -306,7 +340,8 @@ class MailService:
         for item in items:
             preview_items.append(
                 MailPreviewItem(
-                    title=item.title,
+                    # 与主界面 ItemCard 一致：优先展示中文标题 title_tldr，缺失时回退原文 title
+                    title=item.title_tldr or item.title,
                     reason=item.why_it_matters or item.summary or item.title_tldr,
                     summary=item.summary,
                     key_points=[str(point) for point in (item.key_points or [])],
@@ -328,14 +363,15 @@ class MailService:
         normalized = MailFilterSnapshot.model_validate(filter_snapshot or {})
         items = self._fetch_items_for_snapshot(normalized)
         preview_items = self._build_preview_items(items)
+        dated_subject = with_send_date_suffix(subject)
         context = build_mail_preview_context(
             filters=normalized.model_dump(mode="json"),
             items=[item.model_dump(mode="json") for item in preview_items],
-            subject=subject.strip(),
+            subject=dated_subject,
         )
         rendered_html = render_mail_html(context)
         return MailPreviewResponse(
-            subject=subject.strip(),
+            subject=dated_subject,
             filter_snapshot=normalized,
             recipients=recipients,
             provider=resolve_mail_provider_name(provider),

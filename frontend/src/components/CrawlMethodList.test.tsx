@@ -11,6 +11,7 @@ import type { NewsRunFormState } from "./NewsRunControl";
 
 const listDiscoveryMethods = vi.fn();
 const fetchDiscoveryMethod = vi.fn();
+const cancelDiscoveryMethodFetch = vi.fn();
 
 vi.mock("../api/client", () => ({
   ApiError: class ApiError extends Error {
@@ -22,6 +23,8 @@ vi.mock("../api/client", () => ({
   },
   listDiscoveryMethods: (...args: unknown[]) => listDiscoveryMethods(...args),
   fetchDiscoveryMethod: (...args: unknown[]) => fetchDiscoveryMethod(...args),
+  cancelDiscoveryMethodFetch: (...args: unknown[]) => cancelDiscoveryMethodFetch(...args),
+  deleteDiscoveryMethod: vi.fn(),
 }));
 
 function flush() {
@@ -59,6 +62,7 @@ describe("CrawlMethodList", () => {
   };
 
   beforeEach(() => {
+    window.sessionStorage.clear();
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -73,6 +77,7 @@ describe("CrawlMethodList", () => {
       stats: {},
       message: "ok",
     });
+    cancelDiscoveryMethodFetch.mockResolvedValue({ cancelled: true, killed: true, method_id: 7 });
   });
 
   afterEach(() => {
@@ -81,6 +86,7 @@ describe("CrawlMethodList", () => {
     });
     container.remove();
     queryClient.clear();
+    window.sessionStorage.clear();
     vi.clearAllMocks();
   });
 
@@ -124,6 +130,39 @@ describe("CrawlMethodList", () => {
       },
       expect.any(AbortSignal),
     );
+  });
+
+  it("unlocks stale batchRunning state restored after refresh", async () => {
+    window.sessionStorage.setItem(
+      "crawl-method-list-state:v1",
+      JSON.stringify({
+        selectedIds: [7],
+        rowStates: { 7: { kind: "running" } },
+        summary: { text: "正在取消当前抓取批次…", tone: "danger", showItemsLink: false },
+        batchRunning: true,
+        batchCancelling: true,
+        batchDeleting: false,
+        page: 1,
+        pageSize: 10,
+      }),
+    );
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CrawlMethodList runLimitState={runLimitState} />
+        </QueryClientProvider>,
+      );
+    });
+    await flush();
+
+    expect(container.textContent).toContain("已自动解锁");
+    expect(container.textContent).not.toContain("取消中…");
+    const fetchButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("抓取选中"),
+    ) as HTMLButtonElement | undefined;
+    expect(fetchButton).toBeTruthy();
+    expect(fetchButton?.disabled).toBe(false);
   });
 
   it("stops batch fetching when the user cancels the crawl", async () => {
@@ -187,7 +226,8 @@ describe("CrawlMethodList", () => {
     await flush();
 
     expect(fetchDiscoveryMethod).toHaveBeenCalledTimes(1);
-    expect(container.textContent).toContain("已取消");
+    expect(cancelDiscoveryMethodFetch).toHaveBeenCalledWith(7);
+    expect(container.textContent).toContain("已强制取消");
   });
 
   it("renders source_name as the primary crawl method label when available", async () => {

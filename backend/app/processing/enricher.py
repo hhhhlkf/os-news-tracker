@@ -1,9 +1,10 @@
 import json
 import re
+from typing import Any
 
 from app.categories import get_main_category_names
 from app.discovery.prompts import render_prompt
-from app.enums import MAIN_CATEGORIES
+from app.enums import MAIN_CATEGORIES, Importance, InfoType
 from app.llm.client import LlmClient
 from app.schemas import EnrichedFields, NormalizedItem
 
@@ -52,7 +53,8 @@ _PROMPT_TEMPLATE = """你是操作系统维护工程师的关键技术新闻与�
 - confidence: 0~1 的浮点，表示你对归类与摘要的把握
 - should_store: 布尔值。若页面不是新闻/热点/技术更新，或信息不足，则必须为 false
 - reject_reason: 当 should_store=false 时必填，简要说明拒收原因；当 should_store=true 时可为 null
-- merge_suggestions: 标签合并建议数组；如果当前 tag 更通用，可以建议把已有旧 tag 合并到当前 tag
+- merge_suggestions: 标签合并建议数组（必须是 JSON 数组，没有建议时输出 []）；如果当前 tag 更通用，可以建议把已有旧 tag 合并到当前 tag
+- 即使 should_store=false，也必须输出完整 JSON：title_zh、summary、info_type、importance、main_category 不可省略；数组字段缺失时用 []
 
 should_store 判定规则：
 - 只有当内容对 OS maintainer 具有明确情报价值、维护价值或近期决策价值时，should_store 才能为 true。
@@ -97,6 +99,100 @@ def _extract_json(text: str) -> dict:
     raise ValueError(f"No JSON found in LLM output: {text[:200]}")
 
 
+def _as_str_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _as_merge_suggestions(value: Any) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _coerce_info_type(value: Any) -> str:
+    text = str(value or "").strip()
+    for item in InfoType:
+        if text == item.value:
+            return item.value
+    return InfoType.OTHER.value
+
+
+def _coerce_importance(value: Any) -> str:
+    text = str(value or "").strip()
+    for item in Importance:
+        if text == item.value:
+            return item.value
+    return Importance.LOW.value
+
+
+def _normalize_enrich_payload(
+    data: dict[str, Any],
+    *,
+    categories: list[str],
+    title: str,
+) -> dict[str, Any]:
+    """Coerce incomplete/invalid LLM enrich JSON into EnrichedFields-compatible shape.
+
+    Models often omit required fields or emit non-list merge_suggestions when rejecting;
+    without normalization those become enrich_failed instead of enrich_reject.
+    """
+    normalized = dict(data)
+
+    if "should_store" not in normalized:
+        normalized["should_store"] = False
+        normalized["reject_reason"] = "模型未明确给出 should_store，按保守策略拒收"
+    else:
+        normalized["should_store"] = bool(normalized.get("should_store"))
+
+    if normalized["should_store"]:
+        missing_required = [
+            key
+            for key in ("title_zh", "summary", "info_type", "importance")
+            if not str(normalized.get(key) or "").strip()
+        ]
+        if missing_required:
+            normalized["should_store"] = False
+            normalized["reject_reason"] = (
+                f"模型输出缺少必填字段（{', '.join(missing_required)}），按保守策略拒收"
+            )
+        elif "reject_reason" not in normalized:
+            normalized["reject_reason"] = None
+    else:
+        if not str(normalized.get("reject_reason") or "").strip():
+            normalized["reject_reason"] = "模型判定不收录，但未提供具体原因"
+
+    title_zh = str(normalized.get("title_zh") or "").strip()
+    if not title_zh:
+        title_zh = (title or "未命名条目").strip()[:20] or "未命名条目"
+    normalized["title_zh"] = title_zh
+
+    summary = str(normalized.get("summary") or "").strip()
+    if not summary:
+        summary = str(normalized.get("reject_reason") or "模型未提供摘要").strip()
+    normalized["summary"] = summary
+
+    if normalized.get("main_category") not in categories:
+        normalized["main_category"] = categories[-1]
+
+    normalized["info_type"] = _coerce_info_type(normalized.get("info_type"))
+    normalized["importance"] = _coerce_importance(normalized.get("importance"))
+    normalized["tech_highlights"] = _as_str_list(normalized.get("tech_highlights"))
+    normalized["sub_tags"] = _as_str_list(normalized.get("sub_tags"))
+    normalized["keywords"] = _as_str_list(normalized.get("keywords"))
+    normalized["merge_suggestions"] = _as_merge_suggestions(normalized.get("merge_suggestions"))
+
+    try:
+        normalized["confidence"] = float(normalized.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        normalized["confidence"] = 0.0
+
+    return normalized
+
+
 class Enricher:
     def __init__(self, llm: LlmClient | None = None):
         self._llm = llm or LlmClient()
@@ -114,14 +210,9 @@ class Enricher:
             },
         )
         raw = self._llm.complete(prompt)
-        data = _extract_json(raw)
-        if data.get("main_category") not in categories:
-            data["main_category"] = categories[-1]
-        if "should_store" not in data:
-            data["should_store"] = False
-            data["reject_reason"] = "模型未明确给出 should_store，按保守策略拒收"
-        elif not data.get("should_store") and "reject_reason" not in data:
-            data["reject_reason"] = "模型判定不收录，但未提供具体原因"
-        if data.get("should_store") and "reject_reason" not in data:
-            data["reject_reason"] = None
+        data = _normalize_enrich_payload(
+            _extract_json(raw),
+            categories=categories,
+            title=item.title,
+        )
         return EnrichedFields(**data)

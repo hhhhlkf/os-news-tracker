@@ -126,6 +126,15 @@ describe("filterDemoItems", () => {
     expect(filtered).toHaveLength(1);
     expect(filtered[0]?.title).toContain("Kernel");
   });
+
+  it("supports multi-select category/importance/sub_tag filters", () => {
+    const filtered = filterDemoItems(demoItems, {
+      main_category: "OS性能发展,OS跟踪来源",
+      importance: "高,中",
+      sub_tag: "scheduler,security",
+    });
+    expect(filtered.map((item) => item.id).sort()).toEqual([1001, 1002]);
+  });
 });
 
 describe("buildDemoFacets", () => {

@@ -1,7 +1,13 @@
 // frontend/src/components/CrawlMethodList.tsx
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, deleteDiscoveryMethod, fetchDiscoveryMethod, listDiscoveryMethods } from "../api/client";
+import {
+  ApiError,
+  cancelDiscoveryMethodFetch,
+  deleteDiscoveryMethod,
+  fetchDiscoveryMethod,
+  listDiscoveryMethods,
+} from "../api/client";
 import type { CrawlMethod } from "../types";
 import { buildManualNewsRunRequest } from "./NewsRunControl";
 import type { NewsRunFormState } from "./NewsRunControl";
@@ -41,6 +47,16 @@ const DEFAULT_VIEW_STATE: PersistedViewState = {
   pageSize: PAGE_SIZE_OPTIONS[0],
 };
 
+function sanitizeRowStates(rowStates: Record<number, RowState>): Record<number, RowState> {
+  // 刷新后内存中的抓取循环已不存在；running 状态只能是陈旧 UI，不能继续锁住操作。
+  const next: Record<number, RowState> = {};
+  for (const [id, state] of Object.entries(rowStates)) {
+    if (!state || state.kind === "running") continue;
+    next[Number(id)] = state;
+  }
+  return next;
+}
+
 function readPersistedViewState(): PersistedViewState {
   if (typeof window === "undefined") return DEFAULT_VIEW_STATE;
   try {
@@ -50,16 +66,32 @@ function readPersistedViewState(): PersistedViewState {
     const pageSize = PAGE_SIZE_OPTIONS.includes(Number(parsed.pageSize))
       ? Number(parsed.pageSize)
       : DEFAULT_VIEW_STATE.pageSize;
-    return {
+    const rawRowStates = parsed.rowStates && typeof parsed.rowStates === "object"
+      ? parsed.rowStates as Record<number, RowState>
+      : {};
+    const hadStaleBatchLock = Boolean(
+      parsed.batchRunning || parsed.batchCancelling || parsed.batchDeleting
+      || Object.values(rawRowStates).some((state) => state?.kind === "running"),
+    );
+    const rowStates = sanitizeRowStates(rawRowStates);
+    // 批量抓取循环只活在当前页面实例里。刷新后绝不能恢复 batchRunning/batchCancelling，
+    // 否则会出现“取消中…”且按钮被禁用、无法再抓取的死锁。
+    const restored: PersistedViewState = {
       selectedIds: Array.isArray(parsed.selectedIds) ? parsed.selectedIds.map(Number).filter(Number.isFinite) : [],
-      rowStates: parsed.rowStates && typeof parsed.rowStates === "object" ? parsed.rowStates as Record<number, RowState> : {},
-      summary: parsed.summary ?? null,
-      batchRunning: Boolean(parsed.batchRunning),
-      batchCancelling: Boolean(parsed.batchCancelling),
-      batchDeleting: Boolean(parsed.batchDeleting),
+      rowStates,
+      summary: hadStaleBatchLock
+        ? { text: "检测到未完成的批量抓取（页面曾刷新/离开），已自动解锁。可重新选择后继续抓取。", tone: "danger", showItemsLink: false }
+        : (parsed.summary ?? null),
+      batchRunning: false,
+      batchCancelling: false,
+      batchDeleting: false,
       page: Math.max(1, Number(parsed.page) || 1),
       pageSize,
     };
+    if (hadStaleBatchLock) {
+      writePersistedViewState(restored);
+    }
+    return restored;
   } catch {
     return DEFAULT_VIEW_STATE;
   }
@@ -85,6 +117,7 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
   const [viewState, setViewState] = useState<PersistedViewState>(() => readPersistedViewState());
   const [expanded, setExpanded] = useState(readExpandedState);
   const abortRef = useRef<AbortController | null>(null);
+  const activeMethodIdRef = useRef<number | null>(null);
   const cancelledRef = useRef(false);
   const mountedRef = useRef(true);
   const viewStateRef = useRef(viewState);
@@ -120,8 +153,48 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
 
   useEffect(() => {
     mountedRef.current = true;
+    // 挂载时再清一次陈旧批量锁，避免旧 sessionStorage 把 UI 卡在“取消中/运行中”。
+    const persisted = readPersistedViewState();
+    if (
+      viewStateRef.current.batchRunning
+      || viewStateRef.current.batchCancelling
+      || viewStateRef.current.batchDeleting
+      || Object.values(viewStateRef.current.rowStates).some((state) => state.kind === "running")
+    ) {
+      commitViewState({
+        ...persisted,
+        selectedIds: viewStateRef.current.selectedIds,
+        page: viewStateRef.current.page,
+        pageSize: viewStateRef.current.pageSize,
+        summary: viewStateRef.current.summary,
+        rowStates: sanitizeRowStates(viewStateRef.current.rowStates),
+        batchRunning: false,
+        batchCancelling: false,
+        batchDeleting: false,
+      });
+    }
     return () => {
       mountedRef.current = false;
+      // 卸载时中止进行中的请求，并落盘为非运行态，避免刷新后读到僵尸 batchRunning。
+      cancelledRef.current = true;
+      const activeMethodId = activeMethodIdRef.current;
+      if (activeMethodId != null) {
+        void cancelDiscoveryMethodFetch(activeMethodId).catch(() => undefined);
+      }
+      abortRef.current?.abort();
+      const current = viewStateRef.current;
+      if (current.batchRunning || current.batchCancelling || current.batchDeleting) {
+        writePersistedViewState({
+          ...current,
+          rowStates: sanitizeRowStates(current.rowStates),
+          batchRunning: false,
+          batchCancelling: false,
+          batchDeleting: false,
+          summary: current.batchCancelling || cancelledRef.current
+            ? { text: "页面已离开，批量抓取已中断。可重新选择后继续抓取。", tone: "danger", showItemsLink: false }
+            : current.summary,
+        });
+      }
     };
   }, []);
 
@@ -141,6 +214,8 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
   }, [page, totalPages]);
 
   useEffect(() => {
+    // 列表尚未加载时不要清空已选，否则刷新恢复的 selectedIds 会被瞬时空列表冲掉。
+    if (methods.length === 0) return;
     const staleIds = new Set(methods.map((method) => method.id));
     if (viewState.selectedIds.some((id) => !staleIds.has(id))) {
       updateViewState((prev) => ({
@@ -149,20 +224,6 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
       }));
     }
   }, [methods]);
-
-  useEffect(() => {
-    if (!viewState.batchRunning) return;
-    const timer = window.setInterval(() => {
-      const persisted = readPersistedViewState();
-      if (JSON.stringify(persisted) !== JSON.stringify(viewStateRef.current)) {
-        viewStateRef.current = persisted;
-        if (mountedRef.current) {
-          setViewState(persisted);
-        }
-      }
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [viewState.batchRunning]);
 
   const fetchMut = useMutation({
     mutationFn: ({ id, request, signal }: { id: number; request: ReturnType<typeof buildManualNewsRunRequest>; signal?: AbortSignal }) =>
@@ -198,6 +259,7 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
         if (cancelledRef.current) break;
         const controller = new AbortController();
         abortRef.current = controller;
+        activeMethodIdRef.current = id;
         updateViewState((prev) => ({
           ...prev,
           rowStates: {
@@ -224,8 +286,13 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
             },
           }));
         } catch (e) {
-          const aborted = controller.signal.aborted || e instanceof DOMException && e.name === "AbortError";
-          if (aborted || cancelledRef.current) {
+          const aborted =
+            controller.signal.aborted
+            || cancelledRef.current
+            || (e instanceof DOMException && e.name === "AbortError")
+            || (e instanceof Error && e.name === "AbortError")
+            || (e instanceof ApiError && (e.status === 499 || /cancel/i.test(e.message)));
+          if (aborted) {
             updateViewState((prev) => ({
               ...prev,
               rowStates: { ...prev.rowStates, [id]: { kind: "cancelled" } },
@@ -243,32 +310,67 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
           if (abortRef.current === controller) {
             abortRef.current = null;
           }
+          if (activeMethodIdRef.current === id) {
+            activeMethodIdRef.current = null;
+          }
         }
       }
-      updateViewState((prev) => ({
-        ...prev,
-        summary: {
-          text: cancelledRef.current ? `已取消抓取 · 已查询 ${totalDisc} 条 · 入库 ${totalStored} 条` : `本次查询 ${totalDisc} 条 · 入库 ${totalStored} 条`,
-          tone: cancelledRef.current ? "danger" : "success",
-          showItemsLink: true,
-        },
-      }));
+      if (!cancelledRef.current) {
+        updateViewState((prev) => ({
+          ...prev,
+          summary: {
+            text: `本次查询 ${totalDisc} 条 · 入库 ${totalStored} 条`,
+            tone: "success",
+            showItemsLink: true,
+          },
+        }));
+      } else if (totalDisc > 0 || totalStored > 0) {
+        updateViewState((prev) => ({
+          ...prev,
+          summary: {
+            text: `已强制取消抓取 · 已查询 ${totalDisc} 条 · 入库 ${totalStored} 条`,
+            tone: "danger",
+            showItemsLink: true,
+          },
+        }));
+      }
       await qc.invalidateQueries({ queryKey: ["discovery-methods"] });
     } finally {
       updateViewState((prev) => ({ ...prev, batchRunning: false, batchCancelling: false }));
       abortRef.current = null;
+      activeMethodIdRef.current = null;
     }
   }
 
   function cancelBatch() {
     if (!batchRunning) return;
     cancelledRef.current = true;
-    updateViewState((prev) => ({ ...prev, batchCancelling: true }));
-    abortRef.current?.abort();
-    updateViewState((prev) => ({
-      ...prev,
-      summary: { text: "正在取消当前抓取批次…", tone: "danger", showItemsLink: false },
-    }));
+    const activeMethodId = activeMethodIdRef.current;
+    const active = abortRef.current;
+    // 先硬杀后端抓取子进程，再 abort 前端请求；UI 立即解锁，避免卡在“取消中…”。
+    if (activeMethodId != null) {
+      void cancelDiscoveryMethodFetch(activeMethodId).catch(() => undefined);
+    }
+    active?.abort();
+    updateViewState((prev) => {
+      const nextRowStates = { ...prev.rowStates };
+      if (activeMethodId != null) {
+        nextRowStates[activeMethodId] = { kind: "cancelled" };
+      }
+      return {
+        ...prev,
+        batchRunning: false,
+        batchCancelling: false,
+        rowStates: sanitizeRowStates(nextRowStates),
+        summary: {
+          text: activeMethodId != null
+            ? "已强制取消当前抓取进程，可重新选择后继续抓取。"
+            : "已清除卡住的批量抓取状态，可重新选择后继续抓取。",
+          tone: "danger",
+          showItemsLink: false,
+        },
+      };
+    });
   }
 
   async function batchDelete() {

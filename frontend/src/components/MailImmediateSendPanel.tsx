@@ -151,17 +151,22 @@ export function MailImmediateSendPanel(props: {
     if (filterSnapshot.q) {
       rows.push({ label: "关键词", value: filterSnapshot.q });
     }
-    if (filterSnapshot.main_category) {
-      rows.push({ label: "主分类", value: filterSnapshot.main_category });
+    const formatMulti = (raw: string | null | undefined) =>
+      (raw ?? "").split(",").map((part) => part.trim()).filter(Boolean).join(" / ");
+    const mainCategory = formatMulti(filterSnapshot.main_category);
+    const importance = formatMulti(filterSnapshot.importance);
+    const subTag = formatMulti(filterSnapshot.sub_tag);
+    if (mainCategory) {
+      rows.push({ label: "主分类", value: mainCategory });
     }
     if (filterSnapshot.info_type) {
       rows.push({ label: "信息类型", value: filterSnapshot.info_type });
     }
-    if (filterSnapshot.importance) {
-      rows.push({ label: "重要程度", value: filterSnapshot.importance });
+    if (importance) {
+      rows.push({ label: "重要程度", value: importance });
     }
-    if (filterSnapshot.sub_tag) {
-      rows.push({ label: "技术热点", value: filterSnapshot.sub_tag });
+    if (subTag) {
+      rows.push({ label: "技术热点", value: subTag });
     }
 
     let publishedLabel = "全部时间";
@@ -186,10 +191,12 @@ export function MailImmediateSendPanel(props: {
   }, [filterSnapshot, relativeWindow]);
 
   const previewHeaderSummary = useMemo(() => {
+    const formatMulti = (raw: string | null | undefined) =>
+      (raw ?? "").split(",").map((part) => part.trim()).filter(Boolean).join(" / ");
     const segments = [
-      filterSnapshot.main_category?.trim(),
-      filterSnapshot.importance?.trim(),
-      filterSnapshot.sub_tag?.trim(),
+      formatMulti(filterSnapshot.main_category) || null,
+      formatMulti(filterSnapshot.importance) || null,
+      formatMulti(filterSnapshot.sub_tag) || null,
       filterSnapshot.q?.trim(),
       relativeWindow ??
         (filterSnapshot.published_after || filterSnapshot.published_before
@@ -337,21 +344,21 @@ export function MailImmediateSendPanel(props: {
                 })}
               </div>
             </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               <button
                 onClick={() => previewMutation.mutate(requestPayload)}
                 disabled={previewMutation.isPending}
                 style={{
-                  border: "none",
-                  borderRadius: 999,
-                  padding: "8px 14px",
+                  border: "1px solid #b2ddff",
+                  borderRadius: 10,
+                  padding: "9px 14px",
                   fontSize: 12,
                   fontWeight: 700,
-                  color: "#fff",
-                  background: "linear-gradient(135deg,#475467 0%,#344054 100%)",
+                  color: "#175cd3",
+                  background: "linear-gradient(180deg, #f5faff 0%, #eff8ff 100%)",
                   cursor: previewMutation.isPending ? "wait" : "pointer",
                   opacity: previewMutation.isPending ? 0.7 : 1,
-                  boxShadow: "0 8px 18px rgba(52, 64, 84, 0.18)",
+                  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.9)",
                 }}
               >
                 {previewMutation.isPending ? "生成中..." : "生成预览"}
@@ -360,16 +367,16 @@ export function MailImmediateSendPanel(props: {
                 onClick={() => sendMutation.mutate(requestPayload)}
                 disabled={sendMutation.isPending || !canSend}
                 style={{
-                  border: "none",
-                  borderRadius: 999,
-                  padding: "8px 14px",
+                  border: "1px solid #84caff",
+                  borderRadius: 10,
+                  padding: "9px 16px",
                   fontSize: 12,
                   fontWeight: 700,
                   color: "#fff",
-                  background: "linear-gradient(135deg,#2563eb 0%,#1d4ed8 100%)",
+                  background: "linear-gradient(180deg, #53b1fd 0%, #2e90fa 100%)",
                   cursor: sendMutation.isPending ? "wait" : canSend ? "pointer" : "not-allowed",
-                  opacity: sendMutation.isPending || !canSend ? 0.6 : 1,
-                  boxShadow: "0 10px 22px rgba(29, 78, 216, 0.22)",
+                  opacity: sendMutation.isPending || !canSend ? 0.55 : 1,
+                  boxShadow: "0 1px 0 rgba(255,255,255,0.25) inset, 0 4px 12px rgba(46, 144, 250, 0.22)",
                 }}
               >
                 {sendMutation.isPending ? "发送中..." : "立即发送"}
@@ -378,16 +385,16 @@ export function MailImmediateSendPanel(props: {
                 onClick={() => saveTemplateMutation.mutate()}
                 disabled={saveTemplateMutation.isPending || !canSaveTemplate}
                 style={{
-                  border: "none",
-                  borderRadius: 999,
-                  padding: "8px 14px",
+                  border: "1px solid #1849a9",
+                  borderRadius: 10,
+                  padding: "9px 14px",
                   fontSize: 12,
                   fontWeight: 700,
                   color: "#fff",
-                  background: "linear-gradient(135deg,#0f766e 0%,#0d9488 100%)",
+                  background: "linear-gradient(180deg, #175cd3 0%, #1849a9 55%, #194185 100%)",
                   cursor: saveTemplateMutation.isPending ? "wait" : canSaveTemplate ? "pointer" : "not-allowed",
-                  opacity: saveTemplateMutation.isPending || !canSaveTemplate ? 0.6 : 1,
-                  boxShadow: "0 10px 22px rgba(13, 148, 136, 0.18)",
+                  opacity: saveTemplateMutation.isPending || !canSaveTemplate ? 0.55 : 1,
+                  boxShadow: "0 1px 0 rgba(255,255,255,0.18) inset, 0 6px 14px rgba(24, 73, 169, 0.28)",
                 }}
               >
                 {saveTemplateMutation.isPending ? "保存中..." : "保存为模板"}

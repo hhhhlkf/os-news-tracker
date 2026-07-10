@@ -67,13 +67,28 @@ export function filterDemoItems(items: ItemDetail[], filters: Record<string, str
         .filter(Boolean)
         .some((value) => normalize(value).includes(q));
 
+    const selectedCategories = (filters.main_category ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
     const matchesCategory =
-      !filters.main_category || item.main_category === filters.main_category;
+      selectedCategories.length === 0
+      || (!!item.main_category && selectedCategories.includes(item.main_category));
     const matchesType = !filters.info_type || item.info_type === filters.info_type;
+    const selectedImportances = (filters.importance ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
     const matchesImportance =
-      !filters.importance || item.importance === filters.importance;
+      selectedImportances.length === 0
+      || (!!item.importance && selectedImportances.includes(item.importance));
+    const selectedSubTags = (filters.sub_tag ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
     const matchesSubTag =
-      !filters.sub_tag || item.sub_tags.includes(filters.sub_tag);
+      selectedSubTags.length === 0
+      || item.sub_tags.some((tag) => selectedSubTags.includes(tag));
 
     // Time-range filtering on published_at
     const hasTimeFilter = !!(filters.published_after || filters.published_before);

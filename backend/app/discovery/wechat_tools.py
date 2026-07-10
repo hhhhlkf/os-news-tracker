@@ -617,10 +617,10 @@ def wechat_fetch_article_content(url: str, auth_ref: str | None = None) -> dict:
     if auth.get("status") == "ok":
         headers["Cookie"] = auth["cookie"]
     # 收紧超时并限制重定向跳数：src=11/src=3 跳转链每跳各自超时会把单篇累加到数十秒，
-    # 用较短的 connect/read 超时 + 最多 3 跳重定向，把单篇上限压到 ~10s 级别。
-    timeout = httpx.Timeout(10.0, connect=5.0)
+    # 用较短的 connect/read 超时 + 最多 2 跳重定向，把单篇上限压到 ~5s 级别。
+    timeout = httpx.Timeout(5.0, connect=3.0)
     with httpx.Client(
-        headers=headers, timeout=timeout, follow_redirects=True, max_redirects=3
+        headers=headers, timeout=timeout, follow_redirects=True, max_redirects=2
     ) as client:
         response = client.get(url)
     if response.status_code in {403, 429}:

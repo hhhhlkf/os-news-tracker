@@ -2,9 +2,32 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
+
+from dateutil import parser as dateparser
 
 from app.schemas import RawItem
+
+
+def parse_published_at(value: object) -> datetime | None:
+    """Parse published_at from ISO8601 or RSS RFC2822 (e.g. arXiv pubDate)."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            dt = dateparser.parse(text)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 class CrawlOutputIngester:
@@ -20,9 +43,7 @@ class CrawlOutputIngester:
             title = it.get("title")
             if not url or not title:
                 continue  # 缺关键字段，丢弃
-            pub = it.get("published_at")
-            # ISO8601 Z 后缀转 +00:00 以兼容 fromisoformat
-            published_at = datetime.fromisoformat(pub.replace("Z", "+00:00")) if pub else None
+            published_at = parse_published_at(it.get("published_at"))
             raws.append(RawItem(
                 source_id=source_id, title=str(title), url=str(url),
                 raw_content=it.get("content") or it.get("summary") or str(title),

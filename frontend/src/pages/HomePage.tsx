@@ -36,7 +36,9 @@ function summarizeActiveFilters(filters: Record<string, string>): string[] {
   const chips: string[] = [];
   for (const { key, label } of FILTER_LABELS) {
     const value = filters[key];
-    if (value) chips.push(`${label}：${value}`);
+    if (!value) continue;
+    const display = value.includes(",") ? value.split(",").map((part) => part.trim()).filter(Boolean).join(" / ") : value;
+    chips.push(`${label}：${display}`);
   }
   if (filters.published_after || filters.published_before) {
     const from = filters.published_after || "不限";

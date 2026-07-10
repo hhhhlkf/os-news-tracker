@@ -469,3 +469,13 @@ export async function fetchDiscoveryMethod(
   });
   return expectOk<DiscoveryFetchResult>(r, "failed to fetch method");
 }
+
+export async function cancelDiscoveryMethodFetch(
+  methodId: number,
+): Promise<{ cancelled: boolean; killed: boolean; method_id: number }> {
+  const r = await fetch(`${DISCOVERY_BASE}/methods/${methodId}/fetch/cancel`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return expectOk(r, "failed to cancel method fetch");
+}

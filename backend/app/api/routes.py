@@ -74,6 +74,33 @@ def _tag_ids_for_root_name(db: Session, name: str) -> list[int]:
     ]
 
 
+def _split_filter_values(raw: str | None) -> list[str]:
+    """Parse comma-separated multi-select filter values (trim, drop empties, dedupe)."""
+    if not raw:
+        return []
+    values: list[str] = []
+    seen: set[str] = set()
+    for part in str(raw).split(","):
+        value = part.strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        values.append(value)
+    return values
+
+
+def _tag_ids_for_root_names(db: Session, names: list[str]) -> list[int]:
+    tag_ids: list[int] = []
+    seen: set[int] = set()
+    for name in names:
+        for tag_id in _tag_ids_for_root_name(db, name):
+            if tag_id in seen:
+                continue
+            seen.add(tag_id)
+            tag_ids.append(tag_id)
+    return tag_ids
+
+
 @router.get("/items")
 def list_items(
     db: Session = Depends(get_db),
@@ -90,14 +117,17 @@ def list_items(
     published_before: str | None = None,
 ):
     stmt = select(Item)
-    if main_category:
-        stmt = stmt.where(Item.main_category == main_category)
+    main_categories = _split_filter_values(main_category)
+    if main_categories:
+        stmt = stmt.where(Item.main_category.in_(main_categories))
     if info_type:
         stmt = stmt.where(Item.info_type == info_type)
-    if importance:
-        stmt = stmt.where(Item.importance == importance)
-    if sub_tag:
-        tag_ids = _tag_ids_for_root_name(db, sub_tag)
+    importances = _split_filter_values(importance)
+    if importances:
+        stmt = stmt.where(Item.importance.in_(importances))
+    sub_tags = _split_filter_values(sub_tag)
+    if sub_tags:
+        tag_ids = _tag_ids_for_root_names(db, sub_tags)
         stmt = stmt.where(
             Item.id.in_(
                 select(ItemTag.item_id)

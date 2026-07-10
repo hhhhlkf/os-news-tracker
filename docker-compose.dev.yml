@@ -29,7 +29,7 @@ services:
       DATABASE_URL: postgresql+psycopg://osnews_app:OsNewsTracker2026DbA7K9M4@db:5432/osnews
       ENABLE_SCHEDULER: "0"
       ENABLE_MAIL_SCHEDULER: "1"
-      ENABLE_MORNING_CRAWL_SCHEDULER: "0"
+      ENABLE_MORNING_CRAWL_SCHEDULER: "1"
       RUN_STARTUP_BACKFILL: "0"
       WATCHFILES_FORCE_POLLING: "true"
     depends_on:

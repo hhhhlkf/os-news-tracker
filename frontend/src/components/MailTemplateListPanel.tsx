@@ -11,12 +11,20 @@ import {
 import type { MailFilterSnapshot, MailPreviewResponse, MailProviderKind, MailTemplate } from "../mail/types";
 import { formatDateYmd, HotspotTags, SourceCta, TechHighlightsList } from "./ItemMetaBlocks";
 
+function formatMultiFilter(raw: string | null | undefined): string {
+  if (!raw) return "";
+  return raw.split(",").map((part) => part.trim()).filter(Boolean).join(" / ");
+}
+
 function summarizeFilter(snapshot: MailFilterSnapshot): string {
   const segments: string[] = [];
-  if (snapshot.main_category) segments.push(snapshot.main_category);
+  const mainCategory = formatMultiFilter(snapshot.main_category);
+  const importance = formatMultiFilter(snapshot.importance);
+  const subTag = formatMultiFilter(snapshot.sub_tag);
+  if (mainCategory) segments.push(mainCategory);
   if (snapshot.info_type) segments.push(snapshot.info_type);
-  if (snapshot.importance) segments.push(snapshot.importance);
-  if (snapshot.sub_tag) segments.push(snapshot.sub_tag);
+  if (importance) segments.push(importance);
+  if (subTag) segments.push(subTag);
   if (snapshot.q) segments.push(`“${snapshot.q}”`);
 
   if (snapshot.published_after_mode === "relative" && snapshot.published_after_value) {

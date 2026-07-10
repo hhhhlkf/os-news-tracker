@@ -33,6 +33,29 @@ export function getFacetGroups(): [keyof Facets, string][] {
   ];
 }
 
+/** Parse comma-separated multi-select facet values. */
+export function parseFacetValues(raw: string | undefined | null): string[] {
+  if (!raw) return [];
+  const values: string[] = [];
+  const seen = new Set<string>();
+  for (const part of raw.split(",")) {
+    const value = part.trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    values.push(value);
+  }
+  return values;
+}
+
+/** Toggle one value in a comma-separated multi-select filter string. */
+export function toggleFacetValue(raw: string | undefined | null, value: string): string {
+  const current = parseFacetValues(raw);
+  if (current.includes(value)) {
+    return current.filter((item) => item !== value).join(",");
+  }
+  return [...current, value].join(",");
+}
+
 export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
   const [customExpanded, setCustomExpanded] = useState(false);
 
@@ -110,21 +133,45 @@ export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
           >
             {facets[key].map((f: { value: string; count: number }) => {
               const filterKey = getFacetFilterKey(key);
-              const activeValue = selected[filterKey];
+              const selectedValues = parseFacetValues(selected[filterKey]);
+              const active = selectedValues.includes(f.value);
               return (
                 <div key={f.value}
-                     onClick={() => onSelect(filterKey, activeValue === f.value ? "" : f.value)}
+                     onClick={() => onSelect(filterKey, toggleFacetValue(selected[filterKey], f.value))}
                      style={{
                        cursor: "pointer",
                        padding: "8px 10px",
                        borderRadius: 6,
-                       background: activeValue === f.value ? "#eff8ff" : "transparent",
-                       color: activeValue === f.value ? "#175cd3" : "#344054",
+                       background: active ? "#eff8ff" : "transparent",
+                       color: active ? "#175cd3" : "#344054",
                        fontSize: 13,
                        display: "flex",
                        justifyContent: "space-between",
+                       alignItems: "center",
+                       gap: 8,
                      }}>
-                  <span>{f.value}</span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <span
+                      aria-hidden
+                      style={{
+                        width: 14,
+                        height: 14,
+                        borderRadius: 3,
+                        border: active ? "1px solid #175cd3" : "1px solid #d0d5dd",
+                        background: active ? "#175cd3" : "#fff",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "#fff",
+                        fontSize: 10,
+                        lineHeight: 1,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {active ? "✓" : ""}
+                    </span>
+                    <span>{f.value}</span>
+                  </span>
                   <span style={{ color: "#98a2b3" }}>{f.count}</span>
                 </div>
               );
