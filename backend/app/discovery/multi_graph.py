@@ -13,7 +13,6 @@ from app.discovery.audit import audit_discovery_recipe
 from app.discovery.quality_audit import (
     apply_quality_audit_to_method,
     audit_source_quality,
-    status_after_quality,
 )
 from app.discovery.graph import (
     DiscoveryState,
@@ -500,7 +499,6 @@ def _run_and_save_multi_recipe(
                 source_kind=route.kind,
                 input_type=route.input_type,
             )
-            method_status = status_after_quality(method_status, quality_audit)
             append_run_log(
                 "质量审计",
                 "信息源质量审计完成",

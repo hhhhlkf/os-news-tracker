@@ -124,14 +124,6 @@ def apply_quality_audit_to_method(method: Any, audit: SourceQualityAudit) -> Non
         setattr(method, key, value)
 
 
-def status_after_quality(method_audit_status: str, audit: SourceQualityAudit) -> str:
-    if method_audit_status not in {"active", "ok"}:
-        return method_audit_status
-    if audit.quality_score < 50:
-        return "failed"
-    return "active"
-
-
 def _sample_items(items: list[dict]) -> list[dict[str, Any]]:
     sample: list[dict[str, Any]] = []
     for item in items[:QUALITY_AUDIT_SAMPLE_LIMIT]:

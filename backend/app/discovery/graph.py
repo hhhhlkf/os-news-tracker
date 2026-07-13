@@ -249,7 +249,6 @@ def save_method(state: DiscoveryState, db=None) -> DiscoveryState:
         from app.discovery.quality_audit import (
             apply_quality_audit_to_method,
             audit_source_quality,
-            status_after_quality,
         )
         from app.discovery.signature import compute_signature
         from app.run_logs import append_run_log
@@ -262,7 +261,7 @@ def save_method(state: DiscoveryState, db=None) -> DiscoveryState:
             source_kind="website",
             input_type="website_url",
         )
-        method_status = status_after_quality("active", quality_audit)
+        method_status = "active"
         existing = db.query(CrawlMethodDomain).filter_by(domain=domain).first()
         if existing is not None and state.get("force"):
             # 覆盖：更新现有 method，保留 method_id/source_id，审计历史连续
