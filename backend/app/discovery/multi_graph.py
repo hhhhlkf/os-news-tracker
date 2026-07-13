@@ -414,15 +414,28 @@ def _run_and_save_multi_recipe(
         status=status,
     )
 
-    # Classify method status
-    if status in {"pending_auth", "auth_invalid"}:
-        method_status = status
-    elif status in {"rate_limited", "captcha_required"}:
-        method_status = "retry_later"
-    elif len(items) >= _required_count(effective_run_recipe):
-        method_status = "active"
-    else:
-        method_status = "failed"
+    audit_result = _audit_multi_recipe_result(
+        route=route,
+        recipe=effective_run_recipe,
+        items=items,
+        status=status,
+    )
+    append_run_log(
+        "审计",
+        "多源配方审计完成",
+        source=source_label,
+        audit_kind=audit_result["audit_kind"],
+        input_type=route.input_type,
+        branch_kind=route.kind,
+        status=status,
+        method_status=audit_result["method_status"],
+        passed=audit_result["passed"],
+        discovered_count=len(items),
+        required_count=audit_result["required_count"],
+        reason=audit_result["reason"],
+    )
+
+    method_status = audit_result["method_status"]
 
     sanitized_recipe = _sanitize_recipe_for_storage(recipe)
     sig = _compute_multi_signature(sanitized_recipe)
@@ -486,6 +499,7 @@ def _run_and_save_multi_recipe(
                 "route": route.model_dump(),
                 "discovered_count": len(items),
                 "method_status": method_status,
+                "multi_audit_result": audit_result,
             }
 
         if existing_domain is not None:
@@ -505,6 +519,7 @@ def _run_and_save_multi_recipe(
                 "route": route.model_dump(),
                 "discovered_count": len(items),
                 "method_status": m.status,
+                "multi_audit_result": audit_result,
                 "note": "existing method reused (force=false)",
             }
         src = Source(
@@ -547,9 +562,70 @@ def _run_and_save_multi_recipe(
             "method_status": method_status,
             "route": route.model_dump(),
             "discovered_count": len(items),
+            "multi_audit_result": audit_result,
         }
     finally:
         db.close()
+
+
+def _audit_multi_recipe_result(
+    *,
+    route: SourceRoute,
+    recipe: dict[str, Any],
+    items: list,
+    status: str | None,
+) -> dict[str, Any]:
+    """Classify non-website multi discovery probes with explicit audit kinds.
+
+    Website discovery has the full graph.py auditor node. Multi discovery uses
+    deterministic recipes, so this audit is a lightweight run-result audit.
+    """
+    required_count = _required_count(recipe)
+    discovered_count = len(items)
+    audit_kind = _multi_audit_kind(route)
+    if status in {"pending_auth", "auth_invalid"}:
+        return {
+            "audit_kind": audit_kind,
+            "passed": False,
+            "method_status": status,
+            "required_count": required_count,
+            "discovered_count": discovered_count,
+            "reason": status,
+        }
+    if status in {"rate_limited", "captcha_required"}:
+        return {
+            "audit_kind": audit_kind,
+            "passed": False,
+            "method_status": "retry_later",
+            "required_count": required_count,
+            "discovered_count": discovered_count,
+            "reason": status,
+        }
+    if discovered_count >= required_count:
+        return {
+            "audit_kind": audit_kind,
+            "passed": True,
+            "method_status": "active",
+            "required_count": required_count,
+            "discovered_count": discovered_count,
+            "reason": "enough_items",
+        }
+    return {
+        "audit_kind": audit_kind,
+        "passed": False,
+        "method_status": "failed",
+        "required_count": required_count,
+        "discovered_count": discovered_count,
+        "reason": "insufficient_items",
+    }
+
+
+def _multi_audit_kind(route: SourceRoute) -> str:
+    if route.kind == "wechat" and route.input_type == "wechat_search":
+        return "wechat_search_audit"
+    if route.kind == "wechat" and _is_wechat_history_input(route.input_type):
+        return "wechat_history_audit"
+    return f"{route.kind}_audit"
 
 
 def start_multi_discovery_run(
