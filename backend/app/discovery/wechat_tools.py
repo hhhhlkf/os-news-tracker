@@ -16,6 +16,7 @@ DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
+WECHAT_ARTICLE_CONTENT_CHAR_LIMIT = 2000
 _DATE_PATTERNS = (
     re.compile(r"(?P<year>20\d{2})[-/.年](?P<month>\d{1,2})[-/.月](?P<day>\d{1,2})日?"),
     re.compile(r"(?P<month>\d{1,2})[-/.月](?P<day>\d{1,2})日?\s*(?P<year>20\d{2})"),
@@ -652,7 +653,7 @@ def wechat_fetch_article_content(url: str, auth_ref: str | None = None) -> dict:
         }
     return {
         "status": "ok",
-        "content": _strip_tags(match.group(1)),
+        "content": _strip_tags(match.group(1))[:WECHAT_ARTICLE_CONTENT_CHAR_LIMIT],
         "title": title,
         "summary": summary,
         "published_at": published_at,

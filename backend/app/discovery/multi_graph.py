@@ -230,9 +230,18 @@ def build_wechat_history_recipe(
                 "into": "items",
                 "merge": False,
             },
+            {
+                "op": "enrich_wechat_articles",
+                "fetch_content": True,
+                "fill_missing_only": True,
+                "max_items": None,
+            },
             {"op": "dedup_by", "field": "url"},
         ],
-        "notes": ["WeChat account history uses the default wechat_mp_default auth profile."],
+        "notes": [
+            "WeChat account history uses the default wechat_mp_default auth profile.",
+            "After history extraction, article pages are fetched to backfill missing published_at, summary, and content.",
+        ],
     }
 
 

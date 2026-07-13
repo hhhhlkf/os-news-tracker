@@ -160,7 +160,9 @@ def _prepare_fetch_recipe(recipe: dict[str, Any], request: ManualNewsRunRequest 
         return prepared
 
     target_count = request.target_count if request else None
-    for action in prepared.get("actions") or []:
+    actions = prepared.get("actions") or []
+    _ensure_wechat_history_article_enrich(actions)
+    for action in actions:
         if action.get("op") == "wechat_search_articles":
             if action.get("max_pages") is None:
                 action["max_pages"] = DEFAULT_WECHAT_SEARCH_MAX_PAGES
@@ -170,6 +172,25 @@ def _prepare_fetch_recipe(recipe: dict[str, Any], request: ManualNewsRunRequest 
             desired = max(1, target_count) if target_count else 5
             action["max_items"] = min(desired, WECHAT_ENRICH_MAX_ITEMS)
     return prepared
+
+
+def _ensure_wechat_history_article_enrich(actions: list[dict[str, Any]]) -> None:
+    has_history = any(action.get("op") == "wechat_fetch_account_history" for action in actions)
+    has_article_enrich = any(action.get("op") == "enrich_wechat_articles" for action in actions)
+    if not has_history or has_article_enrich:
+        return
+
+    enrich_action = {
+        "op": "enrich_wechat_articles",
+        "fetch_content": True,
+        "fill_missing_only": True,
+        "max_items": None,
+    }
+    for index, action in enumerate(actions):
+        if action.get("op") == "dedup_by":
+            actions.insert(index, enrich_action)
+            return
+    actions.append(enrich_action)
 
 
 @router.post("/run")
