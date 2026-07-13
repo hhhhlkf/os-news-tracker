@@ -5,8 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
-
 
 def execute_discovery_fetch(
     method_id: int,
@@ -22,7 +20,6 @@ def execute_discovery_fetch(
     parent via the queue so the UI ring buffer (in the API process) stays updated.
     """
     from app.api.discovery_routes import (
-        _attach_wechat_skip_keys,
         _apply_fetch_limits,
         _prepare_fetch_recipe,
         run_method,
@@ -32,7 +29,7 @@ def execute_discovery_fetch(
     from app.discovery.fetch_runs import finish_method_fetch_run
     from app.extract.scrapling_extractor import ScraplingExtractor
     from app.manual_news_run import _build_not_stored_log_fields
-    from app.models import CrawlMethod, Item, Source
+    from app.models import CrawlMethod, Source
     from app.pipeline import Pipeline
     from app.processing.enricher import Enricher
     from app.run_logs import append_run_log
@@ -68,8 +65,6 @@ def execute_discovery_fetch(
         if not m:
             raise ValueError(f"method {method_id} not found")
         recipe = _prepare_fetch_recipe(m.dsl_recipe, request)
-        existing_urls = list(db.scalars(select(Item.url).where(Item.source_id == m.source_id)))
-        recipe = _attach_wechat_skip_keys(recipe, existing_urls)
         _log(
             "抓方式",
             "开始抓取爬取方式",
@@ -149,11 +144,7 @@ def execute_discovery_fetch(
                         source=m.domain,
                         method_id=m.id,
                         total_items=payload.get("total_items"),
-                        selected_items=payload.get("selected_items"),
-                        skipped_existing=payload.get("skipped_existing"),
-                        skipped_low_value=payload.get("skipped_low_value"),
                         max_items=payload.get("max_items"),
-                        max_seconds=payload.get("max_seconds"),
                         fetch_content=payload.get("fetch_content"),
                     )
                 elif event == "wechat_enrich_item_started":
@@ -186,22 +177,6 @@ def execute_discovery_fetch(
                         source=m.domain,
                         method_id=m.id,
                         status=payload.get("status"),
-                        attempted_count=payload.get("attempted_count"),
-                        enriched_count=payload.get("enriched_count"),
-                        total_items=payload.get("total_items"),
-                        selected_items=payload.get("selected_items"),
-                        skipped_existing=payload.get("skipped_existing"),
-                        skipped_low_value=payload.get("skipped_low_value"),
-                    )
-                elif event == "wechat_enrich_timeout":
-                    _log(
-                        "抓方式",
-                        "微信文章补抓达到时间上限",
-                        source=m.domain,
-                        method_id=m.id,
-                        level="warning",
-                        timed_out_count=payload.get("timed_out_count"),
-                        max_seconds=payload.get("max_seconds"),
                         attempted_count=payload.get("attempted_count"),
                         enriched_count=payload.get("enriched_count"),
                         total_items=payload.get("total_items"),
