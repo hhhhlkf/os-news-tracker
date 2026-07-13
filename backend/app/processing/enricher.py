@@ -8,6 +8,8 @@ from app.enums import MAIN_CATEGORIES, Importance, InfoType
 from app.llm.client import LlmClient
 from app.schemas import EnrichedFields, NormalizedItem
 
+ENRICH_CONTENT_CHAR_LIMIT = 500
+
 _PROMPT_TEMPLATE = """你是操作系统维护工程师的关键技术新闻与技术情报分析师。阅读下面的技术文章，为 OS maintainer 提取结构化情报。
 
 只收录关键技术新闻：新兴技术/工具/架构进入可观察阶段，操作系统、内核、发行版、编译器、包管理、云原生基础设施、AI agent/LLM 工具链出现重要发布、重大更新、性能基准、兼容性变化或技术路线变化。
@@ -206,7 +208,7 @@ class Enricher:
                 "{categories}": ", ".join(categories),
                 "{existing_tags}": json.dumps(existing_tags or [], ensure_ascii=False),
                 "{title}": item.title,
-                "{content}": item.clean_content[:6000],
+                "{content}": item.clean_content[:ENRICH_CONTENT_CHAR_LIMIT],
             },
         )
         raw = self._llm.complete(prompt)

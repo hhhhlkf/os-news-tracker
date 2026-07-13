@@ -333,6 +333,7 @@ def _fetch_and_ingest_method(db: Session, method: CrawlMethod, request) -> dict:
     """运行单条 discovery method 的 DSL 并走正常 pipeline 入库。复用 discovery 内部入口，不反调 HTTP。"""
     from app.api.discovery_routes import _apply_fetch_limits, _prepare_fetch_recipe, run_method
     from app.discovery.ingester import CrawlOutputIngester
+    from app.extract.scrapling_extractor import ScraplingExtractor
     from app.models import Source
     from app.pipeline import Pipeline
     from app.processing.enricher import Enricher
@@ -357,7 +358,7 @@ def _fetch_and_ingest_method(db: Session, method: CrawlMethod, request) -> dict:
 
     raws = CrawlOutputIngester().to_raw_items(output, source_id=method.source_id)
     source = db.get(Source, method.source_id)
-    pipeline = Pipeline(session=db, extractor=None, enricher=Enricher())
+    pipeline = Pipeline(session=db, extractor=ScraplingExtractor(), enricher=Enricher())
     stored = 0
     for raw in raws:
         if pipeline.process_item_result(source, raw).stored:

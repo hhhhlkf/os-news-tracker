@@ -27,6 +27,7 @@ def execute_discovery_fetch(
     from app.db import SessionLocal
     from app.discovery.ingester import CrawlOutputIngester
     from app.discovery.fetch_runs import finish_method_fetch_run
+    from app.extract.scrapling_extractor import ScraplingExtractor
     from app.manual_news_run import _build_not_stored_log_fields
     from app.models import CrawlMethod, Source
     from app.pipeline import Pipeline
@@ -208,7 +209,7 @@ def execute_discovery_fetch(
             raws = CrawlOutputIngester().to_raw_items(output, source_id=m.source_id)
             discovered_count = len(raws)
             source = db.get(Source, m.source_id)
-            pipeline = Pipeline(session=db, extractor=None, enricher=Enricher())
+            pipeline = Pipeline(session=db, extractor=ScraplingExtractor(), enricher=Enricher())
             _log(
                 "process",
                 "开始处理抓取结果",

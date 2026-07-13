@@ -10,7 +10,7 @@ from app.models import Source
 from app.processing.normalizer import normalize
 from app.processing.relevance import llm_relevance
 from app.repository import Repository
-from app.schemas import NormalizedItem, RawItem
+from app.schemas import EnrichedFields, NormalizedItem, RawItem
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,33 @@ BOT_CHALLENGE_MARKERS = (
     "enable javascript",
     "browser verification",
 )
+
+INCOMPLETE_CONTENT_RETRY_MARKERS = (
+    "正文不完整",
+    "正文截断",
+    "摘要碎片",
+    "信息不足",
+    "内容不足",
+    "缺少具体技术",
+    "无法支撑",
+)
+
+FULL_TEXT_RETRY_KEYWORDS = (
+    "ai agent",
+    "agent mesh",
+    "agentic",
+    "llm",
+    "mcp",
+    "model context protocol",
+    "openshift ai",
+    "red hat ai",
+    "inference",
+    "vllm",
+    "devstral",
+    "ministral",
+)
+
+MIN_EXTRACTED_RETRY_CONTENT_LEN = 500
 
 
 @dataclass(frozen=True)
@@ -121,17 +148,14 @@ class Pipeline:
                 )
                 return ProcessItemResult(stored=False, reason="relevance")
         try:
-            try:
-                fields = self._enricher.enrich(
-                    normalized,
-                    existing_tags=self._repo.list_existing_sub_tags(),
-                )
-            except TypeError:
-                fields = self._enricher.enrich(normalized)
+            fields = self._enrich(normalized)
         except Exception:
             logger.exception("enrich failed for %s", normalized.canonical_url)
             return ProcessItemResult(stored=False, reason="enrich_failed")
         if not fields.should_store:
+            retry_result = self._retry_with_extracted_content(source, raw, normalized, fields)
+            if retry_result is not None:
+                return retry_result
             logger.info(
                 "enricher rejected %s (source=%s, reason=%s)",
                 normalized.canonical_url,
@@ -154,6 +178,103 @@ class Pipeline:
             logger.exception("save failed for %s", normalized.canonical_url)
             return ProcessItemResult(stored=False, reason="save_failed", detail="integrity_conflict")
         return ProcessItemResult(stored=True, reason="stored")
+
+    def _enrich(self, item: NormalizedItem) -> EnrichedFields:
+        try:
+            return self._enricher.enrich(
+                item,
+                existing_tags=self._repo.list_existing_sub_tags(),
+            )
+        except TypeError:
+            return self._enricher.enrich(item)
+
+    def _retry_with_extracted_content(
+        self,
+        source: Source,
+        raw: RawItem,
+        original: NormalizedItem,
+        rejected_fields: EnrichedFields,
+    ) -> ProcessItemResult | None:
+        if self._extractor is None:
+            return None
+        if not self._should_retry_with_extracted_content(raw, original, rejected_fields):
+            return None
+
+        try:
+            doc = self._extractor.extract(raw.url)
+        except Exception as exc:
+            logger.info(
+                "full-text retry extraction failed for %s (source=%s): %s",
+                original.canonical_url,
+                source.name,
+                exc,
+            )
+            return None
+
+        doc.published_at = doc.published_at or raw.published_at
+        extracted = normalize(raw, doc)
+        if len(extracted.clean_content) < MIN_EXTRACTED_RETRY_CONTENT_LEN:
+            logger.info(
+                "full-text retry skipped %s (source=%s, reason=short_extracted_content, len=%s)",
+                original.canonical_url,
+                source.name,
+                len(extracted.clean_content),
+            )
+            return None
+        if extracted.clean_content.strip() == original.clean_content.strip():
+            return None
+        if self._is_bot_challenge_page(extracted):
+            return ProcessItemResult(stored=False, reason="bot_challenge")
+
+        try:
+            fields = self._enrich(extracted)
+        except Exception:
+            logger.exception("full-text retry enrich failed for %s", extracted.canonical_url)
+            return ProcessItemResult(stored=False, reason="enrich_failed", detail="full_text_retry")
+
+        if not fields.should_store:
+            logger.info(
+                "full-text retry enricher rejected %s (source=%s, reason=%s)",
+                extracted.canonical_url,
+                source.name,
+                fields.reject_reason or "unknown",
+            )
+            return ProcessItemResult(
+                stored=False,
+                reason="enrich_reject",
+                detail=f"补抓正文后仍拒收：{fields.reject_reason or 'unknown'}",
+            )
+
+        fields = self._apply_category_constraints(source, fields)
+        try:
+            self._repo.save_enriched(extracted, fields)
+        except IntegrityError:
+            self._session.rollback()
+            if self._repo.exists_by_canonical(extracted.canonical_url):
+                self._repo.merge_source_link(extracted.canonical_url, source.id, raw.url)
+                return ProcessItemResult(stored=False, reason="duplicate", detail="integrity_conflict")
+            logger.exception("full-text retry save failed for %s", extracted.canonical_url)
+            return ProcessItemResult(stored=False, reason="save_failed", detail="integrity_conflict")
+
+        logger.info(
+            "full-text retry stored %s (source=%s)",
+            extracted.canonical_url,
+            source.name,
+        )
+        return ProcessItemResult(stored=True, reason="stored")
+
+    def _should_retry_with_extracted_content(
+        self,
+        raw: RawItem,
+        item: NormalizedItem,
+        fields: EnrichedFields,
+    ) -> bool:
+        reason = (fields.reject_reason or "").lower()
+        if not any(marker.lower() in reason for marker in INCOMPLETE_CONTENT_RETRY_MARKERS):
+            return False
+
+        text = f"{item.title}\n{item.clean_content}\n{raw.raw_content or ''}".lower()
+        return any(keyword in text for keyword in FULL_TEXT_RETRY_KEYWORDS)
 
     def _process_agent_item(self, source: Source, raw) -> ProcessItemResult:
         """处理 agent crawl 条目：跳过 LLM 富化，直接存储。
