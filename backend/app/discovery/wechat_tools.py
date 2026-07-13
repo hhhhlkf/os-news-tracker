@@ -4,6 +4,7 @@ import html
 import json
 import logging
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
@@ -621,9 +622,17 @@ def _normalize_mp_article(raw: dict) -> dict:
     }
 
 
-def wechat_fetch_article_content(url: str, auth_ref: str | None = None) -> dict:
+def wechat_fetch_article_content(
+    url: str,
+    auth_ref: str | None = None,
+    *,
+    progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
+    progress_context: dict[str, Any] | None = None,
+) -> dict:
     """Fetch full article content from a WeChat MP article URL."""
     url = normalize_wechat_article_url(url)
+    context = dict(progress_context or {})
+    started_at = time.monotonic()
     headers = dict(DEFAULT_HEADERS)
     auth = resolve_wechat_auth_profile(auth_ref) if auth_ref else {"status": "pending_auth"}
     if auth.get("status") == "ok":
@@ -634,26 +643,76 @@ def wechat_fetch_article_content(url: str, auth_ref: str | None = None) -> dict:
     with httpx.Client(
         headers=headers, timeout=timeout, follow_redirects=True, max_redirects=2
     ) as client:
+        _emit_progress(
+            progress_callback,
+            "wechat_article_fetch_request_started",
+            **context,
+            url=url,
+        )
         response = client.get(url)
+    response_duration_ms = int((time.monotonic() - started_at) * 1000)
+    body_text = response.text
+    _emit_progress(
+        progress_callback,
+        "wechat_article_fetch_response_received",
+        **context,
+        url=url,
+        final_url=str(response.url),
+        status_code=response.status_code,
+        duration_ms=response_duration_ms,
+        body_chars=len(body_text),
+    )
     if response.status_code in {403, 429}:
+        _emit_progress(
+            progress_callback,
+            "wechat_article_fetch_finished",
+            **context,
+            url=url,
+            final_url=str(response.url),
+            status="rate_limited",
+            duration_ms=int((time.monotonic() - started_at) * 1000),
+            body_chars=len(body_text),
+        )
         return {"status": "rate_limited", "content": ""}
     if response.status_code >= 400:
+        _emit_progress(
+            progress_callback,
+            "wechat_article_fetch_finished",
+            **context,
+            url=url,
+            final_url=str(response.url),
+            status="unsupported",
+            status_code=response.status_code,
+            duration_ms=int((time.monotonic() - started_at) * 1000),
+            body_chars=len(body_text),
+        )
         return {"status": "unsupported", "content": ""}
-    published_at = _extract_article_published_at(response.text)
+    published_at = _extract_article_published_at(body_text)
     title = (
-        _extract_meta_value(response.text, "property", "og:title")
-        or _extract_meta_value(response.text, "name", "twitter:title")
-        or _extract_title_text(response.text)
+        _extract_meta_value(body_text, "property", "og:title")
+        or _extract_meta_value(body_text, "name", "twitter:title")
+        or _extract_title_text(body_text)
         or ""
     )
     summary = (
-        _extract_meta_value(response.text, "property", "og:description")
-        or _extract_meta_value(response.text, "name", "description")
-        or _extract_meta_value(response.text, "name", "twitter:description")
+        _extract_meta_value(body_text, "property", "og:description")
+        or _extract_meta_value(body_text, "name", "description")
+        or _extract_meta_value(body_text, "name", "twitter:description")
         or ""
     )
-    match = re.search(r'<div[^>]+id="js_content"[^>]*>(.*?)</div>', response.text, re.S)
+    match = re.search(r'<div[^>]+id="js_content"[^>]*>(.*?)</div>', body_text, re.S)
     if not match:
+        _emit_progress(
+            progress_callback,
+            "wechat_article_fetch_finished",
+            **context,
+            url=url,
+            final_url=str(response.url),
+            status="empty",
+            duration_ms=int((time.monotonic() - started_at) * 1000),
+            body_chars=len(body_text),
+            content_chars=0,
+        )
         return {
             "status": "empty",
             "content": "",
@@ -662,9 +721,21 @@ def wechat_fetch_article_content(url: str, auth_ref: str | None = None) -> dict:
             "published_at": published_at,
             "resolved_url": str(response.url),
         }
+    content = _strip_tags(match.group(1))[:WECHAT_ARTICLE_CONTENT_CHAR_LIMIT]
+    _emit_progress(
+        progress_callback,
+        "wechat_article_fetch_finished",
+        **context,
+        url=url,
+        final_url=str(response.url),
+        status="ok",
+        duration_ms=int((time.monotonic() - started_at) * 1000),
+        body_chars=len(body_text),
+        content_chars=len(content),
+    )
     return {
         "status": "ok",
-        "content": _strip_tags(match.group(1))[:WECHAT_ARTICLE_CONTENT_CHAR_LIMIT],
+        "content": content,
         "title": title,
         "summary": summary,
         "published_at": published_at,
@@ -844,8 +915,25 @@ def wechat_enrich_articles(
             url=next_item.get("url"),
         )
         try:
-            article = wechat_fetch_article_content(str(next_item["url"]))
-        except Exception:  # noqa: BLE001 - 单篇抓取失败不影响其他并发任务
+            article = wechat_fetch_article_content(
+                str(next_item["url"]),
+                progress_callback=progress_callback,
+                progress_context={
+                    "attempted_count": my_attempt,
+                    "max_items": max_items,
+                    "title": next_item.get("title"),
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - 单篇抓取失败不影响其他并发任务
+            _emit_progress(
+                progress_callback,
+                "wechat_article_fetch_failed",
+                attempted_count=my_attempt,
+                max_items=max_items,
+                title=next_item.get("title"),
+                url=next_item.get("url"),
+                error=str(exc)[:300],
+            )
             article = {"status": "error", "content": ""}
         st = article.get("status", "unknown")
         did_enrich = False

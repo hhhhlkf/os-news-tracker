@@ -325,6 +325,10 @@ _WECHAT_PROGRESS_MESSAGES = {
     "wechat_enrich_started": "开始补抓微信文章内容",
     "wechat_enrich_topic_skipped": "微信文章补抓主题预筛跳过",
     "wechat_enrich_item_started": "微信文章补抓进行中",
+    "wechat_article_fetch_request_started": "微信文章页面请求开始",
+    "wechat_article_fetch_response_received": "微信文章页面响应返回",
+    "wechat_article_fetch_finished": "微信文章页面解析完成",
+    "wechat_article_fetch_failed": "微信文章页面请求失败",
     "wechat_enrich_item_finished": "微信文章补抓完成",
     "wechat_enrich_finished": "微信文章补抓阶段完成",
 }

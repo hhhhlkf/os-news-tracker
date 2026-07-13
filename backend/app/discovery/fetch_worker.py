@@ -167,6 +167,35 @@ def execute_discovery_fetch(
                         title=payload.get("title"),
                         url=payload.get("url"),
                     )
+                elif event in {
+                    "wechat_article_fetch_request_started",
+                    "wechat_article_fetch_response_received",
+                    "wechat_article_fetch_finished",
+                    "wechat_article_fetch_failed",
+                }:
+                    message_map = {
+                        "wechat_article_fetch_request_started": "微信文章页面请求开始",
+                        "wechat_article_fetch_response_received": "微信文章页面响应返回",
+                        "wechat_article_fetch_finished": "微信文章页面解析完成",
+                        "wechat_article_fetch_failed": "微信文章页面请求失败",
+                    }
+                    _log(
+                        "抓方式",
+                        message_map[event],
+                        source=m.domain,
+                        method_id=m.id,
+                        attempted_count=payload.get("attempted_count"),
+                        max_items=payload.get("max_items"),
+                        title=payload.get("title"),
+                        url=payload.get("url"),
+                        final_url=payload.get("final_url"),
+                        status=payload.get("status"),
+                        status_code=payload.get("status_code"),
+                        duration_ms=payload.get("duration_ms"),
+                        body_chars=payload.get("body_chars"),
+                        content_chars=payload.get("content_chars"),
+                        error=payload.get("error"),
+                    )
                 elif event == "wechat_enrich_topic_skipped":
                     _log(
                         "抓方式",
