@@ -52,6 +52,8 @@ class MultiDslInterpreter:
                     fetch_content=bool(action.get("fetch_content", True)),
                     fill_missing_only=bool(action.get("fill_missing_only", True)),
                     max_items=int(action["max_items"]) if action.get("max_items") is not None else None,
+                    skip_url_keys=action.get("skip_url_keys") if isinstance(action.get("skip_url_keys"), list) else None,
+                    precheck_topic_with_llm=bool(action.get("precheck_topic_with_llm", False)),
                     progress_callback=progress_callback,
                 )
                 ctx["items"] = list((ctx.get("last_fetch") or {}).get("items") or [])

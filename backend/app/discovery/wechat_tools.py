@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import logging
 import re
 from datetime import datetime, timezone
@@ -17,6 +18,7 @@ DEFAULT_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 WECHAT_ARTICLE_CONTENT_CHAR_LIMIT = 2000
+WECHAT_TOPIC_PRECHECK_TIMEOUT_SECONDS = 8.0
 _DATE_PATTERNS = (
     re.compile(r"(?P<year>20\d{2})[-/.年](?P<month>\d{1,2})[-/.月](?P<day>\d{1,2})日?"),
     re.compile(r"(?P<month>\d{1,2})[-/.月](?P<day>\d{1,2})日?\s*(?P<year>20\d{2})"),
@@ -664,12 +666,71 @@ def wechat_fetch_article_content(url: str, auth_ref: str | None = None) -> dict:
 WECHAT_ENRICH_MAX_WORKERS = 6
 
 
+def wechat_article_key(url: str) -> str | None:
+    parsed = urlparse(html.unescape(str(url or "")))
+    query = parse_qs(parsed.query)
+    biz = (query.get("__biz") or [None])[0]
+    mid = (query.get("mid") or [None])[0]
+    idx = (query.get("idx") or [None])[0]
+    sn = (query.get("sn") or [""])[0] or ""
+    if not (biz and mid and idx):
+        return None
+    return f"{biz}:{mid}:{idx}:{sn}"
+
+
+def _extract_json_object(text: str) -> dict:
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
+    if fenced:
+        return json.loads(fenced.group(1))
+    brace = re.search(r"\{.*\}", text, re.S)
+    if brace:
+        return json.loads(brace.group(0))
+    raise ValueError(f"No JSON object found in LLM output: {text[:200]}")
+
+
+def _should_fetch_wechat_article_content(item: dict, llm: Any) -> tuple[bool, str]:
+    """Use title/card summary only; never fetch article body for this decision."""
+    prompt = f"""你是 OS 技术情报采集系统的微信文章补抓前置判断器。
+
+只根据标题、摘要和 URL 判断是否值得继续补抓正文。不要假设正文内容。
+
+应该补抓正文的情况：
+- 明显是操作系统、Linux 内核、发行版、编译器、工具链、RISC-V、GCC、LLVM、性能、CXL、AI Agent、调优、云原生基础设施、安全维护、版本发布、兼容性变化等技术内容。
+
+不应该补抓正文的情况：
+- 活动通知、会议预告、报名链接、Meetup、峰会、大会议程、运营报告、社区月报/周报、宣传材料、招聘、纯营销内容。
+
+无法判断时返回 should_fetch=false，让后续 Enricher 使用标题/摘要保守拒收。
+
+输出严格 JSON，不要多余文字：
+- should_fetch: 布尔值
+- reason: 从 technical_article、activity_notice、conference、registration、operation_report、marketing、insufficient_info、other 中选一个
+
+示例：
+{{"should_fetch": false, "reason": "registration"}}
+
+标题：{item.get("title") or ""}
+摘要：{item.get("summary") or ""}
+URL：{item.get("url") or ""}
+"""
+    raw = llm.complete(
+        prompt,
+        temperature=0.0,
+        response_format={"type": "json_object"},
+        timeout=WECHAT_TOPIC_PRECHECK_TIMEOUT_SECONDS,
+    )
+    data = _extract_json_object(raw)
+    return bool(data.get("should_fetch")), str(data.get("reason") or "other")
+
+
 def wechat_enrich_articles(
     items: list[dict],
     *,
     fetch_content: bool = True,
     fill_missing_only: bool = True,
     max_items: int | None = None,
+    skip_url_keys: list[str] | None = None,
+    precheck_topic_with_llm: bool = False,
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
     max_workers: int = WECHAT_ENRICH_MAX_WORKERS,
 ) -> dict:
@@ -678,28 +739,32 @@ def wechat_enrich_articles(
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
-    # 1) 抓取前去重：同一批内相同 url 只保留首个（无 url 的原样保留）
+    # 1) 抓取前去重：同一批内相同微信文章 key/url 只保留首个（无 url 的原样保留）
     deduped: list[dict] = []
     seen_urls: set[str] = set()
+    seen_keys: set[str] = set()
     for item in items:
         url = str(item.get("url") or "")
         if url:
-            if url in seen_urls:
+            key = wechat_article_key(url)
+            if (key and key in seen_keys) or url in seen_urls:
                 continue
+            if key:
+                seen_keys.add(key)
             seen_urls.add(url)
         deduped.append(dict(item))
 
-    _emit_progress(
-        progress_callback,
-        "wechat_enrich_started",
-        total_items=len(deduped),
-        fetch_content=fetch_content,
-        fill_missing_only=fill_missing_only,
-        max_items=max_items,
-    )
-
     # 2) 选出需要抓取的条目（受 max_items 限额），按原始顺序取前 N 条
     fetch_indices: list[int] = []
+    skip_keys = {str(key) for key in skip_url_keys or [] if key}
+    skipped_existing = 0
+    skipped_topic = 0
+    topic_check_failed = 0
+    topic_llm = None
+    if precheck_topic_with_llm:
+        from app.llm.client import LlmClient
+
+        topic_llm = LlmClient()
     for idx, next_item in enumerate(deduped):
         need_fetch = not fill_missing_only
         if fill_missing_only:
@@ -708,8 +773,46 @@ def wechat_enrich_articles(
                 or not next_item.get("summary")
                 or (fetch_content and not next_item.get("content"))
             )
-        if need_fetch and next_item.get("url") and (max_items is None or len(fetch_indices) < max_items):
-            fetch_indices.append(idx)
+        if not (need_fetch and next_item.get("url")):
+            continue
+        key = wechat_article_key(str(next_item.get("url") or ""))
+        if key and key in skip_keys:
+            skipped_existing += 1
+            continue
+        if precheck_topic_with_llm:
+            try:
+                should_fetch, topic_reason = _should_fetch_wechat_article_content(next_item, topic_llm)
+            except Exception:  # noqa: BLE001 - 预筛失败时保守不补正文，交给 Enricher 用摘要拒收
+                topic_check_failed += 1
+                skipped_topic += 1
+                continue
+            if not should_fetch:
+                skipped_topic += 1
+                _emit_progress(
+                    progress_callback,
+                    "wechat_enrich_topic_skipped",
+                    title=next_item.get("title"),
+                    url=next_item.get("url"),
+                    reason=topic_reason,
+                )
+                continue
+        if max_items is not None and len(fetch_indices) >= max_items:
+            continue
+        fetch_indices.append(idx)
+
+    _emit_progress(
+        progress_callback,
+        "wechat_enrich_started",
+        total_items=len(deduped),
+        selected_items=len(fetch_indices),
+        skipped_existing=skipped_existing,
+        skipped_topic=skipped_topic,
+        topic_check_failed=topic_check_failed,
+        fetch_content=fetch_content,
+        fill_missing_only=fill_missing_only,
+        max_items=max_items,
+        precheck_topic_with_llm=precheck_topic_with_llm,
+    )
 
     statuses: set[str] = set()
     lock = threading.Lock()
@@ -780,6 +883,10 @@ def wechat_enrich_articles(
         attempted_count=attempted_count,
         enriched_count=enriched_count,
         total_items=len(deduped),
+        selected_items=len(fetch_indices),
+        skipped_existing=skipped_existing,
+        skipped_topic=skipped_topic,
+        topic_check_failed=topic_check_failed,
         fetch_content=fetch_content,
     )
     return {
@@ -787,6 +894,10 @@ def wechat_enrich_articles(
         "items": deduped,
         "enriched_count": enriched_count,
         "attempted_count": attempted_count,
+        "selected_count": len(fetch_indices),
+        "skipped_existing": skipped_existing,
+        "skipped_topic": skipped_topic,
+        "topic_check_failed": topic_check_failed,
         "fetch_content": fetch_content,
     }
 

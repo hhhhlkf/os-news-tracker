@@ -323,6 +323,7 @@ _WECHAT_PROGRESS_MESSAGES = {
     "wechat_search_failed": "微信搜索执行失败",
     "wechat_search_finished": "微信搜索执行完成",
     "wechat_enrich_started": "开始补抓微信文章内容",
+    "wechat_enrich_topic_skipped": "微信文章补抓主题预筛跳过",
     "wechat_enrich_item_started": "微信文章补抓进行中",
     "wechat_enrich_item_finished": "微信文章补抓完成",
     "wechat_enrich_finished": "微信文章补抓阶段完成",
@@ -331,10 +332,15 @@ _WECHAT_PROGRESS_MESSAGES = {
 
 def _fetch_and_ingest_method(db: Session, method: CrawlMethod, request) -> dict:
     """运行单条 discovery method 的 DSL 并走正常 pipeline 入库。复用 discovery 内部入口，不反调 HTTP。"""
-    from app.api.discovery_routes import _apply_fetch_limits, _prepare_fetch_recipe, run_method
+    from app.api.discovery_routes import (
+        _apply_fetch_limits,
+        _attach_wechat_skip_keys,
+        _prepare_fetch_recipe,
+        run_method,
+    )
     from app.discovery.ingester import CrawlOutputIngester
     from app.extract.scrapling_extractor import ScraplingExtractor
-    from app.models import Source
+    from app.models import Item, Source
     from app.pipeline import Pipeline
     from app.processing.enricher import Enricher
     from app.run_logs import append_run_log
@@ -352,6 +358,8 @@ def _fetch_and_ingest_method(db: Session, method: CrawlMethod, request) -> dict:
         )
 
     recipe = _prepare_fetch_recipe(method.dsl_recipe, request)
+    existing_urls = list(db.scalars(select(Item.url).where(Item.source_id == method.source_id)))
+    recipe = _attach_wechat_skip_keys(recipe, existing_urls)
     output = run_method(recipe, progress_callback=_log_progress)
     raw_items = list(output.get("items", []))
     output["items"] = _apply_fetch_limits(raw_items, request)
