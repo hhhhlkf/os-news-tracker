@@ -672,7 +672,7 @@ def wechat_fetch_article_content(url: str, auth_ref: str | None = None) -> dict:
     }
 
 
-WECHAT_ENRICH_MAX_WORKERS = 6
+WECHAT_ENRICH_MAX_WORKERS = 2
 
 
 def wechat_article_key(url: str) -> str | None:
