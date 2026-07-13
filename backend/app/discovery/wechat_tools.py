@@ -31,6 +31,14 @@ _EMBEDDED_TS_PATTERNS = (
 DEFAULT_SEARCH_MAX_PAGES = 5
 
 
+def normalize_wechat_article_url(url: str) -> str:
+    text = html.unescape(str(url or "")).strip()
+    parsed = urlparse(text)
+    if parsed.scheme == "http" and parsed.netloc.lower() == "mp.weixin.qq.com":
+        return parsed._replace(scheme="https").geturl()
+    return text
+
+
 def wechat_search_articles(
     query: str,
     limit: int | None = None,
@@ -615,6 +623,7 @@ def _normalize_mp_article(raw: dict) -> dict:
 
 def wechat_fetch_article_content(url: str, auth_ref: str | None = None) -> dict:
     """Fetch full article content from a WeChat MP article URL."""
+    url = normalize_wechat_article_url(url)
     headers = dict(DEFAULT_HEADERS)
     auth = resolve_wechat_auth_profile(auth_ref) if auth_ref else {"status": "pending_auth"}
     if auth.get("status") == "ok":
@@ -667,7 +676,7 @@ WECHAT_ENRICH_MAX_WORKERS = 6
 
 
 def wechat_article_key(url: str) -> str | None:
-    parsed = urlparse(html.unescape(str(url or "")))
+    parsed = urlparse(normalize_wechat_article_url(url))
     query = parse_qs(parsed.query)
     biz = (query.get("__biz") or [None])[0]
     mid = (query.get("mid") or [None])[0]
@@ -744,7 +753,10 @@ def wechat_enrich_articles(
     seen_urls: set[str] = set()
     seen_keys: set[str] = set()
     for item in items:
-        url = str(item.get("url") or "")
+        next_item = dict(item)
+        url = normalize_wechat_article_url(str(next_item.get("url") or ""))
+        if url:
+            next_item["url"] = url
         if url:
             key = wechat_article_key(url)
             if (key and key in seen_keys) or url in seen_urls:
@@ -752,7 +764,7 @@ def wechat_enrich_articles(
             if key:
                 seen_keys.add(key)
             seen_urls.add(url)
-        deduped.append(dict(item))
+        deduped.append(next_item)
 
     # 2) 选出需要抓取的条目（受 max_items 限额），按原始顺序取前 N 条
     fetch_indices: list[int] = []
