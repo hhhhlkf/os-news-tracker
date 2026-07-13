@@ -17,6 +17,19 @@ DEFAULT_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 WECHAT_ARTICLE_CONTENT_CHAR_LIMIT = 2000
+WECHAT_ENRICH_MAX_SECONDS = 90.0
+LOW_VALUE_WECHAT_ENRICH_MARKERS = (
+    "活动",
+    "会议",
+    "报名",
+    "meetup",
+    "大会",
+    "运营委员会",
+    "运作报告",
+    "运营报告",
+    "圆满结束",
+    "亮点大剧透",
+)
 _DATE_PATTERNS = (
     re.compile(r"(?P<year>20\d{2})[-/.年](?P<month>\d{1,2})[-/.月](?P<day>\d{1,2})日?"),
     re.compile(r"(?P<month>\d{1,2})[-/.月](?P<day>\d{1,2})日?\s*(?P<year>20\d{2})"),
@@ -664,19 +677,38 @@ def wechat_fetch_article_content(url: str, auth_ref: str | None = None) -> dict:
 WECHAT_ENRICH_MAX_WORKERS = 6
 
 
+def wechat_article_key(url: str) -> str | None:
+    parsed = urlparse(html.unescape(str(url or "")))
+    query = parse_qs(parsed.query)
+    biz = (query.get("__biz") or [None])[0]
+    mid = (query.get("mid") or [None])[0]
+    idx = (query.get("idx") or [None])[0]
+    sn = (query.get("sn") or [""])[0] or ""
+    if not (biz and mid and idx):
+        return None
+    return f"{biz}:{mid}:{idx}:{sn}"
+
+
+def _is_low_value_wechat_enrich_candidate(item: dict) -> bool:
+    text = f"{item.get('title') or ''}\n{item.get('summary') or ''}".lower()
+    return any(marker.lower() in text for marker in LOW_VALUE_WECHAT_ENRICH_MARKERS)
+
+
 def wechat_enrich_articles(
     items: list[dict],
     *,
     fetch_content: bool = True,
     fill_missing_only: bool = True,
     max_items: int | None = None,
+    skip_url_keys: list[str] | None = None,
+    max_seconds: float | None = WECHAT_ENRICH_MAX_SECONDS,
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
     max_workers: int = WECHAT_ENRICH_MAX_WORKERS,
 ) -> dict:
     """逐篇补抓微信文章正文。有界并发（默认 6）抓取，避免串行长等待；
     抓取前先按 url 去重，避免同一批重复抓取同一链接。"""
     import threading
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor, wait
 
     # 1) 抓取前去重：同一批内相同 url 只保留首个（无 url 的原样保留）
     deduped: list[dict] = []
@@ -689,17 +721,11 @@ def wechat_enrich_articles(
             seen_urls.add(url)
         deduped.append(dict(item))
 
-    _emit_progress(
-        progress_callback,
-        "wechat_enrich_started",
-        total_items=len(deduped),
-        fetch_content=fetch_content,
-        fill_missing_only=fill_missing_only,
-        max_items=max_items,
-    )
-
     # 2) 选出需要抓取的条目（受 max_items 限额），按原始顺序取前 N 条
     fetch_indices: list[int] = []
+    skip_keys = {str(key) for key in skip_url_keys or [] if key}
+    skipped_existing = 0
+    skipped_low_value = 0
     for idx, next_item in enumerate(deduped):
         need_fetch = not fill_missing_only
         if fill_missing_only:
@@ -708,14 +734,37 @@ def wechat_enrich_articles(
                 or not next_item.get("summary")
                 or (fetch_content and not next_item.get("content"))
             )
-        if need_fetch and next_item.get("url") and (max_items is None or len(fetch_indices) < max_items):
-            fetch_indices.append(idx)
+        if not (need_fetch and next_item.get("url")):
+            continue
+        key = wechat_article_key(str(next_item.get("url") or ""))
+        if key and key in skip_keys:
+            skipped_existing += 1
+            continue
+        if _is_low_value_wechat_enrich_candidate(next_item):
+            skipped_low_value += 1
+            continue
+        if max_items is not None and len(fetch_indices) >= max_items:
+            continue
+        fetch_indices.append(idx)
+
+    _emit_progress(
+        progress_callback,
+        "wechat_enrich_started",
+        total_items=len(deduped),
+        selected_items=len(fetch_indices),
+        skipped_existing=skipped_existing,
+        skipped_low_value=skipped_low_value,
+        fetch_content=fetch_content,
+        fill_missing_only=fill_missing_only,
+        max_items=max_items,
+        max_seconds=max_seconds,
+    )
 
     statuses: set[str] = set()
     lock = threading.Lock()
     counters = {"attempted": 0, "enriched": 0}
 
-    def _work(idx: int) -> None:
+    def _work(idx: int) -> tuple[int, int, dict]:
         next_item = deduped[idx]  # 每个 idx 仅由一个任务处理，字段写入无需加锁
         with lock:
             counters["attempted"] += 1
@@ -732,6 +781,10 @@ def wechat_enrich_articles(
             article = wechat_fetch_article_content(str(next_item["url"]))
         except Exception:  # noqa: BLE001 - 单篇抓取失败不影响其他并发任务
             article = {"status": "error", "content": ""}
+        return idx, my_attempt, article
+
+    def _apply_article(idx: int, my_attempt: int, article: dict) -> None:
+        next_item = deduped[idx]
         st = article.get("status", "unknown")
         did_enrich = False
         if st in {"ok", "empty"}:
@@ -763,8 +816,28 @@ def wechat_enrich_articles(
 
     if fetch_indices:
         workers = max(1, min(max_workers, len(fetch_indices)))
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            list(executor.map(_work, fetch_indices))
+        executor = ThreadPoolExecutor(max_workers=workers)
+        futures = [executor.submit(_work, idx) for idx in fetch_indices]
+        done, not_done = wait(futures, timeout=max_seconds)
+        for future in done:
+            try:
+                idx, my_attempt, article = future.result()
+            except Exception:  # noqa: BLE001 - 单篇结果异常不影响其他候选
+                continue
+            _apply_article(idx, my_attempt, article)
+        for future in not_done:
+            future.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+        if not_done:
+            _emit_progress(
+                progress_callback,
+                "wechat_enrich_timeout",
+                timed_out_count=len(not_done),
+                max_seconds=max_seconds,
+                attempted_count=counters["attempted"],
+                enriched_count=counters["enriched"],
+                total_items=len(deduped),
+            )
 
     attempted_count = counters["attempted"]
     enriched_count = counters["enriched"]
@@ -780,6 +853,9 @@ def wechat_enrich_articles(
         attempted_count=attempted_count,
         enriched_count=enriched_count,
         total_items=len(deduped),
+        selected_items=len(fetch_indices),
+        skipped_existing=skipped_existing,
+        skipped_low_value=skipped_low_value,
         fetch_content=fetch_content,
     )
     return {
@@ -787,6 +863,9 @@ def wechat_enrich_articles(
         "items": deduped,
         "enriched_count": enriched_count,
         "attempted_count": attempted_count,
+        "selected_count": len(fetch_indices),
+        "skipped_existing": skipped_existing,
+        "skipped_low_value": skipped_low_value,
         "fetch_content": fetch_content,
     }
 
