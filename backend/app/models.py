@@ -371,6 +371,15 @@ class CrawlMethod(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_run_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    quality_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quality_grade: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    quality_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quality_sample_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    density_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    density_daily_avg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    density_weekly_avg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quality_audit_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    quality_audited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class CrawlMethodRun(Base):

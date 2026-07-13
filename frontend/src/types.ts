@@ -327,6 +327,15 @@ export interface CrawlMethod {
   signature: string;
   last_run_at: string | null;
   last_run_status: string | null;
+  quality_score?: number | null;
+  quality_grade?: string | null;
+  quality_reason?: string | null;
+  quality_sample_count?: number | null;
+  density_score?: number | null;
+  density_daily_avg?: number | null;
+  density_weekly_avg?: number | null;
+  quality_audit_status?: string | null;
+  quality_audited_at?: string | null;
 }
 
 export interface CrawlMethodDetail extends CrawlMethod {

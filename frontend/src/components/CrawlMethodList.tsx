@@ -586,6 +586,7 @@ function MethodRow({ m, selected, state, onToggle, onOpen, highlight, busy, batc
     <div style={{ display: "flex", alignItems: "center", gap: 12, border: `1px solid ${selected ? "#b9d4ff" : highlight ? "#175cd3" : "#eaecf0"}`,
       borderRadius: 9, padding: "9px 11px", background: selected ? "#f8fbff" : highlight ? "#eff6ff" : "#fff" }}>
       <input type="checkbox" aria-label={`选择 ${primaryLabel}`} checked={selected} disabled={disabled || busy} onChange={(e) => onToggle(e.target.checked)} />
+      <QualityBadge method={m} />
       <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={onOpen}>
         <div style={{ fontSize: 14, fontWeight: 700, color: disabled ? "#98a2b3" : "#101828" }}>
           {primaryLabel} <span style={badge(m.status)}>{m.status}</span>
@@ -601,11 +602,58 @@ function MethodRow({ m, selected, state, onToggle, onOpen, highlight, busy, batc
   );
 }
 
+function QualityBadge({ method }: { method: CrawlMethod }) {
+  const score = method.quality_score;
+  const grade = method.quality_grade;
+  const hasScore = typeof score === "number";
+  const label = hasScore ? `${grade || gradeForScore(score)} ${score}` : "未审计";
+  const title = hasScore
+    ? [
+      `质量 ${score}`,
+      `密度 ${method.density_score ?? "无"}`,
+      `每周 ${method.density_weekly_avg ?? "无"} 条`,
+      method.quality_reason || "",
+    ].filter(Boolean).join(" · ")
+    : "尚未完成信息源质量审计";
+  return (
+    <span title={title} style={qualityBadgeStyle(score, method.quality_audit_status)}>
+      {label}
+    </span>
+  );
+}
+
+function gradeForScore(score: number) {
+  if (score >= 85) return "A";
+  if (score >= 70) return "B";
+  if (score >= 50) return "C";
+  return "D";
+}
+
 function badge(status: string): CSSProperties {
   const base: CSSProperties = { fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, marginLeft: 6 };
   if (status === "active") return { ...base, background: "#ecfdf3", color: "#027a48" };
   if (status === "failed") return { ...base, background: "#fef2f2", color: "#b42318" };
   return { ...base, background: "#f2f4f7", color: "#667085" };
+}
+
+function qualityBadgeStyle(score: number | null | undefined, status: string | null | undefined): CSSProperties {
+  const base: CSSProperties = {
+    minWidth: 58,
+    textAlign: "center",
+    borderRadius: 8,
+    padding: "4px 7px",
+    fontSize: 11,
+    fontWeight: 800,
+    lineHeight: 1.1,
+    whiteSpace: "nowrap",
+    border: "1px solid #d0d5dd",
+    color: "#475467",
+    background: "#f9fafb",
+  };
+  if (typeof score !== "number") return base;
+  if (status === "failed" || score < 50) return { ...base, border: "1px solid #fecdca", color: "#b42318", background: "#fef3f2" };
+  if (status === "weak" || score < 70) return { ...base, border: "1px solid #fedf89", color: "#b54708", background: "#fffaeb" };
+  return { ...base, border: "1px solid #abefc6", color: "#027a48", background: "#ecfdf3" };
 }
 
 const btnPrimary: CSSProperties = { border: "none", borderRadius: 999, padding: "8px 16px", background: "#175cd3", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" };

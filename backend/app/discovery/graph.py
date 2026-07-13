@@ -246,17 +246,30 @@ def save_method(state: DiscoveryState, db=None) -> DiscoveryState:
         from app.enums import SourceType, Stream
         from app.models import CrawlMethod, CrawlMethodDomain, Source
         from app.discovery.dsl import DslRecipe
+        from app.discovery.quality_audit import (
+            apply_quality_audit_to_method,
+            audit_source_quality,
+            status_after_quality,
+        )
         from app.discovery.signature import compute_signature
+        from app.run_logs import append_run_log
         recipe = DslRecipe(**state["dsl_recipe"])
         sig = compute_signature(recipe)
         domain = urlparse(state["site_url"]).netloc
+        audit_items = ((state.get("audit_result") or {}).get("test") or {}).get("items") or []
+        quality_audit = audit_source_quality(
+            items=audit_items,
+            source_kind="website",
+            input_type="website_url",
+        )
+        method_status = status_after_quality("active", quality_audit)
         existing = db.query(CrawlMethodDomain).filter_by(domain=domain).first()
         if existing is not None and state.get("force"):
             # 覆盖：更新现有 method，保留 method_id/source_id，审计历史连续
             m = db.get(CrawlMethod, existing.method_id)
             m.dsl_recipe = recipe.model_dump()
             m.signature = sig
-            m.status = "active"
+            m.status = method_status
             m.updated_at = datetime.now(timezone.utc)
         elif existing is not None:
             # 同 domain 已有且未 force：保留旧（兜底，正常流程前置检查已拦截）
@@ -267,9 +280,25 @@ def save_method(state: DiscoveryState, db=None) -> DiscoveryState:
                          main_category="OS跟踪来源", stream=Stream.NEWS.value, enabled=True)
             db.add(src); db.flush()
             m = CrawlMethod(domain=domain, entry_url=state["site_url"], source_id=src.id,
-                            dsl_recipe=recipe.model_dump(), signature=sig)
+                            dsl_recipe=recipe.model_dump(), signature=sig, status=method_status)
             db.add(m); db.flush()
             db.add(CrawlMethodDomain(domain=domain, method_id=m.id))  # 去重映射
+        if existing is None or state.get("force"):
+            apply_quality_audit_to_method(m, quality_audit)
+            append_run_log(
+                "质量审计",
+                "信息源质量审计完成",
+                source=state.get("log_source") or state["site_url"],
+                run_id=state.get("run_id"),
+                method_id=m.id,
+                quality_score=quality_audit.quality_score,
+                quality_grade=quality_audit.quality_grade,
+                density_score=quality_audit.density_score,
+                density_weekly_avg=quality_audit.density_weekly_avg,
+                quality_audit_status=quality_audit.quality_audit_status,
+                method_status=method_status,
+                reason=quality_audit.quality_reason,
+            )
         db.commit()
         return {"verdict": "dsl", "method_id": m.id}
     finally:

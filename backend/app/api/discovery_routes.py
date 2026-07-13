@@ -226,6 +226,20 @@ class MethodPatch(BaseModel):
     status: str | None = None  # active | disabled | failed
 
 
+def _method_quality_fields(method: CrawlMethod) -> dict[str, Any]:
+    return {
+        "quality_score": method.quality_score,
+        "quality_grade": method.quality_grade,
+        "quality_reason": method.quality_reason,
+        "quality_sample_count": method.quality_sample_count,
+        "density_score": method.density_score,
+        "density_daily_avg": method.density_daily_avg,
+        "density_weekly_avg": method.density_weekly_avg,
+        "quality_audit_status": method.quality_audit_status,
+        "quality_audited_at": method.quality_audited_at.isoformat() if method.quality_audited_at else None,
+    }
+
+
 @router.get("/methods")
 def list_methods(db: Session = Depends(get_db)):
     """列出所有已发现的爬取方式（摘要，不含完整 DSL Recipe）。"""
@@ -234,7 +248,8 @@ def list_methods(db: Session = Depends(get_db)):
     return [{"id": m.id, "domain": m.domain, "entry_url": m.entry_url, "status": m.status,
              "source_name": (db.get(Source, m.source_id).name if db.get(Source, m.source_id) else m.domain),
              "signature": m.signature, "last_run_at": m.last_run_at.isoformat() if m.last_run_at else None,
-             "last_run_status": m.last_run_status} for m in ms]
+             "last_run_status": m.last_run_status,
+             **_method_quality_fields(m)} for m in ms]
 
 
 @router.get("/methods/{method_id}")
@@ -249,7 +264,8 @@ def get_method(method_id: int, db: Session = Depends(get_db)):
             "source_name": source.name if source else m.domain,
             "dsl_recipe": m.dsl_recipe, "signature": m.signature,
             "last_run_at": m.last_run_at.isoformat() if m.last_run_at else None,
-            "last_run_status": m.last_run_status}
+            "last_run_status": m.last_run_status,
+            **_method_quality_fields(m)}
 
 
 @router.patch("/methods/{method_id}")

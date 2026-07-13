@@ -10,6 +10,11 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, Field
 
 from app.discovery.audit import audit_discovery_recipe
+from app.discovery.quality_audit import (
+    apply_quality_audit_to_method,
+    audit_source_quality,
+    status_after_quality,
+)
 from app.discovery.graph import (
     DiscoveryState,
     auditor,
@@ -467,34 +472,7 @@ def _run_and_save_multi_recipe(
 
         existing_domain = db.query(CrawlMethodDomain).filter_by(domain=domain).first()
 
-        if existing_domain is not None and force:
-            append_run_log(
-                "存库",
-                "覆盖更新现有多源爬取方式",
-                source=source_label,
-                domain=domain,
-                method_status=method_status,
-                discovered_count=len(items),
-            )
-            m = db.get(CrawlMethod, existing_domain.method_id)
-            m.dsl_recipe = sanitized_recipe
-            m.signature = sig
-            m.status = method_status
-            m.updated_at = dt.now(timezone.utc)
-            src = db.get(Source, m.source_id)
-            if src:
-                src.name = display_name
-            db.commit()
-            return {
-                "status": "completed",
-                "method_id": m.id,
-                "route": route.model_dump(),
-                "discovered_count": len(items),
-                "method_status": method_status,
-                "multi_audit_result": audit_result,
-            }
-
-        if existing_domain is not None:
+        if existing_domain is not None and not force:
             m = db.get(CrawlMethod, existing_domain.method_id)
             append_run_log(
                 "存库",
@@ -513,6 +491,65 @@ def _run_and_save_multi_recipe(
                 "method_status": m.status,
                 "multi_audit_result": audit_result,
                 "note": "existing method reused (force=false)",
+            }
+
+        quality_audit = None
+        if audit_result.get("passed"):
+            quality_audit = audit_source_quality(
+                items=items,
+                source_kind=route.kind,
+                input_type=route.input_type,
+            )
+            method_status = status_after_quality(method_status, quality_audit)
+            append_run_log(
+                "质量审计",
+                "信息源质量审计完成",
+                source=source_label,
+                quality_score=quality_audit.quality_score,
+                quality_grade=quality_audit.quality_grade,
+                density_score=quality_audit.density_score,
+                density_weekly_avg=quality_audit.density_weekly_avg,
+                quality_audit_status=quality_audit.quality_audit_status,
+                method_status=method_status,
+                reason=quality_audit.quality_reason,
+            )
+        else:
+            append_run_log(
+                "质量审计",
+                "方法审计未通过，跳过信息源质量审计",
+                source=source_label,
+                audit_kind=audit_result.get("audit_kind"),
+                reason=audit_result.get("reason"),
+            )
+
+        if existing_domain is not None and force:
+            append_run_log(
+                "存库",
+                "覆盖更新现有多源爬取方式",
+                source=source_label,
+                domain=domain,
+                method_status=method_status,
+                discovered_count=len(items),
+            )
+            m = db.get(CrawlMethod, existing_domain.method_id)
+            m.dsl_recipe = sanitized_recipe
+            m.signature = sig
+            m.status = method_status
+            m.updated_at = dt.now(timezone.utc)
+            if quality_audit is not None:
+                apply_quality_audit_to_method(m, quality_audit)
+            src = db.get(Source, m.source_id)
+            if src:
+                src.name = display_name
+            db.commit()
+            return {
+                "status": "completed",
+                "method_id": m.id,
+                "route": route.model_dump(),
+                "discovered_count": len(items),
+                "method_status": method_status,
+                "multi_audit_result": audit_result,
+                "quality_audit": quality_audit.as_update_values() if quality_audit else None,
             }
         src = Source(
             name=display_name,
@@ -535,6 +572,8 @@ def _run_and_save_multi_recipe(
         )
         db.add(m)
         db.flush()
+        if quality_audit is not None:
+            apply_quality_audit_to_method(m, quality_audit)
 
         db.add(CrawlMethodDomain(domain=domain, method_id=m.id))
         db.commit()
@@ -555,6 +594,7 @@ def _run_and_save_multi_recipe(
             "route": route.model_dump(),
             "discovered_count": len(items),
             "multi_audit_result": audit_result,
+            "quality_audit": quality_audit.as_update_values() if quality_audit else None,
         }
     finally:
         db.close()
