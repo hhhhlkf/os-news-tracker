@@ -788,7 +788,7 @@ def wechat_fetch_article_content(
     }
 
 
-WECHAT_ENRICH_MAX_WORKERS = 2
+WECHAT_ENRICH_MAX_WORKERS = 1
 
 
 def wechat_article_key(url: str) -> str | None:
