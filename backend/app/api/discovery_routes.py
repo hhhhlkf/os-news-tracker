@@ -227,10 +227,11 @@ class MethodPatch(BaseModel):
 
 
 def _method_quality_fields(method: CrawlMethod) -> dict[str, Any]:
+    overall_score = _method_overall_score(method)
     return {
-        "overall_score": method.overall_score,
+        "overall_score": overall_score,
         "quality_score": method.quality_score,
-        "quality_grade": method.quality_grade,
+        "quality_grade": _method_quality_grade(overall_score),
         "quality_reason": method.quality_reason,
         "quality_sample_count": method.quality_sample_count,
         "density_score": method.density_score,
@@ -239,6 +240,27 @@ def _method_quality_fields(method: CrawlMethod) -> dict[str, Any]:
         "quality_audit_status": method.quality_audit_status,
         "quality_audited_at": method.quality_audited_at.isoformat() if method.quality_audited_at else None,
     }
+
+
+def _method_overall_score(method: CrawlMethod) -> int | None:
+    if method.overall_score is not None:
+        return method.overall_score
+    if method.quality_score is None:
+        return None
+    density_score = method.density_score if method.density_score is not None else method.quality_score
+    return int(round(method.quality_score * 0.5 + density_score * 0.5))
+
+
+def _method_quality_grade(overall_score: int | None) -> str | None:
+    if overall_score is None:
+        return None
+    if overall_score >= 85:
+        return "A"
+    if overall_score >= 70:
+        return "B"
+    if overall_score >= 50:
+        return "C"
+    return "D"
 
 
 @router.get("/methods")

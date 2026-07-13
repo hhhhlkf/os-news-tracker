@@ -603,10 +603,9 @@ function MethodRow({ m, selected, state, onToggle, onOpen, highlight, busy, batc
 }
 
 function QualityBadge({ method }: { method: CrawlMethod }) {
-  const score = method.overall_score;
-  const grade = method.quality_grade;
+  const score = methodOverallScore(method);
   const hasScore = typeof score === "number";
-  const label = hasScore ? `${grade || gradeForScore(score)} ${score}` : "未审计";
+  const label = hasScore ? `${gradeForScore(score)} ${score}` : "未审计";
   const title = hasScore
     ? [
       `综合 ${score}`,
@@ -621,6 +620,13 @@ function QualityBadge({ method }: { method: CrawlMethod }) {
       {label}
     </span>
   );
+}
+
+function methodOverallScore(method: CrawlMethod) {
+  if (typeof method.overall_score === "number") return method.overall_score;
+  if (typeof method.quality_score !== "number") return null;
+  const densityScore = typeof method.density_score === "number" ? method.density_score : method.quality_score;
+  return Math.round(method.quality_score * 0.5 + densityScore * 0.5);
 }
 
 function gradeForScore(score: number) {
