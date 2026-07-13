@@ -308,14 +308,15 @@ class Pipeline:
                     published_at=raw.published_at,
                 )
             doc = self._extractor.extract(raw.url)
-            # Preserve the RSS-provided date if page extraction didn't find one.
-            doc.published_at = doc.published_at or raw.published_at
+            # Feed/list dates are scoped to the item; page extraction can pick up
+            # unrelated template/navigation dates, so only use it as fallback.
+            doc.published_at = raw.published_at or doc.published_at
             return doc
 
         # List-mode page_monitor: raw_content is None → fetch article page.
         if source.type == SourceType.PAGE_MONITOR and raw.raw_content is None:
             doc = self._extractor.extract(raw.url)
-            doc.published_at = doc.published_at or raw.published_at
+            doc.published_at = raw.published_at or doc.published_at
             return doc
 
         return ExtractedDoc(
