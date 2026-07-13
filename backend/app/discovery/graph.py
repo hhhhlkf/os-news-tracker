@@ -2683,6 +2683,7 @@ def auditor(state: DiscoveryState, llm=None, test_fn=None) -> DiscoveryState:
     test_fn: 注入"跑配方返回产出"的函数（测试 mock）；None → 真跑 DslInterpreter（生产）。
     """
     ensure_not_cancelled()
+    from app.discovery.audit import audit_discovery_recipe
     from app.discovery.dsl import DslRecipe, validate_semantics
     recipe = DslRecipe(**state["dsl_recipe"])
     errors = validate_semantics(recipe)  # 静态审：结构合理性
@@ -2724,14 +2725,22 @@ def auditor(state: DiscoveryState, llm=None, test_fn=None) -> DiscoveryState:
     if decision == "rewrite" and next_cycle_attempt >= 3:
         decision = "reexplore"
         next_cycle_attempt = 0
-    out = {
-        "audit_result": {
+    audit_result = audit_discovery_recipe(
+        source_kind="website",
+        input_type="website_url",
+        recipe=state["dsl_recipe"],
+        items=items,
+        status="ok" if discovered_count else "empty",
+        website_result={
             "passed": passed, "errors": errors, "test": test_result,
             "llm_verdict": llm_verdict,
             "dsl_sanitize_warnings": sanitize_warnings,
             "decision": decision,
             "suggested_next": "dsl_writer" if decision == "rewrite" else ("explorer" if decision == "reexplore" else None),
         },
+    )
+    out = {
+        "audit_result": audit_result,
         "audit_input": audit_input,
         "auditor_llm_output": auditor_llm_output,
         "attempt": state.get("attempt", 0) + (1 if decision == "reexplore" else 0),

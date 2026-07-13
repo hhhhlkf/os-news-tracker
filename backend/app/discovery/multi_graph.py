@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
+from app.discovery.audit import audit_discovery_recipe
 from app.discovery.graph import (
     DiscoveryState,
     auditor,
@@ -245,16 +246,6 @@ def build_wechat_history_recipe(
     }
 
 
-def _required_count(recipe: dict[str, Any]) -> int:
-    limit = 20
-    for action in recipe.get("actions") or []:
-        if action.get("op") in {"wechat_fetch_account_history", "wechat_search_articles"}:
-            if action.get("limit") is not None:
-                limit = int(action["limit"])
-            break
-    return min(5, max(1, int(limit * 0.25)))
-
-
 def _sanitize_recipe_for_storage(recipe: dict[str, Any]) -> dict[str, Any]:
     """Remove sensitive keys (cookie, token, authorization, headers) before storing."""
     sanitized = json.loads(json.dumps(recipe, ensure_ascii=False, default=str))
@@ -414,8 +405,9 @@ def _run_and_save_multi_recipe(
         status=status,
     )
 
-    audit_result = _audit_multi_recipe_result(
-        route=route,
+    audit_result = audit_discovery_recipe(
+        source_kind=route.kind,
+        input_type=route.input_type,
         recipe=effective_run_recipe,
         items=items,
         status=status,
@@ -566,66 +558,6 @@ def _run_and_save_multi_recipe(
         }
     finally:
         db.close()
-
-
-def _audit_multi_recipe_result(
-    *,
-    route: SourceRoute,
-    recipe: dict[str, Any],
-    items: list,
-    status: str | None,
-) -> dict[str, Any]:
-    """Classify non-website multi discovery probes with explicit audit kinds.
-
-    Website discovery has the full graph.py auditor node. Multi discovery uses
-    deterministic recipes, so this audit is a lightweight run-result audit.
-    """
-    required_count = _required_count(recipe)
-    discovered_count = len(items)
-    audit_kind = _multi_audit_kind(route)
-    if status in {"pending_auth", "auth_invalid"}:
-        return {
-            "audit_kind": audit_kind,
-            "passed": False,
-            "method_status": status,
-            "required_count": required_count,
-            "discovered_count": discovered_count,
-            "reason": status,
-        }
-    if status in {"rate_limited", "captcha_required"}:
-        return {
-            "audit_kind": audit_kind,
-            "passed": False,
-            "method_status": "retry_later",
-            "required_count": required_count,
-            "discovered_count": discovered_count,
-            "reason": status,
-        }
-    if discovered_count >= required_count:
-        return {
-            "audit_kind": audit_kind,
-            "passed": True,
-            "method_status": "active",
-            "required_count": required_count,
-            "discovered_count": discovered_count,
-            "reason": "enough_items",
-        }
-    return {
-        "audit_kind": audit_kind,
-        "passed": False,
-        "method_status": "failed",
-        "required_count": required_count,
-        "discovered_count": discovered_count,
-        "reason": "insufficient_items",
-    }
-
-
-def _multi_audit_kind(route: SourceRoute) -> str:
-    if route.kind == "wechat" and route.input_type == "wechat_search":
-        return "wechat_search_audit"
-    if route.kind == "wechat" and _is_wechat_history_input(route.input_type):
-        return "wechat_history_audit"
-    return f"{route.kind}_audit"
 
 
 def start_multi_discovery_run(
