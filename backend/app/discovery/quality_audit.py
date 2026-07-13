@@ -69,7 +69,7 @@ class SourceQualityAudit:
 
     @property
     def overall_score(self) -> int:
-        return int(round(self.quality_score * 0.75 + self.density_score * 0.25))
+        return _overall_score(self.quality_score, self.density_score)
 
     def as_update_values(self) -> dict[str, Any]:
         return {
@@ -99,7 +99,7 @@ def audit_source_quality(
     if quality_score is None:
         quality_score = _fallback_quality_score(sample)
     density_score = _density_score(density["weekly_avg"])
-    overall = int(round(quality_score * 0.75 + density_score * 0.25))
+    overall = _overall_score(quality_score, density_score)
     status = "passed" if quality_score >= 70 else ("weak" if quality_score >= 50 else "failed")
     reason = _quality_reason(
         quality_score=quality_score,
@@ -151,12 +151,13 @@ def _llm_quality_score(
         return 0
     prompt = f"""你是 OS 技术情报系统的信息源质量审计员。
 
-请只根据真实抓取到的条目样本，评估这个信息源是否值得长期收录。
+请只根据真实抓取到的条目样本，宽松评估这个信息源是否值得继续观察或长期收录。
 
 评分重点：
-- 高质量：OS/Linux/发行版/内核/编译器/工具链/RISC-V/CXL/性能/安全/版本/兼容性/云原生基础设施等具体技术信息。
+- 质量还可以或较高：样本中只要有一部分条目明显涉及 OS/Linux/发行版/内核/编译器/工具链/RISC-V/CXL/性能/安全/版本/兼容性/云原生基础设施等具体技术信息，就不要给低分。
 - 低质量：活动通知、会议报名、社区运营报告、营销宣传、招聘、纯观点但缺少技术细节、正文空泛。
-- 信息质量优先于数量；这里只评估质量，不要因为条目多就给高分。
+- 宽松原则：不要因为样本中混有活动、月报或宣传内容就整体打低分；只要能稳定抓到若干相关技术内容，quality_score 至少应在 60 分左右。
+- 只有当样本几乎全是活动、营销、招聘、空泛宣传，且没有明显技术内容时，才给 50 分以下。
 
 输出严格 JSON：
 {{"quality_score": 0-100 的整数, "reason": "一句话原因"}}
@@ -194,7 +195,15 @@ def _fallback_quality_score(sample: list[dict[str, Any]]) -> int:
         length_bonus = min(len(text) // 160, 3) * 5
         score = 45 + min(tech_hits, 4) * 12 + length_bonus - min(low_hits, 3) * 18
         scores.append(max(0, min(100, score)))
-    return int(round(sum(scores) / len(scores)))
+    best = max(scores)
+    average = sum(scores) / len(scores)
+    relevant_count = sum(1 for score in scores if score >= 60)
+    # 宽松策略：信息源只要已经抓到比较相关的技术条目，就不按全样本平均值严惩。
+    if relevant_count >= 3:
+        return int(round(best * 0.55 + average * 0.45))
+    if relevant_count >= 1:
+        return int(round(max(60, best * 0.65 + average * 0.35)))
+    return int(round(average))
 
 
 def _density_stats(items: list[dict]) -> dict[str, float | int]:
@@ -238,6 +247,10 @@ def _quality_reason(*, quality_score: int, density_score: int, sample_count: int
     density_text = "信息密度高" if density_score >= 80 else ("信息密度一般" if density_score >= 35 else "信息密度低")
     date_text = "发布时间充足" if dated_count else "发布时间不足"
     return f"{quality_text}，{density_text}，{date_text}，样本 {sample_count} 条"
+
+
+def _overall_score(quality_score: int, density_score: int) -> int:
+    return int(round(quality_score * 0.5 + density_score * 0.5))
 
 
 def _grade(score: int) -> str:
