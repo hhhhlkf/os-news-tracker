@@ -8,7 +8,7 @@ from app.enums import MAIN_CATEGORIES, Importance, InfoType
 from app.llm.client import LlmClient
 from app.schemas import EnrichedFields, NormalizedItem
 
-ENRICH_CONTENT_CHAR_LIMIT = 500
+ENRICH_CONTENT_CHAR_LIMIT = 3000
 
 _PROMPT_TEMPLATE = """你是操作系统维护工程师的关键技术新闻与技术情报分析师。阅读下面的技术文章，为 OS maintainer 提取结构化情报。
 
