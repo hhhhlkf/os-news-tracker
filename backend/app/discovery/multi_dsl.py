@@ -38,7 +38,7 @@ class WechatFetchAccountHistoryAction(BaseModel):
 
 class MultiDslRecipe(BaseModel):
     recipe_type: Literal["multi_dsl"] = "multi_dsl"
-    source_kind: Literal["wechat", "internal_mcp"]
+    source_kind: Literal["website", "wechat", "internal_mcp"]
     entry: str
     auth_ref: str | None = None
     requires_auth: bool = False

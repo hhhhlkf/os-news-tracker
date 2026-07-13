@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from app.discovery.dsl import DslRecipe
+from app.discovery.interpreter import DslInterpreter
 from app.discovery.multi_dsl import MultiDslRecipe
 from app.discovery.wechat_tools import (
     wechat_enrich_articles,
@@ -17,6 +19,16 @@ class MultiDslInterpreter:
         *,
         progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> dict:
+        if recipe.source_kind == "website":
+            return DslInterpreter().run(
+                DslRecipe(
+                    recipe_type="dsl",
+                    entry_url=recipe.entry,
+                    actions=recipe.actions,
+                    notes=recipe.notes,
+                )
+            )
+
         ctx: dict = {"items": [], "last_fetch": None}
         for action in recipe.actions:
             op = action.get("op")
