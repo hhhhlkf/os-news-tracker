@@ -313,36 +313,16 @@ def _build_request(config: MorningCrawlConfig):
     )
 
 
-_WECHAT_PROGRESS_MESSAGES = {
-    "wechat_search_started": "开始执行微信搜索 DSL",
-    "wechat_search_page_started": "微信搜索开始抓取分页",
-    "wechat_search_page_finished": "微信搜索分页抓取完成",
-    "wechat_search_page_empty": "微信搜索当前分页未提取到结果",
-    "wechat_search_rate_limited": "微信搜索触发限流",
-    "wechat_search_captcha_required": "微信搜索触发验证码",
-    "wechat_search_failed": "微信搜索执行失败",
-    "wechat_search_finished": "微信搜索执行完成",
-    "wechat_enrich_started": "开始补抓微信文章内容",
-    "wechat_enrich_topic_skipped": "微信文章补抓主题预筛跳过",
-    "wechat_enrich_item_started": "微信文章补抓进行中",
-    "wechat_article_fetch_request_started": "微信文章页面请求开始",
-    "wechat_article_fetch_response_received": "微信文章页面响应返回",
-    "wechat_article_fetch_finished": "微信文章页面解析完成",
-    "wechat_article_fetch_failed": "微信文章页面请求失败",
-    "wechat_enrich_item_finished": "微信文章补抓完成",
-    "wechat_enrich_finished": "微信文章补抓阶段完成",
-}
-
-
 def _fetch_and_ingest_method(db: Session, method: CrawlMethod, request) -> dict:
     """运行单条 discovery method 的 DSL 并走正常 pipeline 入库。复用 discovery 内部入口，不反调 HTTP。"""
-    from app.api.discovery_routes import (
-        _apply_fetch_limits,
-        _attach_wechat_skip_keys,
-        _prepare_fetch_recipe,
-        run_method,
-    )
+    from app.discovery.execution import run_method
     from app.discovery.ingester import CrawlOutputIngester
+    from app.discovery.progress import log_discovery_progress
+    from app.discovery.recipe_prepare import (
+        apply_fetch_limits,
+        attach_wechat_skip_keys,
+        prepare_fetch_recipe,
+    )
     from app.extract.scrapling_extractor import ScraplingExtractor
     from app.models import Item, Source
     from app.pipeline import Pipeline
@@ -351,22 +331,21 @@ def _fetch_and_ingest_method(db: Session, method: CrawlMethod, request) -> dict:
 
     def _log_progress(event: str, payload: dict) -> None:
         """把 DSL 执行过程中的分页/补抓进度透传到共享运行日志，避免长任务看起来卡死。"""
-        message = _WECHAT_PROGRESS_MESSAGES.get(event, event)
-        extra = {k: v for k, v in (payload or {}).items() if k not in {"source", "level", "stage", "message"}}
-        append_run_log(
-            "定时抓取",
-            message,
+        log_discovery_progress(
+            event,
+            payload or {},
+            emit=append_run_log,
+            stage="定时抓取",
             source=method.domain,
             method_id=method.id,
-            **extra,
         )
 
-    recipe = _prepare_fetch_recipe(method.dsl_recipe, request)
+    recipe = prepare_fetch_recipe(method.dsl_recipe, request)
     existing_urls = list(db.scalars(select(Item.url).where(Item.source_id == method.source_id)))
-    recipe = _attach_wechat_skip_keys(recipe, existing_urls)
+    recipe = attach_wechat_skip_keys(recipe, existing_urls)
     output = run_method(recipe, progress_callback=_log_progress)
     raw_items = list(output.get("items", []))
-    output["items"] = _apply_fetch_limits(raw_items, request)
+    output["items"] = apply_fetch_limits(raw_items, request)
 
     raws = CrawlOutputIngester().to_raw_items(output, source_id=method.source_id)
     source = db.get(Source, method.source_id)

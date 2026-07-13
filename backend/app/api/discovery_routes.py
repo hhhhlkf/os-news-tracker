@@ -3,9 +3,8 @@
 纯增量：不替换旧 /sources/discover，不接入 agent_crawl 主流程。
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import Enum
-import json
 
 import logging
 
@@ -15,20 +14,22 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from typing import Any, Callable
+from typing import Any
 
-from app.discovery.dsl import DslRecipe
 from app.discovery.cancel import request_cancel
+from app.discovery.execution import run_method
 from app.discovery.graph import check_existing_method, start_discovery_run
-from app.discovery.ingester import parse_published_at
-from app.discovery.interpreter import DslInterpreter
-from app.discovery.multi_dsl import MultiDslRecipe
-from app.discovery.multi_graph import DEFAULT_WECHAT_SEARCH_MAX_PAGES, start_multi_discovery_run
-from app.discovery.multi_interpreter import MultiDslInterpreter
+from app.discovery.multi_graph import start_multi_discovery_run
 from app.discovery.naming import (
     default_website_display_name,
     format_website_display_name,
     normalize_site_name,
+)
+from app.discovery.recipe_prepare import (
+    _apply_fetch_limits,
+    _attach_wechat_skip_keys,
+    _ensure_wechat_history_article_enrich,
+    _prepare_fetch_recipe,
 )
 from app.llm.client import LlmClient
 from app.enums import TagKind
@@ -55,16 +56,8 @@ from app.schemas import ManualNewsRunRequest
 router = APIRouter(prefix="/discovery", tags=["discovery"])
 logger = logging.getLogger(__name__)
 SUGGEST_NAME_LLM_TIMEOUT_SECONDS = 5.0
-# 微信补正文单条方式的抓取上限（封顶），防止被 target_count 放大成几百篇。
-WECHAT_ENRICH_MAX_ITEMS = 20
-WECHAT_HISTORY_ENRICH_MAX_ITEMS = 8
 # 站点命名 prompt（token 模版）；供 prompts.get_stage_defaults 引用，也是本模块默认。
 _NAMING_PROMPT = DEFAULT_NAMING
-_RELATIVE_RANGE_TO_DELTA = {
-    "24h": timedelta(days=1),
-    "7d": timedelta(days=7),
-    "30d": timedelta(days=30),
-}
 
 
 class DiscoverRequest(BaseModel):
@@ -106,110 +99,6 @@ def _route_type_to_hints(route_type: RouteType | None) -> dict[str, Any]:
     if route_type == RouteType.INTERNAL_FORUM:
         return {"source_kind": "internal_forum"}
     return {}
-
-
-def run_method(
-    recipe: DslRecipe | MultiDslRecipe | dict,
-    *,
-    progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
-) -> dict:
-    """运行命执行核心：按 DSL Recipe 纯确定性抓取。供 discovery_fetch 调用 + 测试 mock。"""
-    if isinstance(recipe, dict):
-        recipe_type = recipe.get("recipe_type")
-        if recipe_type == "multi_dsl":
-            return MultiDslInterpreter().run(MultiDslRecipe(**recipe), progress_callback=progress_callback)
-        return DslInterpreter().run(DslRecipe(**recipe))
-    if isinstance(recipe, MultiDslRecipe):
-        return MultiDslInterpreter().run(recipe, progress_callback=progress_callback)
-    return DslInterpreter().run(recipe)
-
-
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
-
-
-def _apply_fetch_limits(items: list[dict], request: ManualNewsRunRequest | None) -> list[dict]:
-    if request is None:
-        return items
-
-    now = datetime.now(timezone.utc)
-    filtered: list[tuple[datetime, dict]] = []
-    for item in items:
-        published_at = parse_published_at(item.get("published_at"))
-        if published_at is None:
-            continue
-        if request.time_mode == "relative":
-            lower_bound = now - _RELATIVE_RANGE_TO_DELTA[request.relative_range]
-            if published_at < lower_bound:
-                continue
-        else:
-            start_at = _as_utc(request.start_at)
-            end_at = _as_utc(request.end_at)
-            if published_at < start_at or published_at > end_at:
-                continue
-        filtered.append((published_at, item))
-
-    filtered.sort(key=lambda entry: entry[0], reverse=True)
-    return [item for _, item in filtered[:request.target_count]]
-
-
-def _prepare_fetch_recipe(recipe: dict[str, Any], request: ManualNewsRunRequest | None) -> dict[str, Any]:
-    prepared = json.loads(json.dumps(recipe, ensure_ascii=False, default=str))
-    if prepared.get("recipe_type") != "multi_dsl":
-        return prepared
-
-    target_count = request.target_count if request else None
-    actions = prepared.get("actions") or []
-    has_history = any(action.get("op") == "wechat_fetch_account_history" for action in actions)
-    _ensure_wechat_history_article_enrich(actions)
-    for action in actions:
-        if action.get("op") == "wechat_search_articles":
-            if action.get("max_pages") is None:
-                action["max_pages"] = DEFAULT_WECHAT_SEARCH_MAX_PAGES
-        if action.get("op") == "enrich_wechat_articles" and action.get("max_items") is None:
-            # 微信补正文（逐篇抓全文）是重活，不要被 target_count（定时抓取默认 200）放大。
-            # 历史正文补抓比搜索补抓更容易被定时 target_count 放大，单独使用更小封顶。
-            desired = max(1, target_count) if target_count else 5
-            cap = WECHAT_HISTORY_ENRICH_MAX_ITEMS if has_history else WECHAT_ENRICH_MAX_ITEMS
-            action["max_items"] = min(desired, cap)
-        if has_history and action.get("op") == "enrich_wechat_articles":
-            action.setdefault("precheck_topic_with_llm", True)
-    return prepared
-
-
-def _attach_wechat_skip_keys(recipe: dict[str, Any], urls: list[str]) -> dict[str, Any]:
-    from app.discovery.wechat_tools import wechat_article_key
-
-    keys = sorted({key for url in urls if (key := wechat_article_key(url))})
-    if not keys:
-        return recipe
-    for action in recipe.get("actions") or []:
-        if action.get("op") != "enrich_wechat_articles":
-            continue
-        existing = {str(key) for key in action.get("skip_url_keys") or [] if key}
-        action["skip_url_keys"] = sorted(existing | set(keys))
-    return recipe
-
-
-def _ensure_wechat_history_article_enrich(actions: list[dict[str, Any]]) -> None:
-    has_history = any(action.get("op") == "wechat_fetch_account_history" for action in actions)
-    has_article_enrich = any(action.get("op") == "enrich_wechat_articles" for action in actions)
-    if not has_history or has_article_enrich:
-        return
-
-    enrich_action = {
-        "op": "enrich_wechat_articles",
-        "fetch_content": True,
-        "fill_missing_only": True,
-        "max_items": None,
-    }
-    for index, action in enumerate(actions):
-        if action.get("op") == "dedup_by":
-            actions.insert(index, enrich_action)
-            return
-    actions.append(enrich_action)
 
 
 @router.post("/run")
