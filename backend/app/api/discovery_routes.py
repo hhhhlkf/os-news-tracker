@@ -446,7 +446,7 @@ def discovery_fetch(
 def discovery_fetch_cancel(method_id: int, db: Session = Depends(get_db)):
     """强制杀掉当前 method 的抓取子进程（硬取消，不等协作式退出）。"""
     from app.discovery.fetch_jobs import cancel_fetch_job, get_active_fetch_job_run_id
-    from app.discovery.fetch_runs import get_active_method_fetch_run
+    from app.discovery.fetch_runs import finish_method_fetch_run, get_active_method_fetch_run
     from app.run_logs import append_run_log
 
     m = db.get(CrawlMethod, method_id)
@@ -455,6 +455,8 @@ def discovery_fetch_cancel(method_id: int, db: Session = Depends(get_db)):
     active_run = get_active_method_fetch_run(method_id, db)
     active_run_id = active_run.id if active_run else get_active_fetch_job_run_id(method_id)
     killed = cancel_fetch_job(method_id)
+    if active_run is not None and not killed:
+        finish_method_fetch_run(active_run.id, "cancelled", error_message="fetch cancelled", db=db)
     append_run_log(
         "抓方式",
         "收到强制取消抓取请求",
