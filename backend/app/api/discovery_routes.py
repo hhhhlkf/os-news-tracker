@@ -228,6 +228,7 @@ class MethodPatch(BaseModel):
 
 def _method_quality_fields(method: CrawlMethod) -> dict[str, Any]:
     return {
+        "overall_score": method.overall_score,
         "quality_score": method.quality_score,
         "quality_grade": method.quality_grade,
         "quality_reason": method.quality_reason,

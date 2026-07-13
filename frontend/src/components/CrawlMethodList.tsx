@@ -603,13 +603,14 @@ function MethodRow({ m, selected, state, onToggle, onOpen, highlight, busy, batc
 }
 
 function QualityBadge({ method }: { method: CrawlMethod }) {
-  const score = method.quality_score;
+  const score = method.overall_score;
   const grade = method.quality_grade;
   const hasScore = typeof score === "number";
   const label = hasScore ? `${grade || gradeForScore(score)} ${score}` : "未审计";
   const title = hasScore
     ? [
-      `质量 ${score}`,
+      `综合 ${score}`,
+      `质量 ${method.quality_score ?? "无"}`,
       `密度 ${method.density_score ?? "无"}`,
       `每周 ${method.density_weekly_avg ?? "无"} 条`,
       method.quality_reason || "",

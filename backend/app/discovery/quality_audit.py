@@ -73,6 +73,7 @@ class SourceQualityAudit:
 
     def as_update_values(self) -> dict[str, Any]:
         return {
+            "overall_score": self.overall_score,
             "quality_score": self.quality_score,
             "quality_grade": self.quality_grade,
             "quality_reason": self.quality_reason,

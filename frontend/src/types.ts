@@ -327,6 +327,7 @@ export interface CrawlMethod {
   signature: string;
   last_run_at: string | null;
   last_run_status: string | null;
+  overall_score?: number | null;
   quality_score?: number | null;
   quality_grade?: string | null;
   quality_reason?: string | null;

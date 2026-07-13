@@ -371,6 +371,7 @@ class CrawlMethod(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_run_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    overall_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     quality_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     quality_grade: Mapped[str | None] = mapped_column(String(2), nullable=True)
     quality_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
