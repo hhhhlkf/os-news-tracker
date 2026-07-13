@@ -194,6 +194,10 @@ def execute_discovery_fetch(
                         duration_ms=payload.get("duration_ms"),
                         body_chars=payload.get("body_chars"),
                         content_chars=payload.get("content_chars"),
+                        published_at_ms=payload.get("published_at_ms"),
+                        meta_ms=payload.get("meta_ms"),
+                        js_content_ms=payload.get("js_content_ms"),
+                        strip_ms=payload.get("strip_ms"),
                         error=payload.get("error"),
                     )
                 elif event == "wechat_enrich_topic_skipped":

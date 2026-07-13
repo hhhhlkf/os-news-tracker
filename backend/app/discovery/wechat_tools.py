@@ -20,6 +20,8 @@ DEFAULT_HEADERS = {
 }
 WECHAT_ARTICLE_CONTENT_CHAR_LIMIT = 2000
 WECHAT_TOPIC_PRECHECK_TIMEOUT_SECONDS = 8.0
+WECHAT_ARTICLE_HEAD_SCAN_CHARS = 200_000
+WECHAT_ARTICLE_CONTENT_SCAN_CHARS = 256_000
 _DATE_PATTERNS = (
     re.compile(r"(?P<year>20\d{2})[-/.年](?P<month>\d{1,2})[-/.月](?P<day>\d{1,2})日?"),
     re.compile(r"(?P<month>\d{1,2})[-/.月](?P<day>\d{1,2})日?\s*(?P<year>20\d{2})"),
@@ -38,6 +40,28 @@ def normalize_wechat_article_url(url: str) -> str:
     if parsed.scheme == "http" and parsed.netloc.lower() == "mp.weixin.qq.com":
         return parsed._replace(scheme="https").geturl()
     return text
+
+
+def _article_head_slice(text: str) -> str:
+    lower = text[:WECHAT_ARTICLE_HEAD_SCAN_CHARS].lower()
+    end = lower.find("</head>")
+    if end >= 0:
+        return text[: end + len("</head>")]
+    return text[:WECHAT_ARTICLE_HEAD_SCAN_CHARS]
+
+
+def _extract_js_content_window(text: str) -> str:
+    lower = text.lower()
+    marker_pos = lower.find('id="js_content"')
+    if marker_pos < 0:
+        marker_pos = lower.find("id='js_content'")
+    if marker_pos < 0:
+        return ""
+    start = text.rfind("<div", 0, marker_pos)
+    if start < 0:
+        start = marker_pos
+    end_limit = min(len(text), start + WECHAT_ARTICLE_CONTENT_SCAN_CHARS)
+    return text[start:end_limit]
 
 
 def wechat_search_articles(
@@ -421,6 +445,10 @@ def _strip_tags(value: str) -> str:
     return html.unescape(" ".join(value.split()))
 
 
+def _strip_tags_limited(value: str, *, max_input_chars: int = WECHAT_ARTICLE_CONTENT_SCAN_CHARS) -> str:
+    return _strip_tags(value[:max_input_chars])
+
+
 def _extract_redirect_url(value: str) -> str | None:
     parsed = urlparse(html.unescape(value))
     query = parse_qs(parsed.query)
@@ -445,7 +473,7 @@ def _resolve_sogou_link_in_context(page, link_handle) -> str | None:
 
 
 def _extract_datetime_from_text(value: str) -> str | None:
-    compact = " ".join(value.split())
+    compact = " ".join(value[:WECHAT_ARTICLE_HEAD_SCAN_CHARS].split())
     for pattern in _EMBEDDED_TS_PATTERNS:
         match = pattern.search(compact)
         if not match:
@@ -687,21 +715,28 @@ def wechat_fetch_article_content(
             body_chars=len(body_text),
         )
         return {"status": "unsupported", "content": ""}
-    published_at = _extract_article_published_at(body_text)
+    parse_started_at = time.monotonic()
+    head_text = _article_head_slice(body_text)
+    published_at = _extract_article_published_at(head_text)
+    published_at_ms = int((time.monotonic() - parse_started_at) * 1000)
+    meta_started_at = time.monotonic()
     title = (
-        _extract_meta_value(body_text, "property", "og:title")
-        or _extract_meta_value(body_text, "name", "twitter:title")
-        or _extract_title_text(body_text)
+        _extract_meta_value(head_text, "property", "og:title")
+        or _extract_meta_value(head_text, "name", "twitter:title")
+        or _extract_title_text(head_text)
         or ""
     )
     summary = (
-        _extract_meta_value(body_text, "property", "og:description")
-        or _extract_meta_value(body_text, "name", "description")
-        or _extract_meta_value(body_text, "name", "twitter:description")
+        _extract_meta_value(head_text, "property", "og:description")
+        or _extract_meta_value(head_text, "name", "description")
+        or _extract_meta_value(head_text, "name", "twitter:description")
         or ""
     )
-    match = re.search(r'<div[^>]+id="js_content"[^>]*>(.*?)</div>', body_text, re.S)
-    if not match:
+    meta_ms = int((time.monotonic() - meta_started_at) * 1000)
+    js_started_at = time.monotonic()
+    content_html = _extract_js_content_window(body_text)
+    js_content_ms = int((time.monotonic() - js_started_at) * 1000)
+    if not content_html:
         _emit_progress(
             progress_callback,
             "wechat_article_fetch_finished",
@@ -712,6 +747,10 @@ def wechat_fetch_article_content(
             duration_ms=int((time.monotonic() - started_at) * 1000),
             body_chars=len(body_text),
             content_chars=0,
+            published_at_ms=published_at_ms,
+            meta_ms=meta_ms,
+            js_content_ms=js_content_ms,
+            strip_ms=0,
         )
         return {
             "status": "empty",
@@ -721,7 +760,9 @@ def wechat_fetch_article_content(
             "published_at": published_at,
             "resolved_url": str(response.url),
         }
-    content = _strip_tags(match.group(1))[:WECHAT_ARTICLE_CONTENT_CHAR_LIMIT]
+    strip_started_at = time.monotonic()
+    content = _strip_tags_limited(content_html)[:WECHAT_ARTICLE_CONTENT_CHAR_LIMIT]
+    strip_ms = int((time.monotonic() - strip_started_at) * 1000)
     _emit_progress(
         progress_callback,
         "wechat_article_fetch_finished",
@@ -732,6 +773,10 @@ def wechat_fetch_article_content(
         duration_ms=int((time.monotonic() - started_at) * 1000),
         body_chars=len(body_text),
         content_chars=len(content),
+        published_at_ms=published_at_ms,
+        meta_ms=meta_ms,
+        js_content_ms=js_content_ms,
+        strip_ms=strip_ms,
     )
     return {
         "status": "ok",
