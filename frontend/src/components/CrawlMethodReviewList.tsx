@@ -11,7 +11,7 @@ import {
 } from "../api/client";
 import type { CrawlMethod } from "../types";
 
-export function CrawlMethodReviewList({ onOpenMethod }: { onOpenMethod?: (id: number) => void }) {
+export function CrawlMethodReviewList({ highlightId, onOpenMethod }: { highlightId?: number | null; onOpenMethod?: (id: number) => void }) {
   const qc = useQueryClient();
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [summary, setSummary] = useState<{ text: string; tone: "success" | "danger" } | null>(null);
@@ -217,6 +217,7 @@ export function CrawlMethodReviewList({ onOpenMethod }: { onOpenMethod?: (id: nu
                 key={method.id}
                 method={method}
                 selected={selected.has(method.id)}
+                highlight={highlightId === method.id}
                 onToggle={(checked) => toggle(method.id, checked)}
                 onOpen={() => onOpenMethod?.(method.id)}
               />
@@ -231,15 +232,16 @@ export function CrawlMethodReviewList({ onOpenMethod }: { onOpenMethod?: (id: nu
   );
 }
 
-function ReviewRow({ method, selected, onToggle, onOpen }: {
+function ReviewRow({ method, selected, highlight, onToggle, onOpen }: {
   method: CrawlMethod;
   selected: boolean;
+  highlight: boolean;
   onToggle: (checked: boolean) => void;
   onOpen: () => void;
 }) {
   const primaryLabel = method.source_name?.trim() || method.domain;
   return (
-    <div style={{ ...row, borderColor: selected ? "#b9d4ff" : "#eaecf0", background: selected ? "#f8fbff" : "#fff" }}>
+    <div style={{ ...row, borderColor: selected ? "#b9d4ff" : highlight ? "#175cd3" : "#eaecf0", background: selected ? "#f8fbff" : highlight ? "#eff6ff" : "#fff" }}>
       <input type="checkbox" checked={selected} aria-label={`选择 ${primaryLabel}`} onChange={(event) => onToggle(event.target.checked)} />
       <QualityBadge method={method} />
       <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={onOpen}>

@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CrawlMethodDetail } from "../components/CrawlMethodDetail";
 import { CrawlMethodList } from "../components/CrawlMethodList";
@@ -15,6 +15,7 @@ export function DiscoveryPage() {
   const [highlightId, setHighlightId] = useState<number | null>(null);
   const [openMethod, setOpenMethod] = useState<number | null>(null);
   const [runLimitState, setRunLimitState] = useState(() => buildNewsRunFormState(undefined));
+  const reviewSectionRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (highlightId == null) return;
@@ -26,6 +27,9 @@ export function DiscoveryPage() {
     await queryClient.invalidateQueries({ queryKey: ["discovery-methods"] });
     await queryClient.invalidateQueries({ queryKey: ["discovery-methods", "pending-review"] });
     setHighlightId(methodId);
+    window.requestAnimationFrame(() => {
+      reviewSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   return (
@@ -45,7 +49,9 @@ export function DiscoveryPage() {
           />
         </div>
         <DiscoveryPanel onMethodAdded={handleMethodAdded} />
-        <CrawlMethodReviewList onOpenMethod={setOpenMethod} />
+        <div ref={reviewSectionRef}>
+          <CrawlMethodReviewList highlightId={highlightId} onOpenMethod={setOpenMethod} />
+        </div>
         <CrawlMethodList onOpenMethod={setOpenMethod} highlightId={highlightId} runLimitState={runLimitState} />
         <PromptStudioPanel />
         <MainCategoryPanel />
