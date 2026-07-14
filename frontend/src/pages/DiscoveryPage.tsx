@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CrawlMethodDetail } from "../components/CrawlMethodDetail";
 import { CrawlMethodList } from "../components/CrawlMethodList";
+import { CrawlMethodReviewList } from "../components/CrawlMethodReviewList";
 import { DiscoverNewsControlSection } from "../components/DiscoverNewsControlSection";
 import { DiscoveryPanel } from "../components/DiscoveryPanel";
 import { MainCategoryPanel } from "../components/MainCategoryPanel";
@@ -23,6 +24,7 @@ export function DiscoveryPage() {
 
   async function handleMethodAdded(methodId: number) {
     await queryClient.invalidateQueries({ queryKey: ["discovery-methods"] });
+    await queryClient.invalidateQueries({ queryKey: ["discovery-methods", "pending-review"] });
     setHighlightId(methodId);
   }
 
@@ -43,6 +45,7 @@ export function DiscoveryPage() {
           />
         </div>
         <DiscoveryPanel onMethodAdded={handleMethodAdded} />
+        <CrawlMethodReviewList onOpenMethod={setOpenMethod} />
         <CrawlMethodList onOpenMethod={setOpenMethod} highlightId={highlightId} runLimitState={runLimitState} />
         <PromptStudioPanel />
         <MainCategoryPanel />

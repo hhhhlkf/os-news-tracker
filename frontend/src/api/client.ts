@@ -431,6 +431,62 @@ export async function listDiscoveryMethods(): Promise<CrawlMethod[]> {
   return expectOk<CrawlMethod[]>(r, "failed to load crawl methods");
 }
 
+export async function listPendingDiscoveryMethods(): Promise<CrawlMethod[]> {
+  const r = await fetch(`${DISCOVERY_BASE}/methods/review-pending`, { headers: authHeaders() });
+  return expectOk<CrawlMethod[]>(r, "failed to load pending crawl methods");
+}
+
+export async function approveDiscoveryMethods(methodIds: number[]): Promise<{ approved_count: number }> {
+  const r = await fetch(`${DISCOVERY_BASE}/methods/review/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ method_ids: methodIds }),
+  });
+  return expectOk<{ approved_count: number }>(r, "failed to approve crawl methods");
+}
+
+export async function deletePendingDiscoveryMethods(methodIds: number[]): Promise<{ deleted_count: number }> {
+  const r = await fetch(`${DISCOVERY_BASE}/methods/review/delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ method_ids: methodIds }),
+  });
+  return expectOk<{ deleted_count: number }>(r, "failed to delete pending crawl methods");
+}
+
+export interface CrawlMethodReviewReminderConfig {
+  enabled: boolean;
+  interval_minutes: number;
+  recipients: string[];
+  last_sent_at: string | null;
+  last_result_status: string | null;
+  last_error: string | null;
+}
+
+export async function getCrawlMethodReviewReminderConfig(): Promise<CrawlMethodReviewReminderConfig> {
+  const r = await fetch(`${DISCOVERY_BASE}/methods/review/reminder`, { headers: authHeaders() });
+  return expectOk<CrawlMethodReviewReminderConfig>(r, "failed to load review reminder config");
+}
+
+export async function updateCrawlMethodReviewReminderConfig(
+  request: { enabled?: boolean; interval_minutes?: number; recipients?: string[] },
+): Promise<CrawlMethodReviewReminderConfig> {
+  const r = await fetch(`${DISCOVERY_BASE}/methods/review/reminder`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(request),
+  });
+  return expectOk<CrawlMethodReviewReminderConfig>(r, "failed to update review reminder config");
+}
+
+export async function sendCrawlMethodReviewReminderNow(): Promise<{ sent: boolean; reason: string; count: number; error?: string }> {
+  const r = await fetch(`${DISCOVERY_BASE}/methods/review/reminder/send-now`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return expectOk(r, "failed to send review reminder");
+}
+
 export async function getDiscoveryMethod(methodId: number): Promise<CrawlMethodDetail> {
   const r = await fetch(`${DISCOVERY_BASE}/methods/${methodId}`, { headers: authHeaders() });
   return expectOk<CrawlMethodDetail>(r, "failed to load crawl method");

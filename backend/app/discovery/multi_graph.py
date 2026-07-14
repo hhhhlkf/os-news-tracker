@@ -14,6 +14,7 @@ from app.discovery.quality_audit import (
     apply_quality_audit_to_method,
     audit_source_quality,
 )
+from app.discovery.review import REVIEW_PENDING
 from app.discovery.graph import (
     DiscoveryState,
     auditor,
@@ -533,6 +534,10 @@ def _run_and_save_multi_recipe(
             m.dsl_recipe = sanitized_recipe
             m.signature = sig
             m.status = method_status
+            m.review_status = REVIEW_PENDING
+            m.reviewed_at = None
+            m.reviewed_by = None
+            m.review_note = None
             m.updated_at = dt.now(timezone.utc)
             if quality_audit is not None:
                 apply_quality_audit_to_method(m, quality_audit)
@@ -567,6 +572,7 @@ def _run_and_save_multi_recipe(
             dsl_recipe=sanitized_recipe,
             signature=sig,
             status=method_status,
+            review_status=REVIEW_PENDING,
         )
         db.add(m)
         db.flush()

@@ -25,6 +25,16 @@ from app.discovery.naming import (
     format_website_display_name,
     normalize_site_name,
 )
+from app.discovery.review import (
+    REVIEW_APPROVED,
+    REVIEW_PENDING,
+    approve_methods,
+    delete_method as delete_crawl_method,
+    delete_methods,
+    get_or_create_reminder_config,
+    method_source_name,
+    send_review_reminder_if_due,
+)
 from app.discovery.recipe_prepare import (
     _apply_fetch_limits,
     _attach_wechat_skip_keys,
@@ -35,12 +45,10 @@ from app.llm.client import LlmClient
 from app.enums import TagKind
 from app.models import (
     CrawlMethod,
-    CrawlMethodDomain,
     DiscoveryPromptSet,
     Item,
     ItemTag,
     MainCategory,
-    MorningCrawlRunMethod,
     SiteDiscoveryRun,
     Tag,
 )
@@ -226,6 +234,16 @@ class MethodPatch(BaseModel):
     status: str | None = None  # active | disabled | failed
 
 
+class MethodReviewBatchRequest(BaseModel):
+    method_ids: list[int]
+
+
+class ReviewReminderUpdateRequest(BaseModel):
+    enabled: bool | None = None
+    interval_minutes: int | None = None
+    recipients: list[str] | None = None
+
+
 def _method_quality_fields(method: CrawlMethod) -> dict[str, Any]:
     overall_score = _method_overall_score(method)
     return {
@@ -263,16 +281,93 @@ def _method_quality_grade(overall_score: int | None) -> str | None:
     return "D"
 
 
+def _method_response(method: CrawlMethod, db: Session) -> dict[str, Any]:
+    return {
+        "id": method.id,
+        "domain": method.domain,
+        "entry_url": method.entry_url,
+        "status": method.status,
+        "review_status": method.review_status,
+        "reviewed_at": method.reviewed_at.isoformat() if method.reviewed_at else None,
+        "reviewed_by": method.reviewed_by,
+        "review_note": method.review_note,
+        "source_name": method_source_name(db, method),
+        "signature": method.signature,
+        "last_run_at": method.last_run_at.isoformat() if method.last_run_at else None,
+        "last_run_status": method.last_run_status,
+        "created_at": method.created_at.isoformat() if method.created_at else None,
+        **_method_quality_fields(method),
+    }
+
+
+def _reminder_config_response(config) -> dict[str, Any]:
+    return {
+        "enabled": config.enabled,
+        "interval_minutes": config.interval_minutes,
+        "recipients": list(config.recipients_json or []),
+        "last_sent_at": config.last_sent_at.isoformat() if config.last_sent_at else None,
+        "last_result_status": config.last_result_status,
+        "last_error": config.last_error,
+    }
+
+
 @router.get("/methods")
 def list_methods(db: Session = Depends(get_db)):
     """列出所有已发现的爬取方式（摘要，不含完整 DSL Recipe）。"""
-    ms = db.scalars(select(CrawlMethod).order_by(CrawlMethod.id.desc())).all()
-    from app.models import Source
-    return [{"id": m.id, "domain": m.domain, "entry_url": m.entry_url, "status": m.status,
-             "source_name": (db.get(Source, m.source_id).name if db.get(Source, m.source_id) else m.domain),
-             "signature": m.signature, "last_run_at": m.last_run_at.isoformat() if m.last_run_at else None,
-             "last_run_status": m.last_run_status,
-             **_method_quality_fields(m)} for m in ms]
+    ms = db.scalars(
+        select(CrawlMethod)
+        .where(CrawlMethod.review_status == REVIEW_APPROVED)
+        .order_by(CrawlMethod.id.desc())
+    ).all()
+    return [_method_response(m, db) for m in ms]
+
+
+@router.get("/methods/review-pending")
+def list_pending_review_methods(db: Session = Depends(get_db)):
+    """列出待审核爬取方式。"""
+    ms = db.scalars(
+        select(CrawlMethod)
+        .where(CrawlMethod.review_status == REVIEW_PENDING)
+        .order_by(CrawlMethod.created_at.desc(), CrawlMethod.id.desc())
+    ).all()
+    return [_method_response(m, db) for m in ms]
+
+
+@router.post("/methods/review/approve")
+def approve_pending_methods(body: MethodReviewBatchRequest, db: Session = Depends(get_db)):
+    count = approve_methods(db, body.method_ids)
+    return {"approved_count": count}
+
+
+@router.post("/methods/review/delete")
+def delete_pending_methods(body: MethodReviewBatchRequest, db: Session = Depends(get_db)):
+    count = delete_methods(db, body.method_ids)
+    return {"deleted_count": count}
+
+
+@router.get("/methods/review/reminder")
+def get_review_reminder_config(db: Session = Depends(get_db)):
+    return _reminder_config_response(get_or_create_reminder_config(db))
+
+
+@router.put("/methods/review/reminder")
+def update_review_reminder_config(body: ReviewReminderUpdateRequest, db: Session = Depends(get_db)):
+    config = get_or_create_reminder_config(db)
+    if body.enabled is not None:
+        config.enabled = body.enabled
+    if body.interval_minutes is not None:
+        config.interval_minutes = max(5, min(body.interval_minutes, 10080))
+    if body.recipients is not None:
+        config.recipients_json = [recipient.strip() for recipient in body.recipients if recipient.strip()]
+    config.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(config)
+    return _reminder_config_response(config)
+
+
+@router.post("/methods/review/reminder/send-now")
+def send_review_reminder_now(db: Session = Depends(get_db)):
+    return send_review_reminder_if_due(db, force=True)
 
 
 @router.get("/methods/{method_id}")
@@ -284,6 +379,10 @@ def get_method(method_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "method not found")
     source = db.get(Source, m.source_id)
     return {"id": m.id, "domain": m.domain, "entry_url": m.entry_url, "status": m.status,
+            "review_status": m.review_status,
+            "reviewed_at": m.reviewed_at.isoformat() if m.reviewed_at else None,
+            "reviewed_by": m.reviewed_by,
+            "review_note": m.review_note,
             "source_name": source.name if source else m.domain,
             "dsl_recipe": m.dsl_recipe, "signature": m.signature,
             "last_run_at": m.last_run_at.isoformat() if m.last_run_at else None,
@@ -306,21 +405,8 @@ def patch_method(method_id: int, body: MethodPatch, db: Session = Depends(get_db
 @router.delete("/methods/{method_id}", status_code=204)
 def delete_method(method_id: int, db: Session = Depends(get_db)):
     """删除方法 + 级联清 crawl_method_domains 映射。"""
-    m = db.get(CrawlMethod, method_id)
-    if not m:
+    if not delete_crawl_method(db, method_id):
         raise HTTPException(404, "method not found")
-    db.execute(
-        update(SiteDiscoveryRun)
-        .where(SiteDiscoveryRun.resulting_method_id == method_id)
-        .values(resulting_method_id=None)
-    )
-    db.execute(
-        update(MorningCrawlRunMethod)
-        .where(MorningCrawlRunMethod.method_id == method_id)
-        .values(method_id=None)
-    )  # 保留定时抓取运行历史（domain 已冗余存储），仅解除外键关联
-    db.query(CrawlMethodDomain).filter_by(method_id=method_id).delete()  # 级联清映射
-    db.delete(m); db.commit()
 
 
 @router.post("/methods/{method_id}/fetch")
@@ -341,6 +427,8 @@ def discovery_fetch(
     m = db.get(CrawlMethod, method_id)
     if not m:
         raise HTTPException(404, "method not found")
+    if m.review_status != REVIEW_APPROVED:
+        raise HTTPException(409, "method is pending review")
     request_payload = request.model_dump(mode="json") if request is not None else None
     try:
         return run_killable_fetch(method_id, request_payload, db=db)

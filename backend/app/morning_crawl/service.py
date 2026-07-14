@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 BEIJING_TZ = timezone(timedelta(hours=8))
 ACTIVE_METHOD_STATUS = "active"
+APPROVED_REVIEW_STATUS = "approved"
 _RECENT_RUN_LIMIT = 10
 # 超过该秒数仍处于 running/stopping 且当前进程无活动 worker（无取消事件登记）的 run，
 # 判定为进程中断导致的僵尸 run，dashboard/触发前会被回收，避免「进程无法关闭」。
@@ -128,7 +129,12 @@ def update_morning_crawl_config(
 def _active_method_count(db: Session) -> int:
     return int(
         db.scalar(
-            select(func.count()).select_from(CrawlMethod).where(CrawlMethod.status == ACTIVE_METHOD_STATUS)
+            select(func.count())
+            .select_from(CrawlMethod)
+            .where(
+                CrawlMethod.status == ACTIVE_METHOD_STATUS,
+                CrawlMethod.review_status == APPROVED_REVIEW_STATUS,
+            )
         )
         or 0
     )
@@ -138,7 +144,10 @@ def _list_active_methods(db: Session) -> list[CrawlMethod]:
     return list(
         db.scalars(
             select(CrawlMethod)
-            .where(CrawlMethod.status == ACTIVE_METHOD_STATUS)
+            .where(
+                CrawlMethod.status == ACTIVE_METHOD_STATUS,
+                CrawlMethod.review_status == APPROVED_REVIEW_STATUS,
+            )
             .order_by(CrawlMethod.id)
         )
     )

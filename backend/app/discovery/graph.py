@@ -250,6 +250,7 @@ def save_method(state: DiscoveryState, db=None) -> DiscoveryState:
             apply_quality_audit_to_method,
             audit_source_quality,
         )
+        from app.discovery.review import REVIEW_PENDING
         from app.discovery.signature import compute_signature
         from app.run_logs import append_run_log
         recipe = DslRecipe(**state["dsl_recipe"])
@@ -269,6 +270,10 @@ def save_method(state: DiscoveryState, db=None) -> DiscoveryState:
             m.dsl_recipe = recipe.model_dump()
             m.signature = sig
             m.status = method_status
+            m.review_status = REVIEW_PENDING
+            m.reviewed_at = None
+            m.reviewed_by = None
+            m.review_note = None
             m.updated_at = datetime.now(timezone.utc)
         elif existing is not None:
             # 同 domain 已有且未 force：保留旧（兜底，正常流程前置检查已拦截）
@@ -279,7 +284,8 @@ def save_method(state: DiscoveryState, db=None) -> DiscoveryState:
                          main_category="OS跟踪来源", stream=Stream.NEWS.value, enabled=True)
             db.add(src); db.flush()
             m = CrawlMethod(domain=domain, entry_url=state["site_url"], source_id=src.id,
-                            dsl_recipe=recipe.model_dump(), signature=sig, status=method_status)
+                            dsl_recipe=recipe.model_dump(), signature=sig, status=method_status,
+                            review_status=REVIEW_PENDING)
             db.add(m); db.flush()
             db.add(CrawlMethodDomain(domain=domain, method_id=m.id))  # 去重映射
         if existing is None or state.get("force"):

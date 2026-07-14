@@ -324,6 +324,11 @@ export interface CrawlMethod {
   domain: string;
   entry_url: string;
   status: CrawlMethodStatus;
+  review_status?: "pending" | "approved" | "rejected";
+  reviewed_at?: string | null;
+  reviewed_by?: string | null;
+  review_note?: string | null;
+  created_at?: string | null;
   signature: string;
   last_run_at: string | null;
   last_run_status: string | null;

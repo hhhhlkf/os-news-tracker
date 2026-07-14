@@ -112,6 +112,7 @@ def run_startup_backfill() -> int:
 
 MAIL_SCHEDULE_TICK_INTERVAL_MINUTES = 1
 MAIL_SCHEDULE_PATROL_INTERVAL_HOURS = 6
+CRAWL_METHOD_REVIEW_REMINDER_TICK_INTERVAL_MINUTES = 1
 
 
 def _schedule_due_now(schedule, *, now: datetime, today: str) -> bool:
@@ -173,6 +174,20 @@ def run_mail_schedule_patrol() -> None:
     _run_due_schedules(trigger_type="patrol_resend", mark_today=True, patrol=True)
 
 
+def run_crawl_method_review_reminder_tick() -> None:
+    from app.discovery.review import send_review_reminder_if_due
+
+    session = SessionLocal()
+    try:
+        result = send_review_reminder_if_due(session)
+        if result.get("sent"):
+            logger.info("crawl method review reminder sent: %s", result)
+    except Exception:
+        logger.exception("crawl method review reminder failed")
+    finally:
+        session.close()
+
+
 def start_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler()
     session = SessionLocal()
@@ -215,6 +230,12 @@ def register_mail_schedule_jobs(scheduler: BackgroundScheduler) -> None:
         run_mail_schedule_patrol,
         IntervalTrigger(hours=MAIL_SCHEDULE_PATROL_INTERVAL_HOURS),
         id="mail-schedule-patrol",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_crawl_method_review_reminder_tick,
+        IntervalTrigger(minutes=CRAWL_METHOD_REVIEW_REMINDER_TICK_INTERVAL_MINUTES),
+        id="crawl-method-review-reminder-tick",
         replace_existing=True,
     )
 
