@@ -4,7 +4,7 @@ import { act, useState, type Dispatch, type SetStateAction } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RunLimitCard } from "./RunLimitCard";
-import type { NewsRunFormState } from "./NewsRunControl";
+import type { NewsRunFormState } from "./runLimits";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

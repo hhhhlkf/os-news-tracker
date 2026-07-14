@@ -56,10 +56,6 @@ class NormalizedItem(BaseModel):
 
 RelativeRange = Literal["24h", "7d", "30d"]
 TimeMode = Literal["relative", "absolute"]
-RunState = Literal[
-    "idle", "collecting", "processing", "stopping",
-    "completed", "failed", "stopped",
-]
 
 
 class ManualNewsRunRequest(BaseModel):
@@ -108,40 +104,6 @@ class AgentCrawlRunRequest(BaseModel):
             if self.end_at.tzinfo is None:
                 raise ValueError("end_at must be timezone-aware (UTC)")
         return self
-
-
-class TimeFilterStats(BaseModel):
-    """Per-category counts from time-window filtering.
-
-    These are tallied across all sources during candidate collection so
-    developers can quickly diagnose *why* a manual run produced too few
-    (or zero) candidates.
-    """
-
-    missing_published_at: int = 0
-    before_start: int = 0
-    after_end: int = 0
-    matched: int = 0
-    included_without_date: int = 0
-
-
-class ManualNewsRunStatus(BaseModel):
-    state: RunState
-    time_mode: TimeMode | None = None
-    relative_range: RelativeRange | None = None
-    start_at: datetime | None = None
-    end_at: datetime | None = None
-    target_count: int | None = None
-    discovered_count: int = 0
-    queued_count: int = 0
-    processed_count: int = 0
-    saved_count: int = 0
-    fulfilled: bool = False
-    gap_reason: str | None = None
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
-    last_error: str | None = None
-    time_filter_stats: TimeFilterStats | None = None
 
 
 MailRelativeRange = Literal["24h", "7d", "30d"]

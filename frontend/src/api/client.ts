@@ -14,8 +14,6 @@ import type {
   ItemDetail,
   Facets,
   ManualNewsRunRequest,
-  ManualNewsRunStatus,
-  NewsRunLogsResponse,
   SourceCreateRequest,
   SourceDetectResponse,
   DiscoverRequest,
@@ -181,32 +179,6 @@ export async function generateItemReason(id: number): Promise<ItemReasonResponse
 export async function fetchFacets(): Promise<Facets> {
   const r = await fetch(`${BASE}/facets`);
   return expectOk<Facets>(r, "failed to load facets");
-}
-
-export async function fetchNewsRunStatus(): Promise<ManualNewsRunStatus> {
-  const r = await fetch(`${BASE}/news-run`);
-  return expectOk<ManualNewsRunStatus>(r, "failed to load news run status");
-}
-
-export async function fetchNewsRunLogs(): Promise<NewsRunLogsResponse> {
-  const r = await fetch(`${BASE}/news-run/logs`);
-  return expectOk<NewsRunLogsResponse>(r, "failed to load news run logs");
-}
-
-export async function startNewsRun(request: ManualNewsRunRequest): Promise<ManualNewsRunStatus> {
-  const r = await fetch(`${BASE}/news-run/start`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(request),
-  });
-  return expectOk<ManualNewsRunStatus>(r, "failed to start news run");
-}
-
-export async function stopNewsRun(): Promise<ManualNewsRunStatus> {
-  const r = await fetch(`${BASE}/news-run/stop`, {
-    method: "POST",
-  });
-  return expectOk<ManualNewsRunStatus>(r, "failed to stop news run");
 }
 
 export async function fetchSources(): Promise<CrawlSource[]> {

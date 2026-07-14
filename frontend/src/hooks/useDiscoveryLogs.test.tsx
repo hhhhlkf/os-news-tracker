@@ -64,7 +64,7 @@ describe("useDiscoveryLogs", () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      expect.stringContaining("/news-run/logs?after_id=4"),
+      expect.stringContaining("/run-logs?after_id=4"),
       expect.any(Object),
     );
     expect(container.textContent).toContain("mine-1|mine-2");

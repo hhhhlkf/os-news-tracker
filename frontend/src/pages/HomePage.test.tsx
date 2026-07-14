@@ -11,13 +11,9 @@ import { HomePage } from "./HomePage";
 vi.mock("../api/client", () => ({
   fetchItems: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 10, offset: 0 }),
   fetchFacets: vi.fn().mockResolvedValue({ main_category: [], info_type: [], importance: [], sub_tags: [] }),
-  fetchNewsRunStatus: vi.fn().mockResolvedValue({ state: "idle" }),
-  fetchNewsRunLogs: vi.fn().mockResolvedValue({ logs: [] }),
   fetchAgentSources: vi.fn().mockResolvedValue([]),
   fetchAgentSourceCandidates: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, page_size: 5, total_pages: 1 }),
   fetchAgentRuns: vi.fn().mockResolvedValue([]),
-  startNewsRun: vi.fn(),
-  stopNewsRun: vi.fn(),
   triggerAgentRun: vi.fn(),
   triggerAgentRunFromCandidate: vi.fn(),
   cancelAgentRun: vi.fn(),
@@ -35,22 +31,6 @@ vi.mock("../components/ItemList", () => ({
 
 vi.mock("../components/ItemDetail", () => ({
   ItemDetail: () => <div>详情</div>,
-}));
-
-vi.mock("../components/NewsRunControl", () => ({
-  NewsRunControl: () => <div>新闻处理控制</div>,
-  buildNewsRunFormState: () => ({
-    timeMode: "relative",
-    relativeRange: "7d",
-    startDate: "",
-    endDate: "",
-    targetCount: "20",
-  }),
-  toAbsoluteDateTime: () => null,
-}));
-
-vi.mock("../components/NewsRunLogPanel", () => ({
-  NewsRunLogPanel: () => <div>运行日志</div>,
 }));
 
 vi.mock("../components/SourceManager", () => ({

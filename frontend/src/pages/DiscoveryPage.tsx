@@ -3,10 +3,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { CrawlMethodDetail } from "../components/CrawlMethodDetail";
 import { CrawlMethodList } from "../components/CrawlMethodList";
 import { CrawlMethodReviewList } from "../components/CrawlMethodReviewList";
-import { DiscoverNewsControlSection } from "../components/DiscoverNewsControlSection";
 import { DiscoveryPanel } from "../components/DiscoveryPanel";
 import { MainCategoryPanel } from "../components/MainCategoryPanel";
-import { buildNewsRunFormState } from "../components/NewsRunControl";
+import { buildNewsRunFormState } from "../components/runLimits";
 import { PromptStudioPanel } from "../components/PromptStudioPanel";
 import { RunLimitCard } from "../components/RunLimitCard";
 
@@ -14,7 +13,7 @@ export function DiscoveryPage({ hasSystemAccess = false }: { hasSystemAccess?: b
   const queryClient = useQueryClient();
   const [highlightId, setHighlightId] = useState<number | null>(null);
   const [openMethod, setOpenMethod] = useState<number | null>(null);
-  const [runLimitState, setRunLimitState] = useState(() => buildNewsRunFormState(undefined));
+  const [runLimitState, setRunLimitState] = useState(buildNewsRunFormState);
   const reviewSectionRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -62,10 +61,6 @@ export function DiscoveryPage({ hasSystemAccess = false }: { hasSystemAccess?: b
         />
         {hasSystemAccess && <PromptStudioPanel />}
         <MainCategoryPanel />
-        <div data-testid="discover-methods-divider" style={methodsDivider} />
-        {hasSystemAccess && (
-          <DiscoverNewsControlSection runLimitState={runLimitState} onRunLimitStateChange={setRunLimitState} />
-        )}
 
         {openMethod != null && (
           <CrawlMethodDetail methodId={openMethod} onClose={() => setOpenMethod(null)} allowManage={hasSystemAccess} />
@@ -112,11 +107,6 @@ const heroCopy: CSSProperties = {
   marginTop: 10,
   marginBottom: 0,
   color: "#d0d5dd",
-};
-
-const methodsDivider: CSSProperties = {
-  borderTop: "1px solid #d0d5dd",
-  margin: "22px 0 20px",
 };
 
 const runLimitSection: CSSProperties = {

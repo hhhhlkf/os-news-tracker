@@ -44,7 +44,7 @@ export function useDiscoveryLogs(runId: number | null, enabled: boolean, include
       try {
         const configuredBase = import.meta.env.VITE_API_BASE?.trim();
         const base = configuredBase ? configuredBase.replace(/\/+$/, "") : "";
-        const r = await fetch(`${base}/news-run/logs?after_id=${lastId.current}`, { headers: authHeaders() });
+        const r = await fetch(`${base}/run-logs?after_id=${lastId.current}`, { headers: authHeaders() });
         if (!r.ok) return;
         const data = (await r.json()) as { logs: NewsRunLogEntry[] };
         if (data.logs.length) {

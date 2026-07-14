@@ -48,3 +48,10 @@ def list_run_logs(*, after_id: int | None = None, limit: int = 200) -> list[dict
     if after_id is not None:
         rows = [row for row in rows if row["id"] > after_id]
     return rows[-limit:]
+
+
+def build_not_stored_log_fields(result: Any) -> dict[str, Any]:
+    fields: dict[str, Any] = {"reason": result.reason}
+    if getattr(result, "detail", None):
+        fields["reason_detail"] = result.detail
+    return fields

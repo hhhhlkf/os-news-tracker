@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentCandidateRunRefreshKeys, buildAgentWarmupRun, buildDemoFacets, filterDemoItems, isAgentSourceRunning, isAgentWarmupResolved, isManualNewsRunActive, resolveHomeDataMode } from "./homeData";
+import { agentCandidateRunRefreshKeys, buildAgentWarmupRun, buildDemoFacets, filterDemoItems, isAgentSourceRunning, isAgentWarmupResolved, resolveHomeDataMode } from "./homeData";
 import { demoItems } from "../demoData";
 
 describe("resolveHomeDataMode", () => {
@@ -10,21 +10,6 @@ describe("resolveHomeDataMode", () => {
 
   it("keeps live mode when both queries succeed", () => {
     expect(resolveHomeDataMode({ itemsFailed: false, facetsFailed: false })).toBe("live");
-  });
-});
-
-describe("isManualNewsRunActive", () => {
-  it("treats running states as active", () => {
-    expect(isManualNewsRunActive("collecting")).toBe(true);
-    expect(isManualNewsRunActive("processing")).toBe(true);
-    expect(isManualNewsRunActive("stopping")).toBe(true);
-  });
-
-  it("treats terminal and empty states as inactive", () => {
-    expect(isManualNewsRunActive("completed")).toBe(false);
-    expect(isManualNewsRunActive("failed")).toBe(false);
-    expect(isManualNewsRunActive("stopped")).toBe(false);
-    expect(isManualNewsRunActive(null)).toBe(false);
   });
 });
 

@@ -1,6 +1,6 @@
 import { useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import { TimeRangePicker } from "./TimeRangePicker";
-import type { NewsRunFormState } from "./NewsRunControl";
+import type { NewsRunFormState } from "./runLimits";
 
 interface RunLimitCardProps {
   formState: NewsRunFormState;

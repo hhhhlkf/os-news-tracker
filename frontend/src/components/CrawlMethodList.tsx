@@ -9,8 +9,8 @@ import {
   listDiscoveryMethods,
 } from "../api/client";
 import type { CrawlMethod } from "../types";
-import { buildManualNewsRunRequest } from "./NewsRunControl";
-import type { NewsRunFormState } from "./NewsRunControl";
+import { buildManualNewsRunRequest } from "./runLimits";
+import type { NewsRunFormState } from "./runLimits";
 
 type RowState =
   | { kind: "idle" }

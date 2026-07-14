@@ -24,10 +24,6 @@ vi.mock("../components/CrawlMethodDetail", () => ({
   CrawlMethodDetail: () => <div>方法详情</div>,
 }));
 
-vi.mock("../components/DiscoverNewsControlSection", () => ({
-  DiscoverNewsControlSection: () => <div>新闻流控制区</div>,
-}));
-
 describe("DiscoveryPage", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -50,7 +46,7 @@ describe("DiscoveryPage", () => {
     queryClient.clear();
   });
 
-  it("renders the standalone run limit card above discovery and keeps the news flow control below crawl method library", async () => {
+  it("renders the standalone run limit card above discovery without news flow controls", async () => {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
@@ -61,7 +57,9 @@ describe("DiscoveryPage", () => {
 
     const text = container.textContent ?? "";
     expect(text.indexOf("抓取限制")).toBeLessThan(text.indexOf("智能探查模块"));
-    expect(text.indexOf("抓取模块 · 爬取方式库")).toBeLessThan(text.indexOf("新闻流控制区"));
-    expect(container.querySelector("[data-testid='discover-methods-divider']")).toBeTruthy();
+    expect(text).toContain("抓取模块 · 爬取方式库");
+    expect(text).not.toContain("新闻流控制区");
+    expect(text).not.toContain("新闻处理控制");
+    expect(container.querySelector("[data-testid='discover-methods-divider']")).toBeFalsy();
   });
 });

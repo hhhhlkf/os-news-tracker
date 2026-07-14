@@ -28,11 +28,10 @@ def execute_discovery_fetch(
         prepare_fetch_recipe,
     )
     from app.extract.scrapling_extractor import ScraplingExtractor
-    from app.manual_news_run import _build_not_stored_log_fields
     from app.models import CrawlMethod, Item, Source
     from app.pipeline import Pipeline
     from app.processing.enricher import Enricher
-    from app.run_logs import append_run_log
+    from app.run_logs import append_run_log, build_not_stored_log_fields
     from app.schemas import ManualNewsRunRequest
 
     def _log(
@@ -155,7 +154,7 @@ def execute_discovery_fetch(
                         method_id=method.id,
                         title=raw.title,
                         url=raw.url,
-                        **_build_not_stored_log_fields(result),
+                        **build_not_stored_log_fields(result),
                     )
 
             last_run_status = "ok" if stored > 0 else "empty"
