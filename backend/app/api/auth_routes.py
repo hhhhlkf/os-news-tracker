@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import secrets
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -8,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
 from app.auth import create_access_token, hash_password, verify_password
+from app.config import get_settings
 from app.models import User, UserProfile
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -21,6 +24,10 @@ class RegisterRequest(BaseModel):
 
 class LoginRequest(BaseModel):
     email: str
+    password: str
+
+
+class SystemLoginRequest(BaseModel):
     password: str
 
 
@@ -68,6 +75,15 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     db.commit()
     token = create_access_token(user_id=user.id, role=user.role)
     return {"access_token": token, "token_type": "bearer", "user": _user_response(user)}
+
+
+@router.post("/system-login")
+def system_login(body: SystemLoginRequest):
+    expected = get_settings().system_access_password
+    if not expected or not secrets.compare_digest(body.password, expected):
+        raise HTTPException(status_code=401, detail="Invalid password")
+    token = create_access_token(user_id="system", role="system_admin")
+    return {"access_token": token, "token_type": "bearer", "role": "system_admin"}
 
 
 @router.get("/me")

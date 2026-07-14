@@ -13,7 +13,7 @@ from pydantic import BaseModel, HttpUrl
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import get_db, require_system_access
 from typing import Any
 
 from app.discovery.cancel import request_cancel
@@ -323,7 +323,10 @@ def list_methods(db: Session = Depends(get_db)):
 
 
 @router.get("/methods/review-pending")
-def list_pending_review_methods(db: Session = Depends(get_db)):
+def list_pending_review_methods(
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+):
     """列出待审核爬取方式。"""
     ms = db.scalars(
         select(CrawlMethod)
@@ -334,24 +337,39 @@ def list_pending_review_methods(db: Session = Depends(get_db)):
 
 
 @router.post("/methods/review/approve")
-def approve_pending_methods(body: MethodReviewBatchRequest, db: Session = Depends(get_db)):
+def approve_pending_methods(
+    body: MethodReviewBatchRequest,
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+):
     count = approve_methods(db, body.method_ids)
     return {"approved_count": count}
 
 
 @router.post("/methods/review/delete")
-def delete_pending_methods(body: MethodReviewBatchRequest, db: Session = Depends(get_db)):
+def delete_pending_methods(
+    body: MethodReviewBatchRequest,
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+):
     count = delete_methods(db, body.method_ids)
     return {"deleted_count": count}
 
 
 @router.get("/methods/review/reminder")
-def get_review_reminder_config(db: Session = Depends(get_db)):
+def get_review_reminder_config(
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+):
     return _reminder_config_response(get_or_create_reminder_config(db))
 
 
 @router.put("/methods/review/reminder")
-def update_review_reminder_config(body: ReviewReminderUpdateRequest, db: Session = Depends(get_db)):
+def update_review_reminder_config(
+    body: ReviewReminderUpdateRequest,
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+):
     config = get_or_create_reminder_config(db)
     if body.enabled is not None:
         config.enabled = body.enabled
@@ -366,7 +384,10 @@ def update_review_reminder_config(body: ReviewReminderUpdateRequest, db: Session
 
 
 @router.post("/methods/review/reminder/send-now")
-def send_review_reminder_now(db: Session = Depends(get_db)):
+def send_review_reminder_now(
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+):
     return send_review_reminder_if_due(db, force=True)
 
 
@@ -391,7 +412,12 @@ def get_method(method_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/methods/{method_id}")
-def patch_method(method_id: int, body: MethodPatch, db: Session = Depends(get_db)):
+def patch_method(
+    method_id: int,
+    body: MethodPatch,
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+):
     """禁用/启用方法（改 status）。"""
     m = db.get(CrawlMethod, method_id)
     if not m:
@@ -403,7 +429,11 @@ def patch_method(method_id: int, body: MethodPatch, db: Session = Depends(get_db
 
 
 @router.delete("/methods/{method_id}", status_code=204)
-def delete_method(method_id: int, db: Session = Depends(get_db)):
+def delete_method(
+    method_id: int,
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+):
     """删除方法 + 级联清 crawl_method_domains 映射。"""
     if not delete_crawl_method(db, method_id):
         raise HTTPException(404, "method not found")
@@ -672,7 +702,7 @@ def _prompt_set_to_response(row: DiscoveryPromptSet) -> PromptSetResponse:
 
 
 @router.get("/prompt-stages", response_model=list[PromptStageInfo])
-def list_prompt_stages():
+def list_prompt_stages(_access: dict = Depends(require_system_access)):
     """各阶段元信息 + 内置默认模版（前端"新建"预填 / 恢复默认用）。"""
     defaults = get_stage_defaults()
     return [
@@ -688,13 +718,20 @@ def list_prompt_stages():
 
 
 @router.get("/prompt-sets", response_model=list[PromptSetResponse])
-def list_prompt_sets(db: Session = Depends(get_db)):
+def list_prompt_sets(
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+):
     rows = db.scalars(select(DiscoveryPromptSet).order_by(DiscoveryPromptSet.id.desc())).all()
     return [_prompt_set_to_response(r) for r in rows]
 
 
 @router.post("/prompt-sets", response_model=PromptSetResponse, status_code=201)
-def create_prompt_set(body: PromptSetCreateRequest, db: Session = Depends(get_db)):
+def create_prompt_set(
+    body: PromptSetCreateRequest,
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+):
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(422, "名称不能为空")
@@ -709,7 +746,12 @@ def create_prompt_set(body: PromptSetCreateRequest, db: Session = Depends(get_db
 
 
 @router.put("/prompt-sets/{set_id}", response_model=PromptSetResponse)
-def update_prompt_set(set_id: int, body: PromptSetUpdateRequest, db: Session = Depends(get_db)):
+def update_prompt_set(
+    set_id: int,
+    body: PromptSetUpdateRequest,
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+):
     row = db.get(DiscoveryPromptSet, set_id)
     if row is None:
         raise HTTPException(404, "prompt set not found")
@@ -729,7 +771,11 @@ def update_prompt_set(set_id: int, body: PromptSetUpdateRequest, db: Session = D
 
 
 @router.delete("/prompt-sets/{set_id}", status_code=204)
-def delete_prompt_set(set_id: int, db: Session = Depends(get_db)):
+def delete_prompt_set(
+    set_id: int,
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+):
     row = db.get(DiscoveryPromptSet, set_id)
     if row is None:
         raise HTTPException(404, "prompt set not found")
@@ -738,7 +784,11 @@ def delete_prompt_set(set_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/prompt-sets/{set_id}/activate", response_model=PromptSetResponse)
-def activate_prompt_set(set_id: int, db: Session = Depends(get_db)):
+def activate_prompt_set(
+    set_id: int,
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+):
     """启用某一套（其余自动停用）。"""
     row = db.get(DiscoveryPromptSet, set_id)
     if row is None:
@@ -751,7 +801,11 @@ def activate_prompt_set(set_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/prompt-sets/{set_id}/deactivate", response_model=PromptSetResponse)
-def deactivate_prompt_set(set_id: int, db: Session = Depends(get_db)):
+def deactivate_prompt_set(
+    set_id: int,
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+):
     """停用某一套（回退到内置默认 prompt）。"""
     row = db.get(DiscoveryPromptSet, set_id)
     if row is None:

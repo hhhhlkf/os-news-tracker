@@ -108,10 +108,11 @@ function readExpandedState() {
   return raw == null ? true : raw === "true";
 }
 
-export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
+export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState, allowDelete = true }: {
   onOpenMethod?: (id: number) => void;
   highlightId?: number | null;
   runLimitState: NewsRunFormState;
+  allowDelete?: boolean;
 }) {
   const qc = useQueryClient();
   const [viewState, setViewState] = useState<PersistedViewState>(() => readPersistedViewState());
@@ -469,14 +470,16 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState }: {
               >
                 {batchRunning ? (batchCancelling ? "取消中…" : "取消抓取") : "抓取选中"}
               </button>
-              <button
-                type="button"
-                style={selected.size === 0 || batchRunning || batchDeleting ? btnDangerDisabled : btnDangerGhost}
-                disabled={selected.size === 0 || batchRunning || batchDeleting}
-                onClick={batchDelete}
-              >
-                {batchDeleting ? "删除中…" : "批量删除链接"}
-              </button>
+              {allowDelete && (
+                <button
+                  type="button"
+                  style={selected.size === 0 || batchRunning || batchDeleting ? btnDangerDisabled : btnDangerGhost}
+                  disabled={selected.size === 0 || batchRunning || batchDeleting}
+                  onClick={batchDelete}
+                >
+                  {batchDeleting ? "删除中…" : "批量删除链接"}
+                </button>
+              )}
             </>
           )}
           <button type="button" style={btnGhost} onClick={() => setExpanded((value) => !value)}>

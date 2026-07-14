@@ -48,7 +48,7 @@ function summarizeActiveFilters(filters: Record<string, string>): string[] {
   return chips;
 }
 
-export function HomePage() {
+export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolean }) {
   const [filters, setFilters] = useState<Record<string, string>>({ q: "", sort_by: "published_at", sort_dir: "desc" });
   const [page, setPage] = useState(1);
   const [openId, setOpenId] = useState<number | null>(null);
@@ -91,6 +91,7 @@ export function HomePage() {
   const morningCrawlQuery = useQuery({
     queryKey: ["morning-crawl"],
     queryFn: fetchMorningCrawlDashboard,
+    enabled: hasSystemAccess,
     retry: false,
     refetchInterval: (query) => (query.state.data?.is_running ? 2000 : false),
   });
@@ -329,61 +330,63 @@ export function HomePage() {
               </button>
             </div>
 
-            <div
-              style={{
-                border: "1px solid #cbd9ea",
-                background: "linear-gradient(180deg,#f7faff 0%,#ffffff 100%)",
-                borderRadius: 8,
-                padding: 14,
-                minHeight: ENTRY_CARD_MIN_HEIGHT,
-                display: "flex",
-                flexDirection: "column",
-              }}
-            >
-              <div style={{ fontSize: 14, fontWeight: 800, color: "#101828", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                系统定时抓取
-                <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "3px 8px", background: morningStatusMeta.bg, color: morningStatusMeta.color }}>
-                  {morningStatusMeta.text}
-                </span>
-              </div>
-
-              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-                <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "8px 10px" }}>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{morningDashboard?.active_method_count ?? 0}</div>
-                  <div style={{ fontSize: 11, color: "#667085", marginTop: 2 }}>爬取方式</div>
-                </div>
-                <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "8px 10px" }}>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{morningDashboard?.today_run?.stored_count ?? 0}</div>
-                  <div style={{ fontSize: 11, color: "#667085", marginTop: 2 }}>今日入库</div>
-                </div>
-              </div>
-
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#98a2b3", marginBottom: 6 }}>下次执行</div>
-              <div style={{ fontSize: 12, color: "#344054" }}>
-                {morningDashboard?.config.next_run_at
-                  ? `${morningDashboard.config.next_run_at.split("T")[0]} ${morningDashboard.config.next_run_at.split("T")[1]?.slice(0, 5) ?? ""}（北京时间）`
-                  : "未排程"}
-              </div>
-
-              <button
-                onClick={() => setMorningCrawlOpen(true)}
+            {hasSystemAccess && (
+              <div
                 style={{
-                  marginTop: "auto",
-                  paddingTop: 12,
-                  width: "100%",
-                  border: "none",
+                  border: "1px solid #cbd9ea",
+                  background: "linear-gradient(180deg,#f7faff 0%,#ffffff 100%)",
                   borderRadius: 8,
-                  padding: "8px 14px",
-                  fontSize: 12,
-                  fontWeight: 700,
-                  color: "#fff",
-                  background: "#0e7090",
-                  cursor: "pointer",
+                  padding: 14,
+                  minHeight: ENTRY_CARD_MIN_HEIGHT,
+                  display: "flex",
+                  flexDirection: "column",
                 }}
               >
-                打开系统定时抓取
-              </button>
-            </div>
+                <div style={{ fontSize: 14, fontWeight: 800, color: "#101828", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  系统定时抓取
+                  <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "3px 8px", background: morningStatusMeta.bg, color: morningStatusMeta.color }}>
+                    {morningStatusMeta.text}
+                  </span>
+                </div>
+
+                <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                  <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{morningDashboard?.active_method_count ?? 0}</div>
+                    <div style={{ fontSize: 11, color: "#667085", marginTop: 2 }}>爬取方式</div>
+                  </div>
+                  <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{morningDashboard?.today_run?.stored_count ?? 0}</div>
+                    <div style={{ fontSize: 11, color: "#667085", marginTop: 2 }}>今日入库</div>
+                  </div>
+                </div>
+
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#98a2b3", marginBottom: 6 }}>下次执行</div>
+                <div style={{ fontSize: 12, color: "#344054" }}>
+                  {morningDashboard?.config.next_run_at
+                    ? `${morningDashboard.config.next_run_at.split("T")[0]} ${morningDashboard.config.next_run_at.split("T")[1]?.slice(0, 5) ?? ""}（北京时间）`
+                    : "未排程"}
+                </div>
+
+                <button
+                  onClick={() => setMorningCrawlOpen(true)}
+                  style={{
+                    marginTop: "auto",
+                    paddingTop: 12,
+                    width: "100%",
+                    border: "none",
+                    borderRadius: 8,
+                    padding: "8px 14px",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: "#fff",
+                    background: "#0e7090",
+                    cursor: "pointer",
+                  }}
+                >
+                  打开系统定时抓取
+                </button>
+              </div>
+            )}
 
             <FacetSidebar
               facets={facets ?? { main_category: [], info_type: [], importance: [], sub_tags: [] }}
@@ -436,7 +439,7 @@ export function HomePage() {
         )}
 
         <MailTaskCenter open={mailOpen} onClose={() => setMailOpen(false)} homeFilters={params} />
-        <MorningCrawlModal open={morningCrawlOpen} onClose={() => setMorningCrawlOpen(false)} />
+        {hasSystemAccess && <MorningCrawlModal open={morningCrawlOpen} onClose={() => setMorningCrawlOpen(false)} />}
       </div>
     </div>
   );

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import get_db, require_system_access
 from app.manual_news_run import (
     get_manual_news_run_status,
     start_manual_news_run,
@@ -266,22 +266,26 @@ def item_reason(item_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/news-run")
-def get_news_run():
+def get_news_run(_access: dict = Depends(require_system_access)):
     return get_manual_news_run_status()
 
 
 @router.get("/news-run/logs")
-def get_news_run_logs(after_id: int | None = None, limit: int = Query(200, le=300)):
+def get_news_run_logs(
+    after_id: int | None = None,
+    limit: int = Query(200, le=300),
+    _access: dict = Depends(require_system_access),
+):
     return {"logs": list_run_logs(after_id=after_id, limit=limit)}
 
 
 @router.post("/news-run/start")
-def start_news_run(request: ManualNewsRunRequest):
+def start_news_run(request: ManualNewsRunRequest, _access: dict = Depends(require_system_access)):
     if not start_manual_news_run(request):
         raise HTTPException(status_code=409, detail="manual news run already active")
     return get_manual_news_run_status()
 
 
 @router.post("/news-run/stop")
-def stop_news_run():
+def stop_news_run(_access: dict = Depends(require_system_access)):
     return stop_manual_news_run()

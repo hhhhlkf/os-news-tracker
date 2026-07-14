@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     tof4_url: str | None = None
     tof4_from_email: str | None = None
     tof4_from_name: str | None = None
+    system_access_password: str = "admin"
 
 
 @lru_cache

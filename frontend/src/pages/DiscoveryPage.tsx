@@ -10,7 +10,7 @@ import { buildNewsRunFormState } from "../components/NewsRunControl";
 import { PromptStudioPanel } from "../components/PromptStudioPanel";
 import { RunLimitCard } from "../components/RunLimitCard";
 
-export function DiscoveryPage() {
+export function DiscoveryPage({ hasSystemAccess = false }: { hasSystemAccess?: boolean }) {
   const queryClient = useQueryClient();
   const [highlightId, setHighlightId] = useState<number | null>(null);
   const [openMethod, setOpenMethod] = useState<number | null>(null);
@@ -49,17 +49,26 @@ export function DiscoveryPage() {
           />
         </div>
         <DiscoveryPanel onMethodAdded={handleMethodAdded} />
-        <div ref={reviewSectionRef}>
-          <CrawlMethodReviewList highlightId={highlightId} onOpenMethod={setOpenMethod} />
-        </div>
-        <CrawlMethodList onOpenMethod={setOpenMethod} highlightId={highlightId} runLimitState={runLimitState} />
-        <PromptStudioPanel />
+        {hasSystemAccess && (
+          <div ref={reviewSectionRef}>
+            <CrawlMethodReviewList highlightId={highlightId} onOpenMethod={setOpenMethod} />
+          </div>
+        )}
+        <CrawlMethodList
+          onOpenMethod={setOpenMethod}
+          highlightId={highlightId}
+          runLimitState={runLimitState}
+          allowDelete={hasSystemAccess}
+        />
+        {hasSystemAccess && <PromptStudioPanel />}
         <MainCategoryPanel />
         <div data-testid="discover-methods-divider" style={methodsDivider} />
-        <DiscoverNewsControlSection runLimitState={runLimitState} onRunLimitStateChange={setRunLimitState} />
+        {hasSystemAccess && (
+          <DiscoverNewsControlSection runLimitState={runLimitState} onRunLimitStateChange={setRunLimitState} />
+        )}
 
         {openMethod != null && (
-          <CrawlMethodDetail methodId={openMethod} onClose={() => setOpenMethod(null)} />
+          <CrawlMethodDetail methodId={openMethod} onClose={() => setOpenMethod(null)} allowManage={hasSystemAccess} />
         )}
       </div>
     </div>

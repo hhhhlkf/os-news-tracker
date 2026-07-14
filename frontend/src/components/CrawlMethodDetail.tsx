@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CSSProperties } from "react";
 import { ApiError, deleteDiscoveryMethod, getDiscoveryMethod, patchDiscoveryMethod } from "../api/client";
 
-export function CrawlMethodDetail({ methodId, onClose }: { methodId: number; onClose: () => void }) {
+export function CrawlMethodDetail({ methodId, onClose, allowManage = false }: { methodId: number; onClose: () => void; allowManage?: boolean }) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["discovery-method", methodId], queryFn: () => getDiscoveryMethod(methodId) });
   const patchMut = useMutation({
@@ -39,14 +39,16 @@ export function CrawlMethodDetail({ methodId, onClose }: { methodId: number; onC
         )}
         {q.data && (
           <>
-            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-              <button type="button" style={btnPrimary} disabled={patchMut.isPending}
-                onClick={() => patchMut.mutate(q.data!.status === "active" ? "disabled" : "active")}>
-                {q.data.status === "active" ? "禁用" : "启用"}
-              </button>
-              <button type="button" style={btnDanger} disabled={delMut.isPending}
-                onClick={() => { if (confirm("删除该爬取方式？")) delMut.mutate(); }}>删除</button>
-            </div>
+            {allowManage && (
+              <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                <button type="button" style={btnPrimary} disabled={patchMut.isPending}
+                  onClick={() => patchMut.mutate(q.data!.status === "active" ? "disabled" : "active")}>
+                  {q.data.status === "active" ? "禁用" : "启用"}
+                </button>
+                <button type="button" style={btnDanger} disabled={delMut.isPending}
+                  onClick={() => { if (confirm("删除该爬取方式？")) delMut.mutate(); }}>删除</button>
+              </div>
+            )}
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>DSL Recipe</div>
             <pre style={{ background: "#0b1220", color: "#d0d5dd", borderRadius: 8, padding: 12, fontSize: 12, overflow: "auto", fontFamily: "JetBrains Mono, monospace" }}>
 {JSON.stringify(q.data.dsl_recipe, null, 2)}

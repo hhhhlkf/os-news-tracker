@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import get_db, require_system_access
 from app.morning_crawl.service import (
     MorningCrawlRunNotFoundError,
     config_to_response,
@@ -26,31 +26,44 @@ router = APIRouter(prefix="/system-morning-crawl", tags=["system-morning-crawl"]
 
 
 @router.get("")
-def get_system_morning_crawl(db: Session = Depends(get_db)) -> MorningCrawlDashboardResponse:
+def get_system_morning_crawl(
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+) -> MorningCrawlDashboardResponse:
     return get_morning_crawl_dashboard(db)
 
 
 @router.put("")
 def update_system_morning_crawl(
-    request: MorningCrawlConfigUpdateRequest, db: Session = Depends(get_db)
+    request: MorningCrawlConfigUpdateRequest,
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
 ) -> MorningCrawlConfigResponse:
     return config_to_response(update_morning_crawl_config(db, request))
 
 
 @router.post("/run-now", status_code=202)
-def run_system_morning_crawl_now(db: Session = Depends(get_db)) -> MorningCrawlRunSummary:
+def run_system_morning_crawl_now(
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+) -> MorningCrawlRunSummary:
     return run_to_summary(trigger_morning_crawl_async(db, trigger_type="manual"))
 
 
 @router.post("/stop")
-def stop_system_morning_crawl(db: Session = Depends(get_db)) -> MorningCrawlDashboardResponse:
+def stop_system_morning_crawl(
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+) -> MorningCrawlDashboardResponse:
     stop_morning_crawl(db)
     return get_morning_crawl_dashboard(db)
 
 
 @router.get("/runs")
 def list_system_morning_crawl_runs(
-    limit: int = Query(20, ge=1, le=100), db: Session = Depends(get_db)
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
 ) -> dict:
     return {
         "runs": list_runs(db, limit=limit),
@@ -60,7 +73,9 @@ def list_system_morning_crawl_runs(
 
 @router.get("/runs/{run_id}")
 def get_system_morning_crawl_run(
-    run_id: int, db: Session = Depends(get_db)
+    run_id: int,
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
 ) -> MorningCrawlRunDetailResponse:
     try:
         return get_run_detail(db, run_id)
