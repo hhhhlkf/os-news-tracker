@@ -18,6 +18,45 @@ import type {
 const configuredBase = import.meta.env.VITE_API_BASE?.trim();
 const BASE = configuredBase ? configuredBase.replace(/\/+$/, "") : "";
 
+function localDateDaysAgo(days: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() - days);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function resolvePublishedAfterBoundary(params: ItemQueryParams) {
+  if (!params.published_after || params.published_before) {
+    return {
+      published_after_mode: params.published_after ? "absolute" as const : "none" as const,
+      published_after_value: null,
+      published_after: params.published_after ?? null,
+    };
+  }
+
+  const relativeMatches = [
+    { days: 1, value: "24h" as const },
+    { days: 7, value: "7d" as const },
+    { days: 30, value: "30d" as const },
+  ];
+  const matched = relativeMatches.find((item) => params.published_after === localDateDaysAgo(item.days));
+  if (matched) {
+    return {
+      published_after_mode: "relative" as const,
+      published_after_value: matched.value,
+      published_after: null,
+    };
+  }
+
+  return {
+    published_after_mode: "absolute" as const,
+    published_after_value: null,
+    published_after: params.published_after,
+  };
+}
+
 async function parseErrorBody(response: Response): Promise<unknown> {
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
@@ -50,6 +89,7 @@ async function expectOk<T>(response: Response, fallbackMessage: string): Promise
 }
 
 export function buildMailFilterSnapshot(params: ItemQueryParams): MailTemplateCreateRequest["filter_snapshot"] {
+  const publishedAfter = resolvePublishedAfterBoundary(params);
   return {
     q: params.q ?? null,
     main_category: params.main_category ?? null,
@@ -58,9 +98,7 @@ export function buildMailFilterSnapshot(params: ItemQueryParams): MailTemplateCr
     sub_tag: params.sub_tag ?? null,
     sort_by: params.sort_by ?? "published_at",
     sort_dir: params.sort_dir ?? "desc",
-    published_after_mode: params.published_after ? "absolute" : "none",
-    published_after_value: null,
-    published_after: params.published_after ?? null,
+    ...publishedAfter,
     published_before_mode: params.published_before ? "absolute" : "none",
     published_before_value: null,
     published_before: params.published_before ?? null,

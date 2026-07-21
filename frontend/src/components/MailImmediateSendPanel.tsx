@@ -128,23 +128,12 @@ export function MailImmediateSendPanel(props: {
   const canSend = recipients.length > 0 && subject.trim().length > 0;
   const canSaveTemplate = subject.trim().length > 0;
   const relativeWindow = useMemo(() => {
-    const after = filterSnapshot.published_after;
-    const before = filterSnapshot.published_before;
-    if (!after || before) return null;
-
-    const afterDate = new Date(`${after}T00:00:00Z`);
-    if (Number.isNaN(afterDate.getTime())) return null;
-
-    const now = new Date();
-    const nowUtcStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-    const afterUtcStart = Date.UTC(afterDate.getUTCFullYear(), afterDate.getUTCMonth(), afterDate.getUTCDate());
-    const diffDays = Math.round((nowUtcStart - afterUtcStart) / 86400000);
-
-    if (diffDays === 1) return "最近 24h";
-    if (diffDays === 7) return "最近 7d";
-    if (diffDays === 30) return "最近 30d";
+    if (filterSnapshot.published_after_mode !== "relative") return null;
+    if (filterSnapshot.published_after_value === "24h") return "最近 24h";
+    if (filterSnapshot.published_after_value === "7d") return "最近 7d";
+    if (filterSnapshot.published_after_value === "30d") return "最近 30d";
     return null;
-  }, [filterSnapshot.published_after, filterSnapshot.published_before]);
+  }, [filterSnapshot.published_after_mode, filterSnapshot.published_after_value]);
 
   const snapshotSummary = useMemo(() => {
     const rows: Array<{ label: string; value: string }> = [];
@@ -214,6 +203,8 @@ export function MailImmediateSendPanel(props: {
     filterSnapshot.sub_tag,
     filterSnapshot.q,
     filterSnapshot.published_after,
+    filterSnapshot.published_after_mode,
+    filterSnapshot.published_after_value,
     filterSnapshot.published_before,
     relativeWindow,
     snapshotSummary,
