@@ -63,6 +63,10 @@ export interface MailPreviewItem {
   hotspots: string[];
   source_url: string;
   published_at: string | null;
+  source_name?: string | null;
+  source_quality_score?: number | null;
+  source_quality_grade?: string | null;
+  source_quality_status?: string | null;
 }
 
 export interface MailPreviewResponse {

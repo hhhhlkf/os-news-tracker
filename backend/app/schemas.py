@@ -179,6 +179,10 @@ class MailPreviewItem(BaseModel):
     hotspots: list[str] = Field(default_factory=list)
     source_url: str
     published_at: str | None = None
+    source_name: str | None = None
+    source_quality_score: int | None = None
+    source_quality_grade: str | None = None
+    source_quality_status: str | None = None
 
 
 class MailPreviewResponse(BaseModel):

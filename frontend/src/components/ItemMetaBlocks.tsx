@@ -1,3 +1,5 @@
+import type { CSSProperties } from "react";
+
 function parseTechHighlight(text: string): { keyword: string; detail: string } | null {
   const match = text.match(/^\[(.+?)\]\s*(.*)/);
   if (match) {
@@ -71,6 +73,75 @@ export function SourceCta({ url }: { url: string }) {
         {truncateLinkText(domain)}
       </span>
     </a>
+  );
+}
+
+function gradeForScore(score: number) {
+  if (score >= 85) return "A";
+  if (score >= 70) return "B";
+  if (score >= 50) return "C";
+  return "D";
+}
+
+function qualityBadgeStyle(score: number | null | undefined, status: string | null | undefined): CSSProperties {
+  const base: CSSProperties = {
+    minWidth: 58,
+    textAlign: "center",
+    borderRadius: 8,
+    padding: "4px 7px",
+    fontSize: 11,
+    fontWeight: 800,
+    lineHeight: 1.1,
+    whiteSpace: "nowrap",
+    border: "1px solid #d0d5dd",
+    color: "#475467",
+    background: "#f9fafb",
+  };
+  if (typeof score !== "number") return base;
+  if (status === "failed" || score < 50) return { ...base, border: "1px solid #fecdca", color: "#b42318", background: "#fef3f2" };
+  if (status === "weak" || score < 70) return { ...base, border: "1px solid #fedf89", color: "#b54708", background: "#fffaeb" };
+  return { ...base, border: "1px solid #abefc6", color: "#027a48", background: "#ecfdf3" };
+}
+
+export function SourceQualityMeta(props: {
+  sourceName?: string | null;
+  score?: number | null;
+  grade?: string | null;
+  status?: string | null;
+}) {
+  const { sourceName, score, status } = props;
+  const label = typeof score === "number" ? `${props.grade ?? gradeForScore(score)} ${score}` : "未审计";
+  return (
+    <div
+      title={sourceName || "来源未标注"}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        minWidth: 0,
+        maxWidth: 320,
+        padding: "6px 9px",
+        border: "1px solid #d0d5dd",
+        borderRadius: 8,
+        background: "#fff",
+        lineHeight: 1,
+      }}
+    >
+      <span
+        style={{
+          fontSize: 12,
+          color: sourceName ? "#475467" : "#98a2b3",
+          fontWeight: 700,
+          maxWidth: 190,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {sourceName || "来源未标注"}
+      </span>
+      <span style={qualityBadgeStyle(score, status)}>{label}</span>
+    </div>
   );
 }
 

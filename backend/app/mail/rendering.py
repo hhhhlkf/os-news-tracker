@@ -103,6 +103,62 @@ def _render_source_cta(url: str) -> str:
     """
 
 
+def _quality_grade_for_score(score: int | None) -> str | None:
+    if score is None:
+        return None
+    if score >= 85:
+        return "A"
+    if score >= 70:
+        return "B"
+    if score >= 50:
+        return "C"
+    return "D"
+
+
+def _render_source_quality(item: dict) -> str:
+    source_name = str(item.get("source_name") or "").strip()
+    score = item.get("source_quality_score")
+    try:
+        score_value = int(score) if score is not None else None
+    except (TypeError, ValueError):
+        score_value = None
+    status = str(item.get("source_quality_status") or "")
+    grade = str(item.get("source_quality_grade") or _quality_grade_for_score(score_value) or "")
+
+    source_html = (
+        f'<span style="font-size:12px;color:#475467;font-weight:700;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{escape(source_name)}</span>'
+        if source_name
+        else '<span style="font-size:12px;color:#98a2b3;">来源未标注</span>'
+    )
+    if score_value is None:
+        badge_style = (
+            "min-width:58px;text-align:center;border-radius:8px;padding:4px 7px;font-size:11px;"
+            "font-weight:800;line-height:1.1;white-space:nowrap;border:1px solid #d0d5dd;"
+            "color:#475467;background:#f9fafb;"
+        )
+        label = "未审计"
+    else:
+        if status == "failed" or score_value < 50:
+            colors = ("#fecdca", "#b42318", "#fef3f2")
+        elif status == "weak" or score_value < 70:
+            colors = ("#fedf89", "#b54708", "#fffaeb")
+        else:
+            colors = ("#abefc6", "#027a48", "#ecfdf3")
+        badge_style = (
+            "min-width:58px;text-align:center;border-radius:8px;padding:4px 7px;font-size:11px;"
+            f"font-weight:800;line-height:1.1;white-space:nowrap;border:1px solid {colors[0]};"
+            f"color:{colors[1]};background:{colors[2]};"
+        )
+        label = f"{grade} {score_value}".strip()
+    return (
+        '<div style="display:inline-flex;align-items:center;gap:8px;min-width:0;max-width:320px;'
+        'padding:6px 9px;border:1px solid #d0d5dd;border-radius:8px;background:#fff;line-height:1;">'
+        f"{source_html}"
+        f'<span style="{badge_style}">{escape(label)}</span>'
+        "</div>"
+    )
+
+
 def _render_tech_highlights(points: list[str]) -> str:
     visible_points = [str(point) for point in points if str(point) and not str(point).startswith("__type:")]
     if not visible_points:
@@ -137,6 +193,7 @@ def render_mail_html(context: dict) -> str:
         hotspots_html = _render_hotspot_tags([str(h) for h in (item.get("hotspots") or [])])
         key_points_html = _render_tech_highlights([str(point) for point in (item.get("key_points") or [])])
         source_cta_html = _render_source_cta(source_url) if source_url else '<div style="font-size:13px;color:#98a2b3;">暂无</div>'
+        source_quality_html = _render_source_quality(item)
         cards.append(
             f"""
             <section style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px 20px;margin-bottom:14px;">
@@ -159,7 +216,10 @@ def render_mail_html(context: dict) -> str:
                 </div>
                 <div>
                   <strong style="color:#101828;display:block;margin-bottom:6px;">来源链接</strong>
-                  {source_cta_html}
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    {source_cta_html}
+                    {source_quality_html}
+                  </div>
                 </div>
               </div>
             </section>

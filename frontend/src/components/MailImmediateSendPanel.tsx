@@ -9,7 +9,7 @@ import {
 } from "../mail/api";
 import type { MailImmediateSendRequest, MailPreviewResponse, MailProviderKind, MailTemplate } from "../mail/types";
 import { ImportanceBadge } from "./ImportanceBadge";
-import { formatDateYmd, HotspotTags, SourceCta, TechHighlightsList } from "./ItemMetaBlocks";
+import { formatDateYmd, HotspotTags, SourceCta, SourceQualityMeta, TechHighlightsList } from "./ItemMetaBlocks";
 
 export function MailImmediateSendPanel(props: {
   homeFilters: ItemQueryParams;
@@ -462,7 +462,15 @@ export function MailImmediateSendPanel(props: {
                   </div>
                   <div>
                     <strong style={{ color: "#101828", display: "block", marginBottom: 6 }}>来源链接</strong>
-                    <SourceCta url={item.source_url} />
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <SourceCta url={item.source_url} />
+                      <SourceQualityMeta
+                        sourceName={item.source_name}
+                        score={item.source_quality_score}
+                        grade={item.source_quality_grade}
+                        status={item.source_quality_status}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>

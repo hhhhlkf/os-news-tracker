@@ -4,7 +4,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import Item, ItemTag, MailDelivery, MailSchedule, MailTemplate, Tag
+from app.models import CrawlMethod, Item, ItemTag, MailDelivery, MailSchedule, MailTemplate, Source, Tag
 from app.schemas import (
     MailFilterSnapshot,
     MailImmediatePreviewRequest,
@@ -335,9 +335,49 @@ class MailService:
                 deduped.append(hotspot)
         return deduped[:5]
 
+    @staticmethod
+    def _method_overall_score(method: CrawlMethod | None) -> int | None:
+        if method is None:
+            return None
+        if method.overall_score is not None:
+            return method.overall_score
+        if method.quality_score is None:
+            return None
+        density_score = method.density_score if method.density_score is not None else method.quality_score
+        return int(round(method.quality_score * 0.5 + density_score * 0.5))
+
+    @staticmethod
+    def _grade_for_score(score: int | None) -> str | None:
+        if score is None:
+            return None
+        if score >= 85:
+            return "A"
+        if score >= 70:
+            return "B"
+        if score >= 50:
+            return "C"
+        return "D"
+
+    def _source_quality_for_item(self, item: Item) -> dict[str, str | int | None]:
+        source = item.source or self._db.get(Source, item.source_id)
+        method = self._db.scalar(
+            select(CrawlMethod)
+            .where(CrawlMethod.source_id == item.source_id)
+            .order_by(CrawlMethod.id.desc())
+            .limit(1)
+        )
+        score = self._method_overall_score(method)
+        return {
+            "source_name": source.name if source is not None else None,
+            "source_quality_score": score,
+            "source_quality_grade": self._grade_for_score(score),
+            "source_quality_status": method.quality_audit_status if method is not None else None,
+        }
+
     def _build_preview_items(self, items: list[Item]) -> list[MailPreviewItem]:
         preview_items: list[MailPreviewItem] = []
         for item in items:
+            source_quality = self._source_quality_for_item(item)
             preview_items.append(
                 MailPreviewItem(
                     # 与主界面 ItemCard 一致：优先展示中文标题 title_tldr，缺失时回退原文 title
@@ -349,6 +389,7 @@ class MailService:
                     hotspots=self._extract_hotspots(item),
                     source_url=item.url,
                     published_at=item.published_at.isoformat() if item.published_at else None,
+                    **source_quality,
                 )
             )
         return preview_items

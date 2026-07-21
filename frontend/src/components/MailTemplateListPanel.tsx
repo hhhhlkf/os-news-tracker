@@ -9,7 +9,7 @@ import {
   updateMailTemplate,
 } from "../mail/api";
 import type { MailFilterSnapshot, MailPreviewResponse, MailProviderKind, MailTemplate } from "../mail/types";
-import { formatDateYmd, HotspotTags, SourceCta, TechHighlightsList } from "./ItemMetaBlocks";
+import { formatDateYmd, HotspotTags, SourceCta, SourceQualityMeta, TechHighlightsList } from "./ItemMetaBlocks";
 
 function formatMultiFilter(raw: string | null | undefined): string {
   if (!raw) return "";
@@ -264,7 +264,15 @@ export function MailTemplateListPanel(props: {
                       <div><strong style={{ color: "#101828" }}>摘要：</strong>{item.summary ?? "暂无"}</div>
                       <TechHighlightsList items={item.key_points} compact />
                       <HotspotTags tags={item.hotspots} />
-                      <SourceCta url={item.source_url} />
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <SourceCta url={item.source_url} />
+                        <SourceQualityMeta
+                          sourceName={item.source_name}
+                          score={item.source_quality_score}
+                          grade={item.source_quality_grade}
+                          status={item.source_quality_status}
+                        />
+                      </div>
                     </div>
                   </div>
                 ))
