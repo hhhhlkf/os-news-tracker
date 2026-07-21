@@ -32,6 +32,29 @@ const FILTER_LABELS: Array<{ key: string; label: string }> = [
   { key: "sub_tag", label: "热点" },
 ];
 
+function localDateDaysAgo(days: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() - days);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function summarizeTimeFilter(filters: Record<string, string>): string | null {
+  const after = filters.published_after;
+  const before = filters.published_before;
+  if (!after && !before) return null;
+  if (after && !before) {
+    if (after === localDateDaysAgo(1)) return "时间：最近 24h";
+    if (after === localDateDaysAgo(7)) return "时间：最近 7d";
+    if (after === localDateDaysAgo(30)) return "时间：最近 30d";
+  }
+  const from = after || "不限";
+  const to = before || "至今";
+  return `时间：${from} ~ ${to}`;
+}
+
 function summarizeActiveFilters(filters: Record<string, string>): string[] {
   const chips: string[] = [];
   for (const { key, label } of FILTER_LABELS) {
@@ -40,10 +63,9 @@ function summarizeActiveFilters(filters: Record<string, string>): string[] {
     const display = value.includes(",") ? value.split(",").map((part) => part.trim()).filter(Boolean).join(" / ") : value;
     chips.push(`${label}：${display}`);
   }
-  if (filters.published_after || filters.published_before) {
-    const from = filters.published_after || "不限";
-    const to = filters.published_before || "至今";
-    chips.push(`时间：${from} ~ ${to}`);
+  const timeSummary = summarizeTimeFilter(filters);
+  if (timeSummary) {
+    chips.push(timeSummary);
   }
   return chips;
 }
