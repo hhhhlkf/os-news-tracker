@@ -148,6 +148,12 @@ def list_items(
     published_before_mode: BoundaryMode | None = None,
     published_before_value: RelativeRange | None = None,
     published_before: str | None = None,
+    fetched_after_mode: BoundaryMode | None = None,
+    fetched_after_value: RelativeRange | None = None,
+    fetched_after: str | None = None,
+    fetched_before_mode: BoundaryMode | None = None,
+    fetched_before_value: RelativeRange | None = None,
+    fetched_before: str | None = None,
 ):
     stmt = select(Item)
     main_categories = _split_filter_values(main_category)
@@ -193,6 +199,26 @@ def list_items(
     )
     if before_boundary is not None:
         stmt = stmt.where(Item.published_at < before_boundary)
+
+    fetched_after_boundary = _resolve_time_boundary(
+        mode=fetched_after_mode,
+        value=fetched_after_value,
+        absolute_date=fetched_after,
+        inclusive_end=False,
+        field_name="fetched_after",
+    )
+    if fetched_after_boundary is not None:
+        stmt = stmt.where(Item.fetched_at >= fetched_after_boundary)
+
+    fetched_before_boundary = _resolve_time_boundary(
+        mode=fetched_before_mode,
+        value=fetched_before_value,
+        absolute_date=fetched_before,
+        inclusive_end=True,
+        field_name="fetched_before",
+    )
+    if fetched_before_boundary is not None:
+        stmt = stmt.where(Item.fetched_at < fetched_before_boundary)
 
     sort_col = Item.published_at if sort_by == "published_at" else Item.fetched_at
     if sort_dir == "desc":

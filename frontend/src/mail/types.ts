@@ -18,6 +18,12 @@ export interface MailFilterSnapshot {
   published_before_mode?: MailBoundaryMode;
   published_before_value?: MailRelativeRange | null;
   published_before?: string | null;
+  fetched_after_mode?: MailBoundaryMode;
+  fetched_after_value?: MailRelativeRange | null;
+  fetched_after?: string | null;
+  fetched_before_mode?: MailBoundaryMode;
+  fetched_before_value?: MailRelativeRange | null;
+  fetched_before?: string | null;
 }
 
 export interface MailTemplate {

@@ -124,6 +124,28 @@ export function buildMailFilterSnapshot(params: ItemQueryParams): MailTemplateCr
         ? params.published_before_value
         : null,
     published_before: params.published_before ?? null,
+    fetched_after_mode:
+      params.fetched_after_mode === "relative" && params.fetched_after_value
+        ? "relative"
+        : params.fetched_after
+          ? "absolute"
+          : "none",
+    fetched_after_value:
+      params.fetched_after_mode === "relative" && params.fetched_after_value
+        ? params.fetched_after_value
+        : null,
+    fetched_after: params.fetched_after ?? null,
+    fetched_before_mode:
+      params.fetched_before_mode === "relative" && params.fetched_before_value
+        ? "relative"
+        : params.fetched_before
+          ? "absolute"
+          : "none",
+    fetched_before_value:
+      params.fetched_before_mode === "relative" && params.fetched_before_value
+        ? params.fetched_before_value
+        : null,
+    fetched_before: params.fetched_before ?? null,
   };
 }
 

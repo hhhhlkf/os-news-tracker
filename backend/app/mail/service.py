@@ -243,7 +243,16 @@ class MailService:
             error_message=delivery.error_message,
         )
 
-    def _resolve_datetime_boundaries(self, snapshot: MailFilterSnapshot) -> tuple[datetime | None, datetime | None]:
+    def _resolve_datetime_boundaries(
+        self,
+        *,
+        after_mode: str,
+        after_value: str | None,
+        after_date_value: str | None,
+        before_mode: str,
+        before_value: str | None,
+        before_date_value: str | None,
+    ) -> tuple[datetime | None, datetime | None]:
         now = datetime.now(timezone.utc)
 
         def _relative_delta(value: str | None) -> timedelta | None:
@@ -256,20 +265,20 @@ class MailService:
             return None
 
         after: datetime | None = None
-        if snapshot.published_after_mode == "absolute" and snapshot.published_after:
-            after_date = date.fromisoformat(snapshot.published_after)
+        if after_mode == "absolute" and after_date_value:
+            after_date = date.fromisoformat(after_date_value)
             after = datetime(after_date.year, after_date.month, after_date.day, tzinfo=timezone.utc)
-        elif snapshot.published_after_mode == "relative":
-            delta = _relative_delta(snapshot.published_after_value)
+        elif after_mode == "relative":
+            delta = _relative_delta(after_value)
             if delta is not None:
                 after = now - delta
 
         before: datetime | None = None
-        if snapshot.published_before_mode == "absolute" and snapshot.published_before:
-            before_date = date.fromisoformat(snapshot.published_before)
+        if before_mode == "absolute" and before_date_value:
+            before_date = date.fromisoformat(before_date_value)
             before = datetime(before_date.year, before_date.month, before_date.day, tzinfo=timezone.utc) + timedelta(days=1)
-        elif snapshot.published_before_mode == "relative":
-            delta = _relative_delta(snapshot.published_before_value)
+        elif before_mode == "relative":
+            delta = _relative_delta(before_value)
             if delta is not None:
                 before = now - delta
 
@@ -312,11 +321,31 @@ class MailService:
             like = f"%{snapshot.q}%"
             stmt = stmt.where((Item.title.ilike(like)) | (Item.summary.ilike(like)))
 
-        after, before = self._resolve_datetime_boundaries(snapshot)
-        if after is not None:
-            stmt = stmt.where(Item.published_at >= after)
-        if before is not None:
-            stmt = stmt.where(Item.published_at < before)
+        published_after, published_before = self._resolve_datetime_boundaries(
+            after_mode=snapshot.published_after_mode,
+            after_value=snapshot.published_after_value,
+            after_date_value=snapshot.published_after,
+            before_mode=snapshot.published_before_mode,
+            before_value=snapshot.published_before_value,
+            before_date_value=snapshot.published_before,
+        )
+        if published_after is not None:
+            stmt = stmt.where(Item.published_at >= published_after)
+        if published_before is not None:
+            stmt = stmt.where(Item.published_at < published_before)
+
+        fetched_after, fetched_before = self._resolve_datetime_boundaries(
+            after_mode=snapshot.fetched_after_mode,
+            after_value=snapshot.fetched_after_value,
+            after_date_value=snapshot.fetched_after,
+            before_mode=snapshot.fetched_before_mode,
+            before_value=snapshot.fetched_before_value,
+            before_date_value=snapshot.fetched_before,
+        )
+        if fetched_after is not None:
+            stmt = stmt.where(Item.fetched_at >= fetched_after)
+        if fetched_before is not None:
+            stmt = stmt.where(Item.fetched_at < fetched_before)
         return stmt
 
     def _fetch_items_for_snapshot(self, snapshot: MailFilterSnapshot, *, limit: int = 100) -> list[Item]:

@@ -36,11 +36,18 @@ function summarizeFilter(snapshot: MailFilterSnapshot): string {
   if (subTag) segments.push(subTag);
   if (snapshot.q) segments.push(`“${snapshot.q}”`);
   if (snapshot.published_after_mode === "relative" && snapshot.published_after_value) {
-    segments.push(`最近 ${snapshot.published_after_value}`);
+    segments.push(`发布时间最近 ${snapshot.published_after_value}`);
   } else if (snapshot.published_after || snapshot.published_before) {
     const after = snapshot.published_after ? `从 ${snapshot.published_after}` : "";
     const before = snapshot.published_before ? `到 ${snapshot.published_before}` : "";
-    segments.push(`${after}${after && before ? " " : ""}${before}`.trim());
+    segments.push(`发布时间${after}${after && before ? " " : ""}${before}`.trim());
+  }
+  if (snapshot.fetched_after_mode === "relative" && snapshot.fetched_after_value) {
+    segments.push(`查询时间最近 ${snapshot.fetched_after_value}`);
+  } else if (snapshot.fetched_after || snapshot.fetched_before) {
+    const after = snapshot.fetched_after ? `从 ${snapshot.fetched_after}` : "";
+    const before = snapshot.fetched_before ? `到 ${snapshot.fetched_before}` : "";
+    segments.push(`查询时间${after}${after && before ? " " : ""}${before}`.trim());
   }
   return segments.length > 0 ? segments.join(" · ") : "全部时间 · 无附加筛选";
 }

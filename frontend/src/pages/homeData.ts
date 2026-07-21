@@ -70,6 +70,40 @@ function relativeBoundaryIso(value: string | undefined): string | null {
   return null;
 }
 
+function matchesTimeRange(
+  value: string | null | undefined,
+  filters: Record<string, string>,
+  prefix: "published" | "fetched",
+): boolean {
+  const relativeAfter = filters[`${prefix}_after_mode`] === "relative"
+    ? relativeBoundaryIso(filters[`${prefix}_after_value`])
+    : null;
+  const after = filters[`${prefix}_after`];
+  const before = filters[`${prefix}_before`];
+  const hasTimeFilter = !!(relativeAfter || after || before);
+  if (!hasTimeFilter) {
+    return true;
+  }
+  if (!value) {
+    return false;
+  }
+  if (relativeAfter && value < relativeAfter) {
+    return false;
+  }
+  if (!relativeAfter && after && value < after) {
+    return false;
+  }
+  if (before) {
+    const beforeDate = new Date(before + "T00:00:00Z");
+    beforeDate.setDate(beforeDate.getDate() + 1);
+    const upperBound = beforeDate.toISOString();
+    if (value >= upperBound) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function filterDemoItems(items: ItemDetail[], filters: Record<string, string>): ItemDetail[] {
   const q = normalize(filters.q);
 
@@ -103,38 +137,10 @@ export function filterDemoItems(items: ItemDetail[], filters: Record<string, str
       selectedSubTags.length === 0
       || item.sub_tags.some((tag) => selectedSubTags.includes(tag));
 
-    // Time-range filtering on published_at
-    const relativeAfter = filters.published_after_mode === "relative"
-      ? relativeBoundaryIso(filters.published_after_value)
-      : null;
-    const hasTimeFilter = !!(relativeAfter || filters.published_after || filters.published_before);
-    let matchesTimeRange = true;
-    if (hasTimeFilter) {
-      if (!item.published_at) {
-        matchesTimeRange = false; // exclude items with null published_at when time filter is active
-      } else {
-        if (relativeAfter) {
-          if (item.published_at < relativeAfter) {
-            matchesTimeRange = false;
-          }
-        } else if (filters.published_after) {
-          if (item.published_at < filters.published_after) {
-            matchesTimeRange = false;
-          }
-        }
-        if (filters.published_before) {
-          // published_before is inclusive: compute next day as upper bound
-          const beforeDate = new Date(filters.published_before + "T00:00:00Z");
-          beforeDate.setDate(beforeDate.getDate() + 1);
-          const upperBound = beforeDate.toISOString();
-          if (item.published_at >= upperBound) {
-            matchesTimeRange = false;
-          }
-        }
-      }
-    }
+    const matchesPublishedTime = matchesTimeRange(item.published_at, filters, "published");
+    const matchesFetchedTime = matchesTimeRange(item.fetched_at, filters, "fetched");
 
-    return matchesSearch && matchesCategory && matchesType && matchesImportance && matchesSubTag && matchesTimeRange;
+    return matchesSearch && matchesCategory && matchesType && matchesImportance && matchesSubTag && matchesPublishedTime && matchesFetchedTime;
   });
 
   const sortBy: SortBy = (filters.sort_by as SortBy) ?? "published_at";

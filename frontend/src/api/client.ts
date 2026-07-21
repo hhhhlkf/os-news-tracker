@@ -63,6 +63,12 @@ export interface ItemQueryParams {
   published_before_mode?: "none" | "absolute" | "relative";
   published_before_value?: "24h" | "7d" | "30d";
   published_before?: string;
+  fetched_after_mode?: "none" | "absolute" | "relative";
+  fetched_after_value?: "24h" | "7d" | "30d";
+  fetched_after?: string;
+  fetched_before_mode?: "none" | "absolute" | "relative";
+  fetched_before_value?: "24h" | "7d" | "30d";
+  fetched_before?: string;
 }
 
 async function parseErrorBody(response: Response): Promise<unknown> {

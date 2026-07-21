@@ -10,7 +10,7 @@ interface Props {
 
 type TimePreset = "all" | "24h" | "7d" | "30d" | "custom";
 
-const HOTSPOT_SCROLL_HEIGHT = 164;
+const HOTSPOT_SCROLL_HEIGHT = 112;
 
 export function getFacetFilterKey(key: keyof Facets): string {
   return key === "sub_tags" ? "sub_tag" : key;
@@ -49,17 +49,26 @@ export function toggleFacetValue(raw: string | undefined | null, value: string):
 
 export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
   const [customExpanded, setCustomExpanded] = useState(false);
+  const [queryCustomExpanded, setQueryCustomExpanded] = useState(false);
 
-  const activePreset: TimePreset = useMemo(() => {
-    const afterMode = selected.published_after_mode;
-    const afterValue = selected.published_after_value;
-    const hasAbsoluteRange = !!(selected.published_after || selected.published_before);
-    if (afterMode === "relative" && afterValue === "24h" && !selected.published_before) return "24h";
-    if (afterMode === "relative" && afterValue === "7d" && !selected.published_before) return "7d";
-    if (afterMode === "relative" && afterValue === "30d" && !selected.published_before) return "30d";
-    if (!hasAbsoluteRange && !afterMode && !afterValue && !selected.published_before_mode && !selected.published_before_value) return "all";
+  function resolveTimePreset(prefix: "published" | "fetched"): TimePreset {
+    const afterMode = selected[`${prefix}_after_mode`];
+    const afterValue = selected[`${prefix}_after_value`];
+    const hasAbsoluteRange = !!(selected[`${prefix}_after`] || selected[`${prefix}_before`]);
+    if (afterMode === "relative" && afterValue === "24h" && !selected[`${prefix}_before`]) return "24h";
+    if (afterMode === "relative" && afterValue === "7d" && !selected[`${prefix}_before`]) return "7d";
+    if (afterMode === "relative" && afterValue === "30d" && !selected[`${prefix}_before`]) return "30d";
+    if (
+      !hasAbsoluteRange
+      && !afterMode
+      && !afterValue
+      && !selected[`${prefix}_before_mode`]
+      && !selected[`${prefix}_before_value`]
+    ) return "all";
     return "custom";
-  }, [
+  }
+
+  const activePreset: TimePreset = useMemo(() => resolveTimePreset("published"), [
     selected.published_after,
     selected.published_after_mode,
     selected.published_after_value,
@@ -68,43 +77,61 @@ export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
     selected.published_before_value,
   ]);
 
-  function handlePresetClick(preset: TimePreset) {
+  const activeQueryPreset: TimePreset = useMemo(() => resolveTimePreset("fetched"), [
+    selected.fetched_after,
+    selected.fetched_after_mode,
+    selected.fetched_after_value,
+    selected.fetched_before,
+    selected.fetched_before_mode,
+    selected.fetched_before_value,
+  ]);
+
+  function handleTimePresetClick(prefix: "published" | "fetched", preset: TimePreset) {
+    const setExpanded = prefix === "published" ? setCustomExpanded : setQueryCustomExpanded;
     if (preset === "all") {
-      onSelect("published_after_mode", "");
-      onSelect("published_after_value", "");
-      onSelect("published_after", "");
-      onSelect("published_before_mode", "");
-      onSelect("published_before_value", "");
-      onSelect("published_before", "");
-      setCustomExpanded(false);
+      onSelect(`${prefix}_after_mode`, "");
+      onSelect(`${prefix}_after_value`, "");
+      onSelect(`${prefix}_after`, "");
+      onSelect(`${prefix}_before_mode`, "");
+      onSelect(`${prefix}_before_value`, "");
+      onSelect(`${prefix}_before`, "");
+      setExpanded(false);
     } else if (preset === "24h") {
-      onSelect("published_after_mode", "relative");
-      onSelect("published_after_value", "24h");
-      onSelect("published_after", "");
-      onSelect("published_before_mode", "");
-      onSelect("published_before_value", "");
-      onSelect("published_before", "");
-      setCustomExpanded(false);
+      onSelect(`${prefix}_after_mode`, "relative");
+      onSelect(`${prefix}_after_value`, "24h");
+      onSelect(`${prefix}_after`, "");
+      onSelect(`${prefix}_before_mode`, "");
+      onSelect(`${prefix}_before_value`, "");
+      onSelect(`${prefix}_before`, "");
+      setExpanded(false);
     } else if (preset === "7d") {
-      onSelect("published_after_mode", "relative");
-      onSelect("published_after_value", "7d");
-      onSelect("published_after", "");
-      onSelect("published_before_mode", "");
-      onSelect("published_before_value", "");
-      onSelect("published_before", "");
-      setCustomExpanded(false);
+      onSelect(`${prefix}_after_mode`, "relative");
+      onSelect(`${prefix}_after_value`, "7d");
+      onSelect(`${prefix}_after`, "");
+      onSelect(`${prefix}_before_mode`, "");
+      onSelect(`${prefix}_before_value`, "");
+      onSelect(`${prefix}_before`, "");
+      setExpanded(false);
     } else if (preset === "30d") {
-      onSelect("published_after_mode", "relative");
-      onSelect("published_after_value", "30d");
-      onSelect("published_after", "");
-      onSelect("published_before_mode", "");
-      onSelect("published_before_value", "");
-      onSelect("published_before", "");
-      setCustomExpanded(false);
+      onSelect(`${prefix}_after_mode`, "relative");
+      onSelect(`${prefix}_after_value`, "30d");
+      onSelect(`${prefix}_after`, "");
+      onSelect(`${prefix}_before_mode`, "");
+      onSelect(`${prefix}_before_value`, "");
+      onSelect(`${prefix}_before`, "");
+      setExpanded(false);
     } else {
       // custom — toggle expansion
-      setCustomExpanded((prev) => !prev);
+      setExpanded((prev) => !prev);
     }
+  }
+
+  function handlePresetClick(preset: TimePreset) {
+    handleTimePresetClick("published", preset);
+  }
+
+  function handleQueryPresetClick(preset: TimePreset) {
+    handleTimePresetClick("fetched", preset);
   }
 
   if (isLoading) {
@@ -257,6 +284,84 @@ export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
                   onSelect("published_before_mode", e.target.value ? "absolute" : "");
                   onSelect("published_before_value", "");
                   onSelect("published_before", e.target.value);
+                }}
+                style={{
+                  border: "1px solid #d0d5dd",
+                  borderRadius: 8,
+                  padding: "10px 12px",
+                  fontSize: 14,
+                  color: "#101828",
+                  background: "#fff",
+                  minWidth: 160,
+                }}
+              />
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* ── Query time filter ── */}
+      <section
+        style={{
+          marginBottom: 16,
+          border: "1px solid #d0d5dd",
+          borderRadius: 8,
+          padding: 14,
+          background: "#fff",
+        }}
+      >
+        <div style={{ fontWeight: 600, marginBottom: 10, color: "#101828" }}>查询时间</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: queryCustomExpanded ? 12 : 0 }}>
+          {presets.map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => handleQueryPresetClick(key)}
+              style={{
+                border: "1px solid #d0d5dd",
+                borderRadius: 6,
+                padding: "6px 10px",
+                fontSize: 12,
+                cursor: "pointer",
+                background: activeQueryPreset === key ? "#eff8ff" : "transparent",
+                color: activeQueryPreset === key ? "#175cd3" : "#344054",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {queryCustomExpanded && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{ color: "#475467", fontSize: 13 }}>开始日期</label>
+              <input
+                type="date"
+                value={selected.fetched_after ?? ""}
+                onChange={(e) => {
+                  onSelect("fetched_after_mode", e.target.value ? "absolute" : "");
+                  onSelect("fetched_after_value", "");
+                  onSelect("fetched_after", e.target.value);
+                }}
+                style={{
+                  border: "1px solid #d0d5dd",
+                  borderRadius: 8,
+                  padding: "10px 12px",
+                  fontSize: 14,
+                  color: "#101828",
+                  background: "#fff",
+                  minWidth: 160,
+                }}
+              />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{ color: "#475467", fontSize: 13 }}>结束日期</label>
+              <input
+                type="date"
+                value={selected.fetched_before ?? ""}
+                onChange={(e) => {
+                  onSelect("fetched_before_mode", e.target.value ? "absolute" : "");
+                  onSelect("fetched_before_value", "");
+                  onSelect("fetched_before", e.target.value);
                 }}
                 style={{
                   border: "1px solid #d0d5dd",

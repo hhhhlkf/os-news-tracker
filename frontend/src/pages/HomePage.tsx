@@ -41,23 +41,25 @@ function localDateDaysAgo(days: number): string {
   return `${year}-${month}-${day}`;
 }
 
-function summarizeTimeFilter(filters: Record<string, string>): string | null {
-  if (filters.published_after_mode === "relative" && filters.published_after_value) {
-    if (filters.published_after_value === "24h") return "时间：最近 24h";
-    if (filters.published_after_value === "7d") return "时间：最近 7d";
-    if (filters.published_after_value === "30d") return "时间：最近 30d";
+function summarizeTimeFilter(filters: Record<string, string>, prefix: "published" | "fetched", label: string): string | null {
+  const afterMode = filters[`${prefix}_after_mode`];
+  const afterValue = filters[`${prefix}_after_value`];
+  if (afterMode === "relative" && afterValue) {
+    if (afterValue === "24h") return `${label}：最近 24h`;
+    if (afterValue === "7d") return `${label}：最近 7d`;
+    if (afterValue === "30d") return `${label}：最近 30d`;
   }
-  const after = filters.published_after;
-  const before = filters.published_before;
+  const after = filters[`${prefix}_after`];
+  const before = filters[`${prefix}_before`];
   if (!after && !before) return null;
   if (after && !before) {
-    if (after === localDateDaysAgo(1)) return "时间：最近 24h";
-    if (after === localDateDaysAgo(7)) return "时间：最近 7d";
-    if (after === localDateDaysAgo(30)) return "时间：最近 30d";
+    if (after === localDateDaysAgo(1)) return `${label}：最近 24h`;
+    if (after === localDateDaysAgo(7)) return `${label}：最近 7d`;
+    if (after === localDateDaysAgo(30)) return `${label}：最近 30d`;
   }
   const from = after || "不限";
   const to = before || "至今";
-  return `时间：${from} ~ ${to}`;
+  return `${label}：${from} ~ ${to}`;
 }
 
 function summarizeActiveFilters(filters: Record<string, string>): string[] {
@@ -68,11 +70,42 @@ function summarizeActiveFilters(filters: Record<string, string>): string[] {
     const display = value.includes(",") ? value.split(",").map((part) => part.trim()).filter(Boolean).join(" / ") : value;
     chips.push(`${label}：${display}`);
   }
-  const timeSummary = summarizeTimeFilter(filters);
+  const timeSummary = summarizeTimeFilter(filters, "published", "发布时间");
   if (timeSummary) {
     chips.push(timeSummary);
   }
+  const fetchedSummary = summarizeTimeFilter(filters, "fetched", "查询时间");
+  if (fetchedSummary) {
+    chips.push(fetchedSummary);
+  }
   return chips;
+}
+
+function hasTimeFilter(filters: Record<string, string>, prefix: "published" | "fetched"): boolean {
+  return !!(
+    filters[`${prefix}_after_mode`]
+    || filters[`${prefix}_after_value`]
+    || filters[`${prefix}_after`]
+    || filters[`${prefix}_before_mode`]
+    || filters[`${prefix}_before_value`]
+    || filters[`${prefix}_before`]
+  );
+}
+
+function countActiveFilters(filters: Record<string, string>): number {
+  let count = 0;
+  for (const { key } of FILTER_LABELS) {
+    if (filters[key]) {
+      count += 1;
+    }
+  }
+  if (hasTimeFilter(filters, "published")) {
+    count += 1;
+  }
+  if (hasTimeFilter(filters, "fetched")) {
+    count += 1;
+  }
+  return count;
 }
 
 export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolean }) {
@@ -141,7 +174,7 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
   const selectedLiveItemId = mode === "live" ? openId ?? undefined : undefined;
 
   const hasLiveEmptyState = mode === "live" && listData?.total === 0;
-  const activeFilterCount = Object.entries(filters).filter(([key, value]) => value && key !== "sort_by" && key !== "sort_dir").length;
+  const activeFilterCount = countActiveFilters(filters);
   const filterChips = summarizeActiveFilters(filters);
   const templateCount = mailTemplatesQuery.data?.length ?? 0;
   const scheduleCount = mailSchedulesQuery.data?.length ?? 0;
@@ -158,6 +191,7 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
   const morningDashboard = morningCrawlQuery.data;
   const morningStatus = morningDashboard?.today_status ?? "not_run";
   const morningStatusMeta = MORNING_STATUS_META[morningStatus] ?? MORNING_STATUS_META.not_run;
+
   return (
     <div style={{ minHeight: "100vh", background: "#f5f7fb" }}>
       <div style={{ maxWidth: 1280, margin: "0 auto", padding: 24 }}>
@@ -283,7 +317,15 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
         </section>
 
         <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
-          <div style={{ width: 260, flexShrink: 0, display: "grid", gap: 16 }}>
+          <div
+            style={{
+              width: 260,
+              flexShrink: 0,
+              display: "grid",
+              gap: 16,
+              alignContent: "start",
+            }}
+          >
             <div
               style={{
                 border: "1px solid #bfd7ff",

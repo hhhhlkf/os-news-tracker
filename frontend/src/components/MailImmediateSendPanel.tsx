@@ -16,15 +16,6 @@ export function MailImmediateSendPanel(props: {
   onTemplateSaved?: (template: MailTemplate) => void;
 }) {
   const { homeFilters, onTemplateSaved } = props;
-  const filterSnapshot = useMemo(() => buildMailFilterSnapshot(homeFilters), [homeFilters]);
-  const estimateParams = useMemo(
-    () => ({
-      ...homeFilters,
-      limit: 1,
-      offset: 0,
-    }),
-    [homeFilters],
-  );
   const [subject, setSubject] = useState("技术新闻筛选简报");
   const [recipientsText, setRecipientsText] = useState("");
   const [sendTime, setSendTime] = useState("09:00");
@@ -34,6 +25,18 @@ export function MailImmediateSendPanel(props: {
   const [previewData, setPreviewData] = useState<MailPreviewResponse | null>(null);
   const [previewHeight, setPreviewHeight] = useState<number>(620);
   const leftColumnRef = useRef<HTMLDivElement | null>(null);
+
+  const filterSnapshot = useMemo(() => buildMailFilterSnapshot(homeFilters), [homeFilters]);
+
+  const estimateParams = useMemo(
+    () => ({
+      ...homeFilters,
+      limit: 1,
+      offset: 0,
+    }),
+    [homeFilters],
+  );
+
   const estimateQuery = useQuery({
     queryKey: ["mail-immediate-estimate", estimateParams],
     queryFn: () => fetchItems(estimateParams),
@@ -136,6 +139,14 @@ export function MailImmediateSendPanel(props: {
     return null;
   }, [filterSnapshot.published_after_mode, filterSnapshot.published_after_value]);
 
+  const queryTimeWindow = useMemo(() => {
+    if (filterSnapshot.fetched_after_mode !== "relative") return null;
+    if (filterSnapshot.fetched_after_value === "24h") return "最近 24h";
+    if (filterSnapshot.fetched_after_value === "7d") return "最近 7天";
+    if (filterSnapshot.fetched_after_value === "30d") return "最近 30天";
+    return null;
+  }, [filterSnapshot.fetched_after_mode, filterSnapshot.fetched_after_value]);
+
   const snapshotSummary = useMemo(() => {
     const rows: Array<{ label: string; value: string }> = [];
     if (filterSnapshot.q) {
@@ -173,12 +184,26 @@ export function MailImmediateSendPanel(props: {
       rows.push({ label: "窗口说明", value: `发送时按当下时间重算 ${relativeWindow.replace("最近 ", "")} 窗口` });
     }
 
+    let fetchedLabel = "全部时间";
+    if (queryTimeWindow) {
+      fetchedLabel = queryTimeWindow;
+    } else if (filterSnapshot.fetched_after || filterSnapshot.fetched_before) {
+      const afterLabel = filterSnapshot.fetched_after ? `从 ${filterSnapshot.fetched_after}` : "";
+      const beforeLabel = filterSnapshot.fetched_before ? `到 ${filterSnapshot.fetched_before}` : "";
+      fetchedLabel = `${afterLabel}${afterLabel && beforeLabel ? " " : ""}${beforeLabel}`.trim();
+    }
+    rows.push({ label: "查询时间", value: fetchedLabel });
+
+    if (queryTimeWindow) {
+      rows.push({ label: "查询说明", value: `发送时按当下时间重算 ${queryTimeWindow.replace("最近 ", "")} 入库窗口` });
+    }
+
     const sortByLabel = filterSnapshot.sort_by === "fetched_at" ? "入库时间" : "发布时间";
     const sortDirLabel = filterSnapshot.sort_dir === "asc" ? "最早优先" : "最新优先";
     rows.push({ label: "排序方式", value: `${sortByLabel} / ${sortDirLabel}` });
 
     return rows;
-  }, [filterSnapshot, relativeWindow]);
+  }, [filterSnapshot, queryTimeWindow, relativeWindow]);
 
   const previewHeaderSummary = useMemo(() => {
     const formatMulti = (raw: string | null | undefined) =>
@@ -192,6 +217,7 @@ export function MailImmediateSendPanel(props: {
         (filterSnapshot.published_after || filterSnapshot.published_before
           ? snapshotSummary.find((row) => row.label === "发布时间")?.value
           : null),
+      queryTimeWindow ? `查询${queryTimeWindow}` : null,
     ].filter((value): value is string => !!value);
 
     if (segments.length > 0) {
@@ -207,6 +233,7 @@ export function MailImmediateSendPanel(props: {
     filterSnapshot.published_after_mode,
     filterSnapshot.published_after_value,
     filterSnapshot.published_before,
+    queryTimeWindow,
     relativeWindow,
     snapshotSummary,
   ]);

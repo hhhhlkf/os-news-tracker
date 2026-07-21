@@ -127,6 +127,12 @@ class MailFilterSnapshot(BaseModel):
     published_before_mode: MailBoundaryMode = "none"
     published_before_value: MailRelativeRange | None = None
     published_before: str | None = None
+    fetched_after_mode: MailBoundaryMode = "none"
+    fetched_after_value: MailRelativeRange | None = None
+    fetched_after: str | None = None
+    fetched_before_mode: MailBoundaryMode = "none"
+    fetched_before_value: MailRelativeRange | None = None
+    fetched_before: str | None = None
 
 
 class MailTemplateCreateRequest(BaseModel):

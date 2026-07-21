@@ -35,17 +35,26 @@ def _build_header_summary(filters: dict) -> str:
     if filters.get("q"):
         segments.append(str(filters["q"]))
 
-    published_label = "全部时间"
-    if filters.get("published_after_mode") == "relative" and filters.get("published_after_value"):
-        value = str(filters.get("published_after_value") or "")
-        labels = {"24h": "最近 24h", "7d": "最近 7d", "30d": "最近 30d"}
-        published_label = labels.get(value, f"最近 {value}")
-    elif filters.get("published_after") or filters.get("published_before"):
-        after = str(filters.get("published_after") or "").strip()
-        before = str(filters.get("published_before") or "").strip()
-        if after or before:
-            published_label = f"{'从 ' + after if after else ''}{' ' if after and before else ''}{'到 ' + before if before else ''}".strip()
-    segments.append(published_label)
+    def _time_label(prefix: str) -> str:
+        label = "全部时间"
+        if filters.get(f"{prefix}_after_mode") == "relative" and filters.get(f"{prefix}_after_value"):
+            value = str(filters.get(f"{prefix}_after_value") or "")
+            labels = {"24h": "最近 24h", "7d": "最近 7d", "30d": "最近 30d"}
+            return labels.get(value, f"最近 {value}")
+        after_key = f"{prefix}_after"
+        before_key = f"{prefix}_before"
+        if filters.get(after_key) or filters.get(before_key):
+            after = str(filters.get(after_key) or "").strip()
+            before = str(filters.get(before_key) or "").strip()
+            if after or before:
+                return f"{'从 ' + after if after else ''}{' ' if after and before else ''}{'到 ' + before if before else ''}".strip()
+        return label
+
+    published_label = _time_label("published")
+    fetched_label = _time_label("fetched")
+    segments.append(f"发布时间：{published_label}")
+    if fetched_label != "全部时间":
+        segments.append(f"查询时间：{fetched_label}")
     return " · ".join(segment for segment in segments if segment) or "依据当前筛选快照生成"
 
 
