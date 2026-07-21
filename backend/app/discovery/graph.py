@@ -242,7 +242,6 @@ def save_method(state: DiscoveryState, db=None) -> DiscoveryState:
         db = SessionLocal()
     try:
         from datetime import datetime, timezone
-        from urllib.parse import urlparse
         from app.enums import SourceType, Stream
         from app.models import CrawlMethod, CrawlMethodDomain, Source
         from app.discovery.dsl import DslRecipe
@@ -252,10 +251,11 @@ def save_method(state: DiscoveryState, db=None) -> DiscoveryState:
         )
         from app.discovery.review import REVIEW_PENDING
         from app.discovery.signature import compute_signature
+        from app.discovery.method_keys import crawl_method_domain_key
         from app.run_logs import append_run_log
         recipe = DslRecipe(**state["dsl_recipe"])
         sig = compute_signature(recipe)
-        domain = urlparse(state["site_url"]).netloc
+        domain = crawl_method_domain_key(state["site_url"], recipe)
         audit_items = ((state.get("audit_result") or {}).get("test") or {}).get("items") or []
         quality_audit = audit_source_quality(
             items=audit_items,
@@ -3189,9 +3189,10 @@ def run_discovery(site_url: str, force: bool = False, name: str | None = None) -
 
 
 def check_existing_method(site_url: str, db=None) -> dict | None:
-    """按 domain 查 crawl_method_domains，命中返回已有范式摘要，否则 None。
+    """按 source key 查 crawl_method_domains，命中返回已有范式摘要，否则 None。
 
-    去重粒度=domain（用户感知是"这个网站"），signature 同形去重留作 save_method 内部。
+    去重粒度：普通网站按 domain，feed/rss/atom 按规范化后的完整 feed URL。
+    signature 同形去重留作 save_method 内部。
     db=None 时自建 SessionLocal；传入 db 时复用（路由层注入请求 session）。
     """
     own_session = db is None
@@ -3199,13 +3200,25 @@ def check_existing_method(site_url: str, db=None) -> dict | None:
         from app.db import SessionLocal
         db = SessionLocal()
     try:
-        from urllib.parse import urlparse
         from app.models import CrawlMethod, CrawlMethodDomain
-        domain = urlparse(site_url).netloc
+        from app.discovery.method_keys import (
+            crawl_method_domain_key,
+            crawl_method_domain_key_for_input_url,
+            is_feed_recipe,
+            normalized_feed_domain_key,
+        )
+        domain = crawl_method_domain_key_for_input_url(site_url)
         mapping = db.query(CrawlMethodDomain).filter_by(domain=domain).first()
         if mapping is None:
             return None
         m = db.get(CrawlMethod, mapping.method_id)
+        if m is None:
+            return None
+        if domain != normalized_feed_domain_key(site_url) and is_feed_recipe(m.dsl_recipe):
+            existing_key = crawl_method_domain_key(m.entry_url, m.dsl_recipe)
+            input_feed_key = normalized_feed_domain_key(site_url)
+            if existing_key != input_feed_key:
+                return None
         return {
             "method_id": m.id, "domain": m.domain, "signature": m.signature,
             "dsl_recipe": m.dsl_recipe,

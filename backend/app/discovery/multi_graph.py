@@ -22,6 +22,7 @@ from app.discovery.graph import (
     dsl_writer,
     start_discovery_run,
 )
+from app.discovery.method_keys import crawl_method_domain_key
 from app.discovery.naming import (
     default_website_display_name,
     format_wechat_search_display_name,
@@ -455,7 +456,7 @@ def _run_and_save_multi_recipe(
             # Keyword search — one domain per search query/method.
             domain = f"wechat_search_{hashlib.sha256(route.normalized_input.encode()).hexdigest()[:16]}"
         elif urlparse(route.normalized_input).scheme:
-            domain = urlparse(route.normalized_input).netloc
+            domain = crawl_method_domain_key(route.normalized_input, sanitized_recipe)
         else:
             domain = route.kind
         if not domain:
