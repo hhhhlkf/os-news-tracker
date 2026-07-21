@@ -174,6 +174,7 @@ class MailPreviewItem(BaseModel):
     title: str
     reason: str | None = None
     summary: str | None = None
+    importance: str | None = None
     key_points: list[str] = Field(default_factory=list)
     hotspots: list[str] = Field(default_factory=list)
     source_url: str

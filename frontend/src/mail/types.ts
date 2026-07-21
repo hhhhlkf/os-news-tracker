@@ -58,6 +58,7 @@ export interface MailPreviewItem {
   title: string;
   reason: string | null;
   summary: string | null;
+  importance: string | null;
   key_points: string[];
   hotspots: string[];
   source_url: string;

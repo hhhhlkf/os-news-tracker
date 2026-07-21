@@ -344,6 +344,7 @@ class MailService:
                     title=item.title_tldr or item.title,
                     reason=item.why_it_matters or item.summary or item.title_tldr,
                     summary=item.summary,
+                    importance=item.importance,
                     key_points=[str(point) for point in (item.key_points or [])],
                     hotspots=self._extract_hotspots(item),
                     source_url=item.url,

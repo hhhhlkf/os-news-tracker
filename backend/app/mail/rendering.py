@@ -58,6 +58,22 @@ def _render_hotspot_tags(tags: list[str]) -> str:
     )
 
 
+def _render_importance_badge(value: str | None) -> str:
+    if not value:
+        return '<span style="font-size:12px;color:#98a2b3;">重要性未标注</span>'
+    styles = {
+        "高": ("#fde2e1", "#b42318"),
+        "中": ("#fef3c7", "#92400e"),
+        "低": ("#eceef1", "#475467"),
+    }
+    bg, fg = styles.get(str(value), styles["低"])
+    return (
+        f'<span style="display:inline-block;background:{bg};color:{fg};'
+        'padding:2px 8px;border-radius:999px;font-size:12px;font-weight:700;white-space:nowrap;">'
+        f'{escape(str(value))}</span>'
+    )
+
+
 def _render_source_cta(url: str) -> str:
     safe_url = escape(url)
     domain = url
@@ -111,6 +127,7 @@ def render_mail_html(context: dict) -> str:
     for item in items:
         title = escape(str(item.get("title") or "未命名新闻"))
         summary = escape(str(item.get("summary") or ""))
+        importance_html = _render_importance_badge(item.get("importance"))
         published_at = _format_date_ymd(item.get("published_at"))
         source_url = str(item.get("source_url") or "")
         hotspots_html = _render_hotspot_tags([str(h) for h in (item.get("hotspots") or [])])
@@ -121,7 +138,10 @@ def render_mail_html(context: dict) -> str:
             <section style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px 20px;margin-bottom:14px;">
               <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
                 <h2 style="margin:0;font-size:18px;line-height:1.45;color:#101828;">{title}</h2>
-                <span style="font-size:12px;color:#667085;white-space:nowrap;">{escape(published_at)}</span>
+                <div style="display:flex;gap:8px;align-items:center;white-space:nowrap;">
+                  {importance_html}
+                  <span style="font-size:12px;color:#667085;">{escape(published_at)}</span>
+                </div>
               </div>
               <div style="margin-top:12px;display:grid;gap:10px;color:#344054;font-size:14px;line-height:1.75;">
                 <p style="margin:0 0 8px;"><strong>摘要：</strong>{summary or "暂无"}</p>

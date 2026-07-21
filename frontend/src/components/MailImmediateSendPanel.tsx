@@ -8,6 +8,7 @@ import {
   sendImmediateMail,
 } from "../mail/api";
 import type { MailImmediateSendRequest, MailPreviewResponse, MailProviderKind, MailTemplate } from "../mail/types";
+import { ImportanceBadge } from "./ImportanceBadge";
 import { formatDateYmd, HotspotTags, SourceCta, TechHighlightsList } from "./ItemMetaBlocks";
 
 export function MailImmediateSendPanel(props: {
@@ -444,7 +445,10 @@ export function MailImmediateSendPanel(props: {
               <div key={`${item.source_url}-${index}`} style={{ background: "#fff", border: "1px solid #eaecf0", borderRadius: 12, padding: "14px 16px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 8 }}>
                   <div style={{ fontSize: 16, fontWeight: 800, color: "#101828" }}>{item.title}</div>
-                  <div style={{ fontSize: 11, color: "#667085", whiteSpace: "nowrap" }}>{formatDateYmd(item.published_at)}</div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", whiteSpace: "nowrap" }}>
+                    <ImportanceBadge value={item.importance} />
+                    <div style={{ fontSize: 11, color: "#667085" }}>{formatDateYmd(item.published_at)}</div>
+                  </div>
                 </div>
                 <div style={{ display: "grid", gap: 10, fontSize: 13, color: "#475467", lineHeight: 1.7 }}>
                   <div><strong style={{ color: "#101828" }}>摘要：</strong>{item.summary ?? "暂无"}</div>
