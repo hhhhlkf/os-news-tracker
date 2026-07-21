@@ -18,8 +18,6 @@ export function MailImmediateSendPanel(props: {
   const { homeFilters, onTemplateSaved } = props;
   const [subject, setSubject] = useState("技术新闻筛选简报");
   const [recipientsText, setRecipientsText] = useState("");
-  const [sendTime, setSendTime] = useState("09:00");
-  const [sendFrequency, setSendFrequency] = useState<"once" | "daily" | "weekly">("once");
   const [mailProvider, setMailProvider] = useState<MailProviderKind>("tof4");
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [previewData, setPreviewData] = useState<MailPreviewResponse | null>(null);
@@ -238,12 +236,6 @@ export function MailImmediateSendPanel(props: {
     snapshotSummary,
   ]);
 
-  const sendFrequencyLabel = useMemo(() => {
-    if (sendFrequency === "daily") return "每日";
-    if (sendFrequency === "weekly") return "每周";
-    return "单次发送";
-  }, [sendFrequency]);
-
   const providerLabel = useMemo(() => (mailProvider === "tof4" ? "TOF4 API" : "SMTP"), [mailProvider]);
 
   return (
@@ -310,29 +302,6 @@ export function MailImmediateSendPanel(props: {
               rows={4}
               style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "10px 12px", fontSize: 13, color: "#344054", resize: "vertical" }}
             />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <label style={{ display: "grid", gap: 6 }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>发送时间</span>
-                <input
-                  type="time"
-                  value={sendTime}
-                  onChange={(e) => setSendTime(e.target.value)}
-                  style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "10px 12px", fontSize: 13, color: "#344054", background: "#fff" }}
-                />
-              </label>
-              <label style={{ display: "grid", gap: 6 }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>频率</span>
-                <select
-                  value={sendFrequency}
-                  onChange={(e) => setSendFrequency(e.target.value as "once" | "daily" | "weekly")}
-                  style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "10px 12px", fontSize: 13, color: "#344054", background: "#fff" }}
-                >
-                  <option value="once">单次发送</option>
-                  <option value="daily">每日</option>
-                  <option value="weekly">每周</option>
-                </select>
-              </label>
-            </div>
             <div style={{ display: "grid", gap: 6 }}>
               <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>发送通道</span>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -461,7 +430,7 @@ export function MailImmediateSendPanel(props: {
           <div style={{ fontSize: 13, lineHeight: 1.7, color: "#d0d5dd" }}>
             筛选条件：{previewHeaderSummary}
             <br />
-            发送时间：{sendTime} · 频率：{sendFrequencyLabel} · 通道：{previewData?.provider?.toUpperCase() ?? providerLabel}
+            通道：{previewData?.provider?.toUpperCase() ?? providerLabel}
             <br />
             {previewData ? `共 ${previewData.item_count} 条，准备发送给 ${previewData.recipients.length || 0} 个收件人。` : "点击“生成预览”后展示邮件内容。"}
           </div>
