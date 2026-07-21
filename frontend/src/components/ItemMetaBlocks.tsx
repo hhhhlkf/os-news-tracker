@@ -135,7 +135,6 @@ export function SourceQualityMeta(props: {
         style={{
           fontSize: 12,
           color: sourceName ? "#475467" : "#98a2b3",
-          fontWeight: 700,
           maxWidth: 190,
           overflow: "hidden",
           textOverflow: "ellipsis",

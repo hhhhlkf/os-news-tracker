@@ -126,7 +126,7 @@ def _render_source_quality(item: dict) -> str:
     grade = str(item.get("source_quality_grade") or _quality_grade_for_score(score_value) or "")
 
     source_html = (
-        f'<span style="font-size:12px;color:#475467;font-weight:700;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{escape(source_name)}</span>'
+        f'<span style="font-size:12px;color:#475467;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{escape(source_name)}</span>'
         if source_name
         else '<span style="font-size:12px;color:#98a2b3;">来源未标注</span>'
     )
