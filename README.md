@@ -1,546 +1,591 @@
 # OS News Tracker
 
-群组化技术新闻情报平台，自动从多类来源采集 OS 技术情报，用 LLM 整理归纳，汇总到支持个性化推荐的 React 网页。支持群组订阅、AI 智能爬取、个性化评分、趋势总结和实时日志。
+OS News Tracker 是面向操作系统、Linux 发行版、开源基础设施和相关 AI 工具链的技术新闻情报平台。系统从 RSS、页面列表、JSON API、搜索结果、微信公众号、站点发现 DSL 和 Agent Crawl 等来源采集候选内容，经标准化、去重、LLM 富化后入库，并在前端提供新闻流、站点发现、邮件任务中心和系统晨抓能力。
 
-## 版本状态
+当前项目已经从早期的单一新闻抓取工具演进为一个多模块系统。本文档以当前代码为准，覆盖技术细节、文件组织、系统功能和部署方式。
 
-### V1（已完成）
+## 当前能力边界
 
-- 从 4 类数据源采集（RSS、结构化 API、页面监控、关键词搜索）
-- 两条数据处理流：
-  - **新闻动态流** — LLM 结构化摘要（分类、子标签、实体、摘要）
-  - **结构化事实流** — 安全公告/CVE、生命周期/EOL → 直接解析入库
-- 统一流水线：`fetch → normalize → [relevance-filter] → dedup → enrich → store`
-- 可查询 Web UI：搜索、分面筛选、分页、条目详情侧滑面板、手动新闻运行控制
-- Docker Compose 一键部署
+- 新闻流：浏览、搜索、分面筛选、时间筛选、详情查看、推荐理由生成。
+- 站点发现：输入站点或多源入口，生成可复用的 CrawlMethod DSL，支持待审核、质量审计、手动运行、取消和日志查看。
+- 爬取方式库：管理 discovery methods，按统一抓取限制执行，并把结果送入标准新闻流水线。
+- 邮件任务中心：基于当前筛选生成 HTML 预览、立即发送、保存模板、创建定时邮件任务，支持 TOF4 API 和 SMTP。
+- 系统晨抓：按配置定时批量运行 active discovery methods，并记录每个方法的执行结果。
+- 管理权限：前端使用单密码登录解锁管理功能，后端对敏感接口做权限校验。
+- Agent Crawl：`backend/app/agent/` 和 `backend/app/fetchers/agent_crawl.py` 仍保留，但按项目约定视为冻结模块，非明确需求不修改。
 
-### V2（开发中）
-
-| 功能 | 说明 |
-|------|------|
-| 用户账户系统 | 邮箱注册登录，JWT 认证，subscriber / system_admin 角色 |
-| AI 智能爬取引擎 | Handoff Chain（PlanAgent → CrawlDAG → QualityWorkerPool → SummaryWorkerPool），质量评估 + SiteMemory |
-| 群组订阅体系 | 三级权限（system_admin / group_admin / subscriber），群组共享爬取成本，群级内容过滤 |
-| 个性化推荐评分 | 用户自定义 Scoring Criteria，0-100 相关度分，快速通道 + LLM 精打分 |
-| 趋势总结（Digest） | DigestAgent 多步 Chain，热点识别 + 新兴趋势，按群定时生成 |
-| 实时日志面板 | SSE + 环形缓冲，JetBrains Mono 风格，覆盖所有后端进程 |
-
-### 当前已落地的控制台能力
-
-- **首页新闻流**
-  - 支持搜索、主分类/信息类型/重要度筛选、时间窗口筛选、条目详情查看
-  - 已接入 **邮件任务中心** 与 **系统晨抓配置与执行窗口**
-- **智能探查 / 发现工作台**（`/discover`）
-  - 智能探查：把网站、微信搜索、公众号历史等输入路由成对应 discovery recipe
-  - 抓取模块 · 爬取方式库：批量复用已保存的 crawl methods 执行抓取
-  - 抓取模块 · Prompt 工作室：管理 discovery / enrich 相关 prompt 套餐，支持启用、停用、自定义覆盖
-  - 抓取模块 · 主分类修改：维护富集阶段可用主分类，并同步影响条目分类
-- **邮件任务中心**
-  - 支持基于当前首页筛选条件生成 HTML 邮件预览
-  - 支持立即发送、模板保存、模板列表、预定发送列表
-  - 邮件发送通道同时支持 `TOF4 API` 与 `SMTP`
-- **系统晨抓**
-  - 只面向 `抓取模块 · 爬取方式库` 中的 active discovery methods
-  - 支持晨抓配置、立即执行、停止执行、今日状态、运行时间线、失败方式明细
-  - 调度与巡检都会写入统一日志流
-
-详细设计文档：
-- V2 综合设计：[`docs/superpowers/specs/2026-06-15-v2-complete-design.md`](docs/superpowers/specs/2026-06-15-v2-complete-design.md)
-- 群组订阅设计：[`docs/superpowers/specs/2026-06-15-group-subscription-design.md`](docs/superpowers/specs/2026-06-15-group-subscription-design.md)
-- 管理层实施计划：[`docs/superpowers/plans/2026-06-15-v2-implementation-schedule.md`](docs/superpowers/plans/2026-06-15-v2-implementation-schedule.md)
-
-## 快速开始
-
-从零开始部署本项目。**推荐使用 Docker Compose（方式一）**，无需手动安装 Python 或 Node.js。
-
-### 方式一：Docker Compose 部署（推荐）
-
-适用于部署和生产环境。只需 Docker，其他依赖由容器自动处理。
-
-#### 1. 环境准备
-
-##### macOS
-
-安装 [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/)（支持 Intel 和 Apple Silicon）：
-
-```bash
-# 方法 A：Homebrew 安装（推荐）
-brew install --cask docker
-
-# 方法 B：手动安装
-# 从 https://www.docker.com/products/docker-desktop/ 下载 .dmg，拖入 Applications 并启动
-```
-
-启动 Docker Desktop 后，打开终端验证：
-
-```bash
-docker --version          # 应 >= 24.x
-docker compose version    # 应 >= 2.x
-```
-
-> **Apple Silicon (M1/M2/M3/M4) 注意事项：** Docker Desktop 默认通过 Rosetta 2 兼容 x86 镜像，本项目使用的基础镜像（python:3.11-slim、node:20-alpine、nginx:alpine、postgres:16）均提供 ARM64 原生支持，无需额外配置。
-
-##### Linux
-
-找一台可以访问外网的 Linux 服务器或虚拟机（CentOS 7+/Ubuntu 20.04+/Debian 11+），然后安装 Docker：
-
-```bash
-# === CentOS 7/8/9 ===
-sudo yum install -y yum-utils
-sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-sudo yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-sudo systemctl enable docker --now
-
-# === Ubuntu / Debian ===
-sudo apt update
-sudo apt install -y ca-certificates curl
-sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list
-sudo apt update
-sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-sudo systemctl enable docker --now
-
-# === 验证安装 ===
-docker --version          # 应 >= 24.x
-docker compose version    # 应 >= 2.x
-```
-
-#### 2. 克隆仓库
-
-```bash
-git clone https://your-git-server/os-news-tracker.git
-cd os-news-tracker
-```
-
-#### 3. 配置大模型 API（必做）
-
-```bash
-# 从模板创建 .env 文件
-cp .env.example .env
-
-# 编辑 .env，填入实际的大模型 API 信息（详见下方"大模型 API 配置"章节）
-vi .env
-```
-
-**最低配置**（系统启动至少需要这几行）：
-
-```ini
-LLM_BASE_URL=https://your-llm-gateway.example.com/v1
-LLM_API_KEY=sk-your-api-key-here
-LLM_MODEL=gpt-4o
-DATABASE_URL=postgresql+psycopg://osnews_app:OsNewsTracker2026DbA7K9M4@db:5432/osnews
-```
-
-#### 4. 启动服务
-
-```bash
-docker compose up --build -d
-```
-
-首次启动会拉取基础镜像（python:3.11-slim、node:20-alpine、nginx:alpine、postgres:16）并编译前后端，耗时约 3-8 分钟（视网络速度而定）。
-
-#### 5. 验证运行
-
-```bash
-# 查看服务状态，3 个服务均为 Up/healthy 即为正常
-docker compose ps
-
-# 查看后端日志
-docker compose logs backend | tail -20
-
-# 测试 API
-curl http://localhost:8000/items
-```
-
-#### 6. 访问
-
-| 服务 | 地址 |
-| --- | --- |
-| 前端页面 | http://localhost:8080 |
-| 后端 API | http://localhost:8000 |
-| API 交互文档（Swagger） | http://localhost:8000/docs |
-
-#### 常用操作
-
-```bash
-docker compose up --build -d   # 启动（后台运行）
-docker compose logs -f         # 实时查看所有日志
-docker compose logs backend    # 只看后端日志
-docker compose restart backend # 重启后端
-docker compose down            # 停止所有服务
-docker compose down -v         # 停止并删除数据库数据（重置）
-```
-
-### 方式二：本地开发环境
-
-适用于二次开发和调试，需手动安装 Python 和 Node.js。
-
-#### 1. 安装运行环境
-
-| 依赖 | 版本要求 | macOS 安装 | Linux 安装 |
-| --- | --- | --- | --- |
-| Python | 3.11+ | `brew install python@3.11` | `yum install python3.11` / `apt install python3.11` |
-| Node.js | 20+ | `brew install node@20` 或 `fnm install 20` | `nvm install 20` 或包管理器 |
-| PostgreSQL | 16（可选） | 开发时默认使用 SQLite，无需安装 | 同左 |
-
-```bash
-# 验证安装
-python3 --version   # 应 >= 3.11（macOS 下命令为 python3）
-node --version      # 应 >= 20
-```
-
-#### 2. 克隆并安装依赖
-
-```bash
-git clone https://your-git-server/os-news-tracker.git
-cd os-news-tracker
-
-# 后端
-cd backend
-python -m venv .venv
-source .venv/bin/activate    # Linux/Mac
-pip install -e ".[dev]"
-
-# 前端
-cd ../frontend
-npm ci
-```
-
-#### 3. 配置大模型 API
-
-在项目根目录创建 `.env` 文件，填入 LLM 配置（参见下方"大模型 API 配置"章节）：
-
-```bash
-cd ..   # 回到项目根目录
-cp .env.example .env
-vi .env
-```
-
-#### 4. 启动
-
-```bash
-# 终端 1：启动后端（默认使用 SQLite）
-cd backend && source .venv/bin/activate
-ENABLE_SCHEDULER=0 uvicorn app.entry:app --reload --port 8000
-
-# 终端 2：启动前端
-cd frontend
-npm run dev
-```
-
-- 后端 API: http://localhost:8000
-- 前端热更新: http://localhost:5173
-
----
+已删除的旧功能：独立“新闻处理控制”模块和 `/news-run*` 手动新闻运行接口已经移除。运行日志统一使用 `/run-logs`。
 
 ## 技术栈
 
 | 层 | 技术 |
-|---|------|
-| 后端 | Python 3.11+, FastAPI, SQLAlchemy 2.0 + Alembic, PostgreSQL, APScheduler |
-| 认证（V2）| python-jose[cryptography]（JWT），passlib[bcrypt] |
-| 前端 | React 19, Vite, TypeScript, TanStack Query, react-router-dom（V2）|
-| 采集 | feedparser, Scrapling, httpx |
-| AI/LLM | 可配置的 OpenAI 兼容 client（司内 LLM 网关） |
+| --- | --- |
+| 后端 | Python 3.11+, FastAPI, SQLAlchemy 2.0, Alembic, PostgreSQL, APScheduler |
+| 数据契约 | Pydantic v2, pydantic-settings |
+| 抓取与解析 | feedparser, httpx, Scrapling, Playwright |
+| LLM | OpenAI-compatible chat completions client |
+| 智能发现 | LangGraph, langchain-core, langchain-openai |
+| 前端 | React 19, Vite 8, TypeScript 6, TanStack Query, react-router-dom |
+| 邮件 | TOF4 HTTP API, SMTP |
 | 测试 | pytest, pytest-asyncio, respx, vitest |
-| 部署 | Docker Compose |
+| 部署 | Docker Compose: PostgreSQL + FastAPI/Uvicorn + Nginx/React |
 
-## 项目结构
+## 数据与处理流程
 
+### 标准新闻流水线
+
+```text
+Source/Fetcher
+  -> RawItem
+  -> normalizer
+  -> relevance filter
+  -> dedup
+  -> enricher
+  -> repository/store
+  -> Item + Tag + Entity
 ```
+
+核心入口：
+
+- `backend/app/pipeline.py`：标准流水线编排。
+- `backend/app/fetchers/`：RSS、页面监控、搜索、JSON API、Agent Crawl fetcher。
+- `backend/app/processing/`：标准化、去重、相关性过滤、LLM 富化、推荐理由。
+- `backend/app/repository.py`：幂等写入与关联表维护。
+
+### 站点发现与 CrawlMethod 流程
+
+```text
+用户输入站点/多源入口
+  -> discovery graph / multi graph
+  -> 生成 DSL recipe
+  -> auditor 审计
+  -> pending review
+  -> 审核通过后进入 CrawlMethod 库
+  -> 手动运行或晨抓运行
+  -> discovery runner
+  -> 标准新闻流水线入库
+```
+
+核心模块：
+
+- `backend/app/discovery/graph.py`：单站点发现图。
+- `backend/app/discovery/multi_graph.py`：多源发现入口。
+- `backend/app/discovery/dsl.py`：受限 DSL 结构与校验。
+- `backend/app/discovery/interpreter.py`：DSL 解释执行。
+- `backend/app/discovery/multi_dsl.py`、`multi_interpreter.py`：多源 DSL 支持。
+- `backend/app/discovery/runner.py`：运行已入库 CrawlMethod 并接入标准 pipeline。
+- `backend/app/discovery/recipe_prepare.py`：抓取限制、微信跳过键、微信补抓 action 准备。
+- `backend/app/discovery/wechat_tools.py`：微信公众号搜索/历史/正文补抓。
+- `backend/app/discovery/review.py`：待审核方式审批、删除、邮件提醒。
+- `backend/app/discovery/quality_audit.py`：信息质量、信息密度、综合评分与等级。
+
+## 主要系统功能
+
+### 1. 新闻流
+
+前端入口：`/`
+
+主要能力：
+
+- 关键词搜索。
+- 主分类、重要度、技术热点筛选。
+- 发布时间预设：24h、7d、30d、自定义日期。
+- 排序：发布时间或入库时间，正序/倒序。
+- 条目详情侧滑面板。
+- 推荐理由生成：`POST /items/{id}/reason`。
+- 邮件任务中心和系统晨抓入口。
+
+相关文件：
+
+- `frontend/src/pages/HomePage.tsx`
+- `frontend/src/components/FacetSidebar.tsx`
+- `frontend/src/components/ItemList.tsx`
+- `frontend/src/components/ItemCard.tsx`
+- `frontend/src/components/ItemDetail.tsx`
+- `backend/app/api/routes.py`
+
+### 2. 站点发现
+
+前端入口：`/discover`
+
+主要能力：
+
+- 单站点 AI 探查。
+- 多源探查，包括普通网站、微信搜索、公众号历史等 recipe。
+- 发现流程图和节点细节展示。
+- CrawlMethod 待审核列表。
+- CrawlMethod 正式库列表、详情、运行、取消、删除。
+- Prompt 工作室。
+- 主分类维护。
+- 质量评分展示：综合评分、质量分、密度分、等级和审计原因。
+
+相关文件：
+
+- `frontend/src/pages/DiscoveryPage.tsx`
+- `frontend/src/components/DiscoveryPanel.tsx`
+- `frontend/src/components/DiscoveryFlowChart.tsx`
+- `frontend/src/components/DiscoveryLogPanel.tsx`
+- `frontend/src/components/CrawlMethodReviewList.tsx`
+- `frontend/src/components/CrawlMethodList.tsx`
+- `frontend/src/components/CrawlMethodDetail.tsx`
+- `frontend/src/components/PromptStudioPanel.tsx`
+- `frontend/src/components/MainCategoryPanel.tsx`
+- `backend/app/api/discovery_routes.py`
+- `backend/app/discovery/`
+
+### 3. 邮件任务中心
+
+邮件任务中心挂在首页卡片中，弹窗内分为：
+
+- 立即发送：基于当前筛选快照生成 HTML 预览和发送请求。
+- 模板列表：保存、预览、更新、删除模板，可从模板创建预定任务。
+- 预定发送：每日/每周定时发送，支持暂停、恢复、立即发送和查看发送日志。
+
+重要细节：
+
+- 时间筛选会保存为快照。24h、7d、30d 使用相对窗口，发送时按当下时间重新计算。
+- 邮件预览和正式邮件 HTML 都会显示每条新闻的重要性。
+- 邮件发送通道由 `MAIL_PROVIDER` 控制，可选 `tof4` 或 `smtp`。
+
+相关文件：
+
+- `frontend/src/components/MailTaskCenter.tsx`
+- `frontend/src/components/MailImmediateSendPanel.tsx`
+- `frontend/src/components/MailTemplateListPanel.tsx`
+- `frontend/src/components/MailScheduleListPanel.tsx`
+- `frontend/src/mail/api.ts`
+- `frontend/src/mail/types.ts`
+- `backend/app/api/mail_routes.py`
+- `backend/app/mail/service.py`
+- `backend/app/mail/rendering.py`
+- `backend/app/mail/tof4_provider.py`
+- `backend/app/mail/smtp_provider.py`
+
+### 4. 系统晨抓
+
+系统晨抓用于按计划批量执行 active discovery methods，不再依赖已删除的手动新闻处理控制。
+
+主要能力：
+
+- 配置启用状态、执行时间、频率、回看窗口、巡检间隔。
+- 立即执行和停止。
+- 查看今日状态、运行记录、单个方法明细。
+- 与 `/run-logs` 共享结构化运行日志。
+
+相关文件：
+
+- `frontend/src/components/MorningCrawlModal.tsx`
+- `frontend/src/components/MorningCrawlStatusPanel.tsx`
+- `frontend/src/components/MorningCrawlTimelinePanel.tsx`
+- `frontend/src/morningCrawl/api.ts`
+- `frontend/src/morningCrawl/types.ts`
+- `backend/app/api/morning_crawl_routes.py`
+- `backend/app/morning_crawl/service.py`
+
+### 5. 管理权限
+
+前端顶部导航提供“管理密码”登录。登录成功后解锁管理能力，状态持久化在前端。
+
+后端配置项：
+
+```ini
+SYSTEM_ACCESS_PASSWORD=admin
+```
+
+受控能力包括：
+
+- 系统晨抓配置、运行、停止。
+- 站点发现待审核列表、审批、删除、提醒配置。
+- CrawlMethod PATCH/DELETE。
+- Prompt 工作室。
+- 主分类维护。
+
+相关文件：
+
+- `frontend/src/auth.ts`
+- `frontend/src/App.tsx`
+- `backend/app/api/auth_routes.py`
+- `backend/app/api/deps.py`
+
+## 代码组织
+
+```text
 os-news-tracker/
 ├── README.md
+├── AGENTS.md
 ├── CLAUDE.md
 ├── .env.example
 ├── docker-compose.yml
+├── docker-compose.dev.yml
 ├── backend/
 │   ├── Dockerfile
+│   ├── Dockerfile.dev
 │   ├── pyproject.toml
 │   ├── alembic.ini
+│   ├── alembic/versions/
 │   ├── app/
-│   │   ├── config.py             # 配置（pydantic-settings，环境变量驱动）
-│   │   ├── db.py                 # SQLAlchemy engine + Session
-│   │   ├── models.py             # ORM 模型
-│   │   ├── entry.py              # 应用入口
-│   │   ├── pipeline.py           # 新闻流编排
-│   │   ├── scheduler.py          # APScheduler 定时任务
-│   │   ├── repository.py         # 数据库读写查询
-│   │   ├── api/                  # FastAPI 路由
-│   │   ├── sources/              # 数据源注册 + 种子数据
-│   │   ├── fetchers/             # 采集器（RSS/页面监控/搜索）
-│   │   ├── extract/              # 内容提取（Scrapling）
-│   │   ├── search/               # 搜索提供者（可插拔）
-│   │   ├── processing/           # 标准化/去重/相关性过滤/LLM富化
-│   │   └── llm/                  # OpenAI 兼容 LLM client
+│   │   ├── api/                 # FastAPI routers
+│   │   ├── agent/               # Agent Crawl Handoff Chain, frozen
+│   │   ├── discovery/           # 站点发现、DSL、审核、质量审计、方法运行
+│   │   ├── extract/             # 内容提取协议和 Scrapling 实现
+│   │   ├── fetchers/            # RSS/page/search/json/agent fetchers
+│   │   ├── llm/                 # OpenAI-compatible LLM client
+│   │   ├── mail/                # 邮件预览、渲染、发送
+│   │   ├── morning_crawl/       # 系统晨抓
+│   │   ├── processing/          # normalize/dedup/relevance/enrich/reason
+│   │   ├── search/              # 搜索 Provider
+│   │   ├── sources/             # 种子数据源和探测工具
+│   │   ├── auth.py
+│   │   ├── categories.py
+│   │   ├── config.py
+│   │   ├── db.py
+│   │   ├── entry.py
+│   │   ├── enums.py
+│   │   ├── models.py
+│   │   ├── pipeline.py
+│   │   ├── repository.py
+│   │   ├── run_logs.py
+│   │   ├── scheduler.py
+│   │   └── schemas.py
 │   └── tests/
 ├── frontend/
 │   ├── Dockerfile
+│   ├── Dockerfile.dev
 │   ├── nginx.conf
+│   ├── package.json
 │   └── src/
+│       ├── api/
+│       ├── components/
+│       ├── discovery/
+│       ├── hooks/
+│       ├── mail/
+│       ├── morningCrawl/
+│       ├── pages/
 │       ├── App.tsx
-│       ├── api/client.ts         # API 客户端（TanStack Query）
-│       └── components/           # UI 组件
+│       ├── auth.ts
+│       └── types.ts
+├── db/
 └── docs/
-    └── superpowers/
-        ├── specs/                # 设计文档
-        └── plans/                # 实现计划
 ```
 
-## 本地开发
+## 后端核心文件说明
 
-### 环境要求
+| 文件或目录 | 作用 |
+| --- | --- |
+| `backend/app/entry.py` | 应用启动入口；执行 Alembic 迁移，按开关启动新闻源调度、邮件调度、晨抓调度。 |
+| `backend/app/api/main.py` | FastAPI app factory；注册全部 router。 |
+| `backend/app/config.py` | 环境变量配置。 |
+| `backend/app/models.py` | SQLAlchemy ORM；包括 Source、Item、Tag、CrawlMethod、Mail、MorningCrawl 等表。 |
+| `backend/app/schemas.py` | Pydantic API 契约。 |
+| `backend/app/pipeline.py` | 标准新闻流水线。 |
+| `backend/app/run_logs.py` | 内存环形运行日志，供发现抓取、晨抓等模块共享。 |
+| `backend/app/scheduler.py` | APScheduler 任务注册；新闻源、邮件、晨抓互相独立。 |
+| `backend/app/discovery/runner.py` | 执行 CrawlMethod 并入库。 |
+| `backend/app/mail/service.py` | 邮件模板、预览、发送、定时任务业务逻辑。 |
+| `backend/app/morning_crawl/service.py` | 系统晨抓配置、执行和状态维护。 |
 
-- Python 3.11+
-- Node.js 20+
-- PostgreSQL（可选，默认使用 SQLite 内存数据库进行开发）
+## 前端核心文件说明
 
-### 后端
+| 文件或目录 | 作用 |
+| --- | --- |
+| `frontend/src/App.tsx` | 顶部导航、管理登录、路由。 |
+| `frontend/src/pages/HomePage.tsx` | 新闻流页面，包含邮件任务中心和晨抓入口。 |
+| `frontend/src/pages/DiscoveryPage.tsx` | 站点发现页面。 |
+| `frontend/src/api/client.ts` | 通用后端 API 调用。 |
+| `frontend/src/mail/api.ts` | 邮件任务中心 API 和筛选快照转换。 |
+| `frontend/src/morningCrawl/api.ts` | 系统晨抓 API。 |
+| `frontend/src/components/CrawlMethodList.tsx` | CrawlMethod 正式库。 |
+| `frontend/src/components/CrawlMethodReviewList.tsx` | 待审核方式列表。 |
+| `frontend/src/components/MailTaskCenter.tsx` | 邮件任务中心弹窗。 |
+| `frontend/src/components/MorningCrawlModal.tsx` | 系统晨抓弹窗。 |
+
+## API 速览
+
+| 路由前缀 | 说明 |
+| --- | --- |
+| `/items`, `/facets`, `/items/{id}` | 新闻流查询、详情、推荐理由。 |
+| `/run-logs` | 通用运行日志。 |
+| `/auth` | 用户接口和系统管理密码登录。 |
+| `/sources` | 传统 source 探测、创建、删除。 |
+| `/sources/agent`, `/crawl-sources` | Agent Crawl source 和兼容入口。 |
+| `/discovery` | 站点发现、CrawlMethod、审核、质量审计、Prompt、主分类。 |
+| `/mail` | 邮件模板、预览、立即发送、定时任务、发送日志。 |
+| `/system-morning-crawl` | 系统晨抓配置、立即执行、停止、运行记录。 |
+
+关键 discovery 端点：
+
+- `POST /discovery/run`
+- `POST /discovery/multi-run`
+- `GET /discovery/runs`
+- `GET /discovery/methods`
+- `GET /discovery/methods/review-pending`
+- `POST /discovery/methods/review/approve`
+- `POST /discovery/methods/review/delete`
+- `POST /discovery/methods/{id}/fetch`
+- `POST /discovery/methods/{id}/fetch/cancel`
+- `GET/POST/PUT/DELETE /discovery/prompt-sets`
+- `GET/POST/PUT/DELETE /discovery/main-categories`
+
+## 配置
+
+配置由 `pydantic-settings` 从 `.env` 加载。Docker Compose 会把根目录 `.env` 注入后端容器。
+
+### 必要配置
+
+```ini
+DATABASE_URL=postgresql+psycopg://osnews_app:OsNewsTracker2026DbA7K9M4@db:5432/osnews
+LLM_BASE_URL=https://your-llm-gateway.example.com/v1
+LLM_API_KEY=replace-me
+LLM_MODEL=replace-me
+SYSTEM_ACCESS_PASSWORD=admin
+```
+
+### LLM 与抓取
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `LLM_BASE_URL` | `http://llm.invalid/v1` | OpenAI-compatible `/v1` 网关。 |
+| `LLM_API_KEY` | `test-key` | LLM API key。 |
+| `LLM_MODEL` | `test-model` | Chat completion 模型名。 |
+| `LLM_MAX_CONCURRENCY` | `4` | LLM 并发上限。 |
+| `SEARCH_PROVIDER` | `none` | 搜索 Provider，当前可接 `internal`。 |
+| `FETCH_USER_AGENT` | `os-news-tracker/0.1 (+internal)` | 抓取 User-Agent。 |
+| `FETCH_PER_HOST_DELAY_SECONDS` | `2.0` | 同 host 抓取间隔。 |
+| `MANUAL_FETCH_MAX_WORKERS` | `4` | 手动方法抓取 worker 数。 |
+| `WECHAT_MP_COOKIE` | 空 | 微信公众号历史抓取 cookie。 |
+| `WECHAT_MP_TOKEN` | 空 | 微信公众号历史抓取 token。 |
+| `WECHAT_MP_PROFILE_NAME` | `wechat_mp_default` | 微信档案名。 |
+
+### 邮件
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `MAIL_PROVIDER` | `tof4` | 默认邮件通道：`tof4` 或 `smtp`。 |
+| `TOF4_PAASID` | 空 | TOF4 API paasid。 |
+| `TOF4_TOKEN` | 空 | TOF4 API token。 |
+| `TOF4_URL` | 空 | TOF4 API 地址。 |
+| `TOF4_FROM_EMAIL` | 空 | TOF4 发件邮箱，空则回退 SMTP 发件邮箱。 |
+| `TOF4_FROM_NAME` | 空 | TOF4 发件名称。 |
+| `SMTP_HOST` | `localhost` | SMTP host。 |
+| `SMTP_PORT` | `25` | SMTP port。 |
+| `SMTP_USERNAME` | 空 | SMTP 用户名。 |
+| `SMTP_PASSWORD` | 空 | SMTP 密码。 |
+| `SMTP_FROM_EMAIL` | `no-reply@example.com` | SMTP 发件邮箱。 |
+| `SMTP_FROM_NAME` | `OS News Tracker` | SMTP 发件名称。 |
+| `SMTP_USE_TLS` | `0` | 是否 STARTTLS。 |
+| `SMTP_USE_SSL` | `0` | 是否 SSL。 |
+
+### 调度开关
+
+这些开关在 `entry.py` 中读取：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `ENABLE_SCHEDULER` | `1` | 传统新闻源 cron 调度。测试和本地开发通常设为 `0`。 |
+| `RUN_SEED` | `0` | 启动时导入 `backend/app/sources/seed_sources.yaml`。 |
+| `RUN_STARTUP_BACKFILL` | `0` | 启动时执行回填。 |
+| `ENABLE_MAIL_SCHEDULER` | `0` | 邮件定时任务调度。 |
+| `ENABLE_MORNING_CRAWL_SCHEDULER` | `0` | 系统晨抓调度。 |
+
+开发 Compose 默认：
+
+- `ENABLE_SCHEDULER=0`
+- `ENABLE_MAIL_SCHEDULER=1`
+- `ENABLE_MORNING_CRAWL_SCHEDULER=1`
+- `RUN_STARTUP_BACKFILL=0`
+
+### `.env` 修改后的生效方式
+
+后端容器读取 `.env`。修改 `.env` 后需要重建或重启后端容器，推荐：
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --force-recreate backend
+```
+
+生产 Compose：
+
+```bash
+docker compose up -d --force-recreate backend
+```
+
+## 部署
+
+### 生产部署
+
+生产 Compose 使用：
+
+- PostgreSQL 16，数据卷 `pgdata`。
+- FastAPI backend，端口 `8000`。
+- React 静态文件经 Nginx 提供，宿主机端口 `8080`。
+
+```bash
+cp .env.example .env
+# 编辑 .env
+docker compose up --build -d
+docker compose ps
+```
+
+访问：
+
+- 前端：http://localhost:8080
+- 后端 API：http://localhost:8000
+- Swagger：http://localhost:8000/docs
+- PostgreSQL：宿主机 `localhost:15432`
+
+### 开发部署
+
+开发 Compose 使用源码挂载和热更新：
+
+- backend：`uvicorn app.entry:app --reload`，端口 `8000`。
+- frontend：`vite --host 0.0.0.0 --port 5173`，端口 `5173`。
+- frontend dev server 代理 `/items`、`/discovery`、`/mail`、`/auth` 等 API 到 backend 容器。
+
+```bash
+cp .env.example .env
+# 编辑 .env
+docker compose -f docker-compose.dev.yml up --build -d
+docker compose -f docker-compose.dev.yml logs -f backend
+```
+
+访问：
+
+- 前端：http://localhost:5173
+- 后端 API：http://localhost:8000
+- Swagger：http://localhost:8000/docs
+
+### 本地非 Docker 开发
+
+后端：
 
 ```bash
 cd backend
-
-# 安装依赖（含开发依赖）
+python -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
-
-# 运行测试
-ENABLE_SCHEDULER=0 python -m pytest tests/ -v
-
-# 启动开发服务器
-uvicorn app.entry:app --reload --port 8000
+ENABLE_SCHEDULER=0 uvicorn app.entry:app --reload --port 8000
 ```
 
-### 前端
+前端：
 
 ```bash
 cd frontend
-
-# 安装依赖
 npm ci
-
-# 启动开发服务器（热更新）
 npm run dev
-
-# 类型检查 + 构建
-npm run build
 ```
 
-### 数据库迁移
+PostgreSQL 可继续使用 Compose 中的 `db` 服务：
+
+```bash
+docker compose -f docker-compose.dev.yml up -d db
+```
+
+## 数据库迁移
+
+应用启动时会自动执行 Alembic `upgrade head`。如果需要手动生成或应用迁移：
 
 ```bash
 cd backend
-
-# 生成新迁移
-alembic revision --autogenerate -m "描述"
-
-# 运行迁移
+alembic revision --autogenerate -m "describe change"
 alembic upgrade head
 ```
 
-## Docker Compose 部署
+不要用 `Base.metadata.create_all()` 绕过迁移。当前 schema 依赖 Alembic 版本记录。
+
+## 常用命令
+
+### Docker
 
 ```bash
-# 1. 创建 .env 文件（参考 .env.example）
-cp .env.example .env
-# 编辑 .env，填入实际的 LLM_BASE_URL、LLM_API_KEY 等
-
-# 2. 启动所有服务
-docker compose up --build
-
-# 3. 访问
-# 前端: http://localhost:8080
-# 后端 API: http://localhost:8000
-# API 文档: http://localhost:8000/docs
+docker compose up --build -d
+docker compose logs -f backend
+docker compose restart backend
+docker compose down
+docker compose down -v
 ```
 
-服务包括：
-- **db** — PostgreSQL 16
-- **backend** — FastAPI（端口 8000）
-- **frontend** — Nginx + React 静态文件（端口 8080）
-
-## 环境变量
-
-| 变量 | 默认值（开发） | Docker/生产推荐值 | 说明 |
-| --- | --- | --- | --- |
-| `DATABASE_URL` | `sqlite+pysqlite:///:memory:` | `postgresql+psycopg://osnews_app:OsNewsTracker2026DbA7K9M4@db:5432/osnews` | 数据库连接串 |
-| `LLM_BASE_URL` | `http://llm.invalid/v1` | 司内 LLM 网关地址 | LLM 网关地址（OpenAI 兼容 API） |
-| `LLM_API_KEY` | `test-key` | 司内网关 API 密钥 | LLM 网关 API 密钥 |
-| `LLM_MODEL` | `test-model` | 司内默认模型名 | 使用的模型名称 |
-| `LLM_MAX_CONCURRENCY` | `4` | `4` | LLM 请求最大并发数 |
-| `SEARCH_PROVIDER` | `none` | `internal` | 搜索提供者（可选值：`none`、`internal`） |
-| `FETCH_USER_AGENT` | `os-news-tracker/0.1 (+internal)` | 同左 | HTTP 请求 User-Agent |
-| `FETCH_PER_HOST_DELAY_SECONDS` | `2.0` | `2.0` | 同主机请求间隔（秒） |
-| `ENABLE_SCHEDULER` | `1` | `1` | 是否启用定时任务调度（测试时设为 `0`） |
-| `JWT_SECRET_KEY` | `change-me-in-production-use-32+-chars` | 32 位以上随机字符串 | JWT 签名密钥（V2，必须修改）|
-| `WECHAT_MP_COOKIE` | 空 | 实际公众号平台 cookie | 微信公众号历史抓取鉴权 |
-| `WECHAT_MP_TOKEN` | 空 | 实际公众号平台 token | 微信公众号历史抓取鉴权 |
-| `MAIL_PROVIDER` | `tof4` | `tof4` / `smtp` | 默认邮件发送通道 |
-| `TOF4_PAASID` | 空 | 司内 TOF4 应用 ID | TOF4 邮件通道配置 |
-| `TOF4_TOKEN` | 空 | 司内 TOF4 token | TOF4 邮件通道配置 |
-| `TOF4_URL` | 空 | 实际 TOF4 发送地址 | TOF4 邮件通道配置 |
-| `SMTP_HOST` | `localhost` | 企业 SMTP 主机 | SMTP 发信主机 |
-| `SMTP_PORT` | `25` | `465` / `587` 等 | SMTP 发信端口 |
-| `SMTP_USERNAME` | 空 | 发件账号 | SMTP 登录用户名 |
-| `SMTP_PASSWORD` | 空 | SMTP 授权码/密码 | SMTP 登录密码 |
-| `SMTP_FROM_EMAIL` | `no-reply@example.com` | 实际发件邮箱 | SMTP 默认发件人 |
-| `SMTP_FROM_NAME` | `OS News Tracker` | 实际显示名 | SMTP 默认发件名 |
-| `SMTP_USE_TLS` | `0` | `0` / `1` | SMTP STARTTLS 开关 |
-| `SMTP_USE_SSL` | `0` | `0` / `1` | SMTP SSL 开关 |
-
-配置使用 pydantic-settings，自动从 `.env` 文件加载。
-
-### 邮件与微信相关示例
-
-`.env.example` 已内置两套邮件通道与微信抓取配置骨架：
-
-- **微信历史抓取**
-  - `WECHAT_MP_COOKIE`
-  - `WECHAT_MP_TOKEN`
-- **TOF4 邮件发送**
-  - `MAIL_PROVIDER=tof4`
-  - `TOF4_PAASID` / `TOF4_TOKEN` / `TOF4_URL`
-- **SMTP 邮件发送**
-  - `MAIL_PROVIDER=smtp`
-  - `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD`
-
-如果只做本地开发而不测试邮件或公众号历史抓取，这些字段可以先留空。
-
-## 大模型 API 配置
-
-系统通过 OpenAI 兼容协议接入大模型，用于新闻分类、标签提取、实体识别和摘要生成。**启动前必须正确配置以下 3 个环境变量**。
-
-### 支持的大模型服务
-
-任何兼容 OpenAI `/v1/chat/completions` 接口的服务均可使用：
-
-| 服务商 | `LLM_BASE_URL` 示例 | 获取 API Key |
-| --- | --- | --- |
-| **司内 LLM 网关** | `https://llm-gateway.your-company.com/v1` | 联系内部平台团队 |
-| **OpenAI** | `https://api.openai.com/v1` | <https://platform.openai.com/api-keys> |
-| **Azure OpenAI** | `https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT` | Azure Portal → OpenAI 资源 |
-| **DeepSeek** | `https://api.deepseek.com/v1` | <https://platform.deepseek.com/api_keys> |
-| **智谱 GLM** | `https://open.bigmodel.cn/api/paas/v4` | <https://open.bigmodel.cn/usercenter/apikeys> |
-| **通义千问** | `https://dashscope.aliyuncs.com/compatible-mode/v1` | <https://dashscope.console.aliyun.com/apiKey> |
-| **Moonshot (Kimi)** | `https://api.moonshot.cn/v1` | <https://platform.moonshot.cn/console/api-keys> |
-| **Ollama（本地）** | `http://localhost:11434/v1` | 无需（本地运行，可填写任意值） |
-
-### 配置步骤
-
-#### 1. 创建 .env 文件
+开发环境：
 
 ```bash
-cp .env.example .env
+docker compose -f docker-compose.dev.yml up --build -d
+docker compose -f docker-compose.dev.yml logs -f
+docker compose -f docker-compose.dev.yml up -d --force-recreate backend
 ```
 
-#### 2. 编辑 .env，填入大模型配置
+### 后端测试
 
 ```bash
-# === 必填：大模型 API 配置 ===
-# API 地址（OpenAI 兼容格式）
-LLM_BASE_URL=https://api.openai.com/v1
-
-# API 密钥
-LLM_API_KEY=sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-
-# 模型名称（按实际服务支持的模型填写）
-LLM_MODEL=gpt-4o
-
-# === 可选：大模型调优 ===
-# 最大并发请求数，控制同时发往 LLM 的请求量
-LLM_MAX_CONCURRENCY=4
+cd backend
+ENABLE_SCHEDULER=0 python -m pytest tests/ -v
+ENABLE_SCHEDULER=0 python -m pytest tests/unit/ -v
 ```
 
-#### 3. 常见配置示例
-
-**OpenAI：**
-
-```ini
-LLM_BASE_URL=https://api.openai.com/v1
-LLM_API_KEY=sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-LLM_MODEL=gpt-4o
-```
-
-**司内 LLM 网关：**
-
-```ini
-LLM_BASE_URL=https://llm-gateway.your-company.com/v1
-LLM_API_KEY=your-internal-api-key
-LLM_MODEL=internal-default
-```
-
-**Azure OpenAI：**
-
-```ini
-LLM_BASE_URL=https://your-resource.openai.azure.com/openai/deployments/gpt-4o
-LLM_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-LLM_MODEL=gpt-4o
-# Azure 需要额外的 headers，通过查询参数传递 api-version
-# LLM_BASE_URL 末尾追加：?api-version=2024-02-15-preview
-```
-
-**DeepSeek：**
-
-```ini
-LLM_BASE_URL=https://api.deepseek.com/v1
-LLM_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-LLM_MODEL=deepseek-chat
-```
-
-**Ollama 本地模型：**
-
-```ini
-LLM_BASE_URL=http://localhost:11434/v1
-LLM_API_KEY=ollama
-LLM_MODEL=qwen2.5:7b
-```
-
-#### 4. 验证配置
+### 前端测试与构建
 
 ```bash
-# 用 curl 测试 LLM 连通性
-curl -sS "$LLM_BASE_URL/chat/completions" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $LLM_API_KEY" \
-  -d '{"model":"'"$LLM_MODEL"'","messages":[{"role":"user","content":"say hello"}]}' \
-  | head -c 500
+cd frontend
+npm run build
+npm run test
+npx vitest run src/pages/HomePage.test.tsx
 ```
 
-### 模型选择建议
+容器中运行：
 
-| 用途 | 推荐模型 | 说明 |
-| --- | --- | --- |
-| 新闻分类 & 标签提取 | GPT-4o / Claude 3.5 Sonnet / Qwen2.5-72B | 分类准确率高，输出格式稳定 |
-| 摘要生成 | GPT-4o-mini / DeepSeek-V3 / Qwen2.5-32B | 性价比高，摘要任务足够 |
-| 实体提取 | GPT-4o / DeepSeek-R1 | 需要较强的推理能力 |
-| 低成本方案 | DeepSeek-V3 / Qwen2.5-32B / GLM-4-Flash | 大部分任务可用，成本大幅降低 |
+```bash
+docker compose -f docker-compose.dev.yml exec -T frontend npm run build
+docker compose -f docker-compose.dev.yml exec -T backend env ENABLE_SCHEDULER=0 python -m pytest tests/unit -q
+```
 
-## 待完成事项
+## 运行日志
 
-以下功能已预留接口，但需要根据实际环境配置方可使用：
+系统使用 `backend/app/run_logs.py` 维护内存环形日志，接口为：
 
-1. **司内 LLM 网关** — 当前 `LLM_BASE_URL` 指向占位地址。部署前必须配置为组织内部的 LLM 网关地址及对应的 `LLM_API_KEY`。LLM client 基于 OpenAI 兼容协议，任何兼容该协议的服务均可接入。
+```text
+GET /run-logs?after_id=0&limit=200
+```
 
-2. **搜索提供者** — `search` 类型的采集器需要一个真实的搜索后端。当前 `SEARCH_PROVIDER` 默认为 `none`（跳过搜索采集）。如需启用，请实现 `SearchProvider` 协议（参见 `backend/app/search/base.py`）并设置 `SEARCH_PROVIDER=internal`。
+当前使用方：
 
-3. **Firecrawl 内容提取** — 内容提取层基于可插拔的 `ContentExtractor` 协议设计。默认使用 Scrapling。如需更高精度的提取（尤其是 JS 渲染页面），可接入 Firecrawl 作为替代提取器，但需注意其 AGPL 许可证的影响。
+- 站点发现运行日志。
+- CrawlMethod 抓取日志。
+- 微信文章补抓请求/响应/解析耗时。
+- 系统晨抓执行日志。
 
-4. **Alembic 生产迁移** — 当前开发模式下使用 `Base.metadata.create_all()` 在启动时自动建表。生产环境应使用 Alembic 迁移管理数据库 schema 变更。
+日志是运行期内存态，不是审计表。需要持久历史时应看对应业务表，例如 `crawl_method_runs`、`morning_crawl_runs`、`mail_deliveries`。
 
-## Discovery 与晨抓说明
+## 数据表概要
 
-### Discovery（智能探查 + 爬取方式库）
+| 表 | 说明 |
+| --- | --- |
+| `sources` | 传统数据源和 discovery source。 |
+| `items` | 富化后的新闻条目。 |
+| `tags`, `tag_aliases`, `item_tags` | 技术热点、主分类标签与别名。 |
+| `entities`, `item_entities` | 实体抽取结果。 |
+| `crawl_methods` | 站点发现产出的 DSL 抓取方式。 |
+| `crawl_method_runs` | 单个 CrawlMethod 运行记录。 |
+| `site_discovery_runs` | 站点发现任务轨迹和结果。 |
+| `crawl_method_review_reminder_configs` | 待审核方式邮件提醒配置。 |
+| `mail_templates`, `mail_schedules`, `mail_deliveries` | 邮件模板、定时任务和发送记录。 |
+| `morning_crawl_config`, `morning_crawl_runs`, `morning_crawl_run_methods` | 系统晨抓配置和执行明细。 |
+| `main_categories` | 可管理主分类。 |
+| `discovery_prompt_sets` | Prompt 工作室配置。 |
+| `security_advisories`, `product_lifecycles`, `image_releases`, `compatibility_entries` | 结构化情报流预留/部分实现表。 |
 
-- discovery 负责把输入沉淀为可复用的 `crawl method`
-- 当前支持的网站路径、微信搜索路径、微信公众号历史路径等多源 recipe
-- `Prompt 工作室` 管 discovery 与 enrich 的 prompt 套餐，不会直接改动代码默认模板
-- `主分类修改` 用于维护 enrich 阶段的主分类池
+## 注意事项
 
-### 系统晨抓
+- `backend/app/agent/` 和 `backend/app/fetchers/agent_crawl.py` 是冻结模块，除非明确需求，不要修改。
+- 微信公众号历史抓取依赖 cookie/token，且容易受微信侧限制；更新 `.env` 后要重建后端容器。
+- 公众号正文补抓做了截断和解析优化，但仍应控制并发与补抓上限。
+- 邮件 24h/7d/30d 筛选是相对窗口，发送或预览时按当前时刻计算。
+- `SYSTEM_ACCESS_PASSWORD` 默认是 `admin`，部署时必须修改。
+- 生产环境建议不要暴露 PostgreSQL `15432` 到公网。
+- 如果修改 prompt、分类或审核策略，优先通过现有 Prompt 工作室和配置表验证，再改硬编码逻辑。
 
-- 晨抓只使用 **discovery methods**
-- 不再以旧 `/sources` 业务模型作为晨抓主入口
-- 每次晨抓会根据配置生成抓取请求，执行 active methods，并记录：
-  - 今日状态
-  - 最近运行记录
-  - 方法级成功/失败明细
-  - 日志时间线
+## 参考入口
+
+- 前端主入口：[frontend/src/App.tsx](frontend/src/App.tsx)
+- 后端应用入口：[backend/app/entry.py](backend/app/entry.py)
+- API 注册：[backend/app/api/main.py](backend/app/api/main.py)
+- ORM 模型：[backend/app/models.py](backend/app/models.py)
+- 站点发现：[backend/app/discovery/](backend/app/discovery/)
+- 邮件中心：[backend/app/mail/](backend/app/mail/)
+- 系统晨抓：[backend/app/morning_crawl/](backend/app/morning_crawl/)
