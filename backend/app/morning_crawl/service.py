@@ -93,6 +93,16 @@ def _compute_next_run(config: MorningCrawlConfig, reference: datetime) -> dateti
     return candidate
 
 
+def _scheduled_time_for_day(config: MorningCrawlConfig, reference: datetime) -> datetime | None:
+    """Return the configured run time on the reference Beijing calendar day."""
+    try:
+        hour_str, minute_str = (config.run_time or "07:00").split(":", 1)
+        hour, minute = int(hour_str), int(minute_str)
+    except (ValueError, AttributeError):
+        return None
+    return reference.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
 def get_or_create_config(db: Session) -> MorningCrawlConfig:
     config = db.scalar(select(MorningCrawlConfig).order_by(MorningCrawlConfig.id).limit(1))
     if config is None:
@@ -589,13 +599,19 @@ def schedule_due_now(config: MorningCrawlConfig, *, now: datetime, today: str) -
         return False
     if config.last_success_date == today:
         return False
-    try:
-        hour_str, minute_str = (config.run_time or "07:00").split(":", 1)
-        hour, minute = int(hour_str), int(minute_str)
-    except (ValueError, AttributeError):
+    scheduled_at = _scheduled_time_for_day(config, now)
+    if scheduled_at is None:
         return False
     if config.frequency == "weekly":
         anchor = config.created_at.weekday() if config.created_at else now.weekday()
         if now.weekday() != anchor:
             return False
-    return (now.hour, now.minute) >= (hour, minute)
+    if now < scheduled_at:
+        return False
+
+    # If today's scheduled run already happened but did not fully succeed, do not let
+    # the 1-minute tick hammer the system. Retry after the configured patrol interval.
+    if config.last_run_at and config.last_run_at.date().isoformat() == today and config.last_run_at >= scheduled_at:
+        interval_hours = max(1, int(config.patrol_interval_hours or 3))
+        return now >= config.last_run_at + timedelta(hours=interval_hours)
+    return True
