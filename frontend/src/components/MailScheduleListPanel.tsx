@@ -76,6 +76,25 @@ function logTag(trigger: string): { text: string; bg: string; color: string } {
   return { text: "SEND", bg: "#173328", color: "#8ce0b6" };
 }
 
+function isQueryEmptyStatus(status: string | null | undefined): boolean {
+  return status === "查询空" || status === "skipped_empty";
+}
+
+function isSkippedStatus(status: string | null | undefined): boolean {
+  return status === "跳过" || status === "skipped";
+}
+
+function patrolStatusText(status: string | null | undefined): string {
+  if (!status) return "正常";
+  const labels: Record<string, string> = {
+    normal: "正常",
+    resent: "已补发",
+    empty_waiting_patrol: "查询空",
+    skipped: "跳过",
+  };
+  return labels[status] ?? status;
+}
+
 const PANEL_TITLE: React.CSSProperties = {
   fontSize: 11,
   textTransform: "uppercase",
@@ -220,6 +239,8 @@ export function MailScheduleListPanel(props: {
       setStatusMessage(
         data.status === "sent"
           ? `补发成功，共 ${data.item_count} 条。`
+          : data.status === "查询空" || data.status === "skipped_empty"
+            ? "当前筛选没有匹配到新闻，未补发。"
           : `补发失败（${data.provider.toUpperCase()}）：${data.error_message ?? "未知错误"}`,
       );
       invalidate();
@@ -317,13 +338,23 @@ export function MailScheduleListPanel(props: {
           )}
           {schedules.map((schedule) => {
             const active = schedule.id === selectedId && !creating;
-            const statusColor = !schedule.enabled ? "#98a2b3" : schedule.last_result_status === "failed" ? "#b42318" : "#027a48";
+            const statusColor = !schedule.enabled
+              ? "#98a2b3"
+              : schedule.last_result_status === "failed"
+                ? "#b42318"
+                : isQueryEmptyStatus(schedule.last_result_status) || isSkippedStatus(schedule.last_result_status)
+                  ? "#667085"
+                  : "#027a48";
             const statusText = !schedule.enabled
               ? "已暂停"
               : schedule.last_result_status
                 ? schedule.last_result_status === "sent"
                   ? `最近成功 · ${schedule.last_result_count ?? 0} 条`
-                  : "最近失败"
+                  : isSkippedStatus(schedule.last_result_status)
+                    ? "跳过"
+                    : isQueryEmptyStatus(schedule.last_result_status)
+                      ? "暂无新闻，待巡检"
+                      : "最近失败"
                 : "待发送";
             return (
               <div
@@ -467,7 +498,7 @@ export function MailScheduleListPanel(props: {
               </div>
               <div style={{ border: "1px solid #e1e7ef", borderRadius: 12, background: "#f8fafc", padding: "12px 14px" }}>
                 <div style={{ ...PANEL_TITLE, marginBottom: 6 }}>巡检状态</div>
-                <div style={{ fontSize: 15, fontWeight: 800, color: "#175cd3" }}>{selected.patrol_status ?? "正常"}</div>
+                <div style={{ fontSize: 15, fontWeight: 800, color: "#175cd3" }}>{patrolStatusText(selected.patrol_status)}</div>
                 <div style={{ fontSize: 12, color: "#667085" }}>每 6h 兜底补发</div>
               </div>
             </div>
@@ -563,6 +594,7 @@ export function MailScheduleListPanel(props: {
                 {(logsQuery.data ?? []).map((log: MailDeliveryLog) => {
                   const tag = logTag(log.trigger_type);
                   const failed = log.status === "failed";
+                  const skipped = isQueryEmptyStatus(log.status) || isSkippedStatus(log.status);
                   return (
                     <div
                       key={log.id}
@@ -585,14 +617,14 @@ export function MailScheduleListPanel(props: {
                             borderRadius: 999,
                             fontSize: 10,
                             fontWeight: 700,
-                            background: failed ? "#402126" : tag.bg,
-                            color: failed ? "#ff9ca4" : tag.color,
+                            background: failed ? "#402126" : skipped ? "#27303c" : tag.bg,
+                            color: failed ? "#ff9ca4" : skipped ? "#b8c4d2" : tag.color,
                           }}
                         >
-                          {failed ? "ERR" : tag.text}
+                          {failed ? "ERR" : skipped ? "SKIP" : tag.text}
                         </span>
-                        {failed ? "发送失败" : "正常发送"}
-                        <span style={{ color: "#8ea0b2" }}> · {log.item_count} 条 · {failed ? (log.error_message ?? "失败") : "成功"}</span>
+                        {failed ? "发送失败" : skipped ? "未发送" : "正常发送"}
+                        <span style={{ color: "#8ea0b2" }}> · {log.item_count} 条 · {failed || skipped ? (log.error_message ?? "失败") : "成功"}</span>
                       </div>
                     </div>
                   );

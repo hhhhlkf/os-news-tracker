@@ -124,6 +124,10 @@ def _schedule_due_now(schedule, *, now: datetime, today: str) -> bool:
     """
     if not schedule.enabled:
         return False
+    if schedule.patrol_status in ("查询空", "empty_waiting_patrol"):
+        return schedule.next_run_at is not None and now >= schedule.next_run_at
+    if schedule.next_run_at is not None and now < schedule.next_run_at:
+        return False
     if schedule.last_sent_marker_date == today:
         return False
     try:
@@ -150,12 +154,14 @@ def _run_due_schedules(*, trigger_type: str, mark_today: bool, patrol: bool) -> 
         schedules = list(session.scalars(select(MailSchedule).where(MailSchedule.enabled.is_(True))))
         service = MailService(session)
         for schedule in schedules:
+            if schedule.patrol_status in ("查询空", "empty_waiting_patrol") and not patrol:
+                continue
             if not _schedule_due_now(schedule, now=now, today=today):
                 continue
             try:
                 service.run_schedule(schedule, trigger_type=trigger_type, mark_today=mark_today)
                 if patrol:
-                    schedule.patrol_status = "resent"
+                    schedule.patrol_status = "已补发"
                     session.commit()
                 logger.info("mail schedule %s executed (%s)", schedule.id, trigger_type)
             except Exception:

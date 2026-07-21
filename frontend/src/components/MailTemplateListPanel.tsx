@@ -167,6 +167,8 @@ export function MailTemplateListPanel(props: {
       setStatusMessage(
         data.status === "sent"
           ? `发送成功，共 ${data.item_count} 条，通道：${data.provider.toUpperCase()}。`
+          : data.status === "查询空" || data.status === "skipped_empty"
+            ? "当前筛选没有匹配到新闻，未发送。"
           : `发送失败（${data.provider.toUpperCase()}）：${data.error_message ?? "未知错误"}`,
       );
       void queryClient.invalidateQueries({ queryKey: ["mail-templates"] });

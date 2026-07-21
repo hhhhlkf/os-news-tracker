@@ -38,6 +38,7 @@ class MailScheduleNotFoundError(Exception):
 # 存库的 send_time / next_run_at / last_sent_at / marker 均为北京时间墙钟值，
 # 前端直接原样展示，不再做任何时区换算。
 BEIJING_TZ = timezone(timedelta(hours=8))
+EMPTY_SCHEDULE_RETRY_DELAY = timedelta(hours=6)
 
 
 def beijing_now() -> datetime:
@@ -474,6 +475,12 @@ class MailService:
         self._db.add(delivery)
         self._db.flush()
 
+        if preview.item_count <= 0:
+            delivery.status = "查询空"
+            delivery.error_message = "当前筛选没有匹配到新闻，未发送邮件。"
+            delivery.finished_at = beijing_now()
+            return delivery
+
         mail_provider = build_default_mail_provider(provider)
         from_email, from_name = resolve_sender(preview.provider)
         try:
@@ -552,6 +559,10 @@ class MailService:
             send_time=payload.send_time,
             enabled=payload.enabled,
             next_run_at=_compute_next_run(send_time=payload.send_time, frequency=payload.frequency, reference=now),
+            last_sent_marker_date=now.date().isoformat() if payload.enabled else None,
+            last_result_status="跳过" if payload.enabled else None,
+            last_result_count=0 if payload.enabled else None,
+            patrol_status="跳过" if payload.enabled else None,
             created_at=now,
             updated_at=now,
         )
@@ -626,9 +637,14 @@ class MailService:
         schedule.last_result_count = delivery.item_count
         if mark_today and delivery.status == "sent":
             schedule.last_sent_marker_date = now.date().isoformat()
-        schedule.next_run_at = _compute_next_run(
-            send_time=schedule.send_time, frequency=schedule.frequency, reference=now
-        )
+            schedule.patrol_status = "正常"
+        elif delivery.status in ("查询空", "skipped_empty"):
+            schedule.patrol_status = "查询空"
+            schedule.next_run_at = now + EMPTY_SCHEDULE_RETRY_DELAY
+        else:
+            schedule.next_run_at = _compute_next_run(
+                send_time=schedule.send_time, frequency=schedule.frequency, reference=now
+            )
         self._db.commit()
         self._db.refresh(delivery)
         return delivery
