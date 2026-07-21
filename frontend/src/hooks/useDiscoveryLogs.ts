@@ -18,22 +18,41 @@ const DISCOVERY_RELATED_STAGES = new Set([
   "定时抓取",
 ]);
 
-function isDiscoveryLog(log: NewsRunLogEntry, includeAll: boolean, runId: number | null) {
-  if (!includeAll) {
-    return Number((log as Record<string, unknown>).run_id) === runId;
-  }
-  if (DISCOVERY_RELATED_STAGES.has(log.stage)) {
-    return true;
-  }
-  return log.stage === "process" && typeof log.method_id === "number";
+type DiscoveryLogMode = "run" | "all_discovery" | "run_plus_methods";
+
+function isCrawlMethodLog(log: NewsRunLogEntry) {
+  return typeof log.method_id === "number" && (log.stage === "抓方式" || log.stage === "process");
 }
 
-export function useDiscoveryLogs(runId: number | null, enabled: boolean, includeAll = false) {
+function isDiscoveryLog(log: NewsRunLogEntry, mode: DiscoveryLogMode, runId: number | null) {
+  if (mode === "run_plus_methods") {
+    return Number((log as Record<string, unknown>).run_id) === runId || isCrawlMethodLog(log);
+  }
+  if (mode === "all_discovery") {
+    if (DISCOVERY_RELATED_STAGES.has(log.stage)) {
+      return true;
+    }
+    return isCrawlMethodLog(log);
+  }
+  return Number((log as Record<string, unknown>).run_id) === runId;
+}
+
+export function useDiscoveryLogs(
+  runId: number | null,
+  enabled: boolean,
+  includeAllOrMode: boolean | DiscoveryLogMode = false,
+) {
+  const mode: DiscoveryLogMode =
+    typeof includeAllOrMode === "string"
+      ? includeAllOrMode
+      : includeAllOrMode
+        ? "all_discovery"
+        : "run";
   const [logs, setLogs] = useState<NewsRunLogEntry[]>([]);
   const lastId = useRef(0);
   const inFlight = useRef(false);
   useEffect(() => {
-    if (!enabled || (!includeAll && runId == null)) return;
+    if (!enabled || (mode === "run" && runId == null)) return;
     setLogs([]);
     lastId.current = 0;
     inFlight.current = false;
@@ -50,7 +69,7 @@ export function useDiscoveryLogs(runId: number | null, enabled: boolean, include
         if (data.logs.length) {
           lastId.current = Math.max(lastId.current, ...data.logs.map((l) => l.id));
         }
-        const nextLogs = data.logs.filter((l) => isDiscoveryLog(l, includeAll, runId));
+        const nextLogs = data.logs.filter((l) => isDiscoveryLog(l, mode, runId));
         if (!stop) {
           setLogs((prev) => {
             if (nextLogs.length === 0) return prev;
@@ -67,6 +86,6 @@ export function useDiscoveryLogs(runId: number | null, enabled: boolean, include
     poll();
     const t = window.setInterval(poll, 1500);
     return () => { stop = true; window.clearInterval(t); };
-  }, [runId, enabled, includeAll]);
+  }, [runId, enabled, mode]);
   return logs;
 }

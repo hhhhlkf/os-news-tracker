@@ -98,7 +98,7 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
     enabled: runId != null,
     refetchInterval: (q) => (q.state.data?.status === "running" ? 1500 : false),
   });
-  const logs = useDiscoveryLogs(runId, true);
+  const logs = useDiscoveryLogs(runId, true, "run_plus_methods");
   const cancelMut = useMutation({
     mutationFn: (id: number) => cancelDiscoveryRun(id),
     onSuccess: () => {
