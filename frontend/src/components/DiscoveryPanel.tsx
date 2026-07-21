@@ -31,9 +31,9 @@ interface DiscoveryPanelPersistedState {
 }
 
 function readDiscoveryPanelState(): DiscoveryPanelPersistedState {
-  if (typeof window === "undefined" || !window.localStorage) return {};
+  if (typeof window === "undefined" || !window.sessionStorage) return {};
   try {
-    const raw = window.localStorage.getItem(DISCOVERY_PANEL_STORAGE_KEY);
+    const raw = window.sessionStorage.getItem(DISCOVERY_PANEL_STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     const validRouteTypes = new Set(["website", "wechat_search", "wechat_history", "internal_forum"]);
@@ -61,13 +61,13 @@ function readDiscoveryPanelState(): DiscoveryPanelPersistedState {
 }
 
 function writeDiscoveryPanelState(state: DiscoveryPanelPersistedState): void {
-  if (typeof window === "undefined" || !window.localStorage) return;
-  window.localStorage.setItem(DISCOVERY_PANEL_STORAGE_KEY, JSON.stringify(state));
+  if (typeof window === "undefined" || !window.sessionStorage) return;
+  window.sessionStorage.setItem(DISCOVERY_PANEL_STORAGE_KEY, JSON.stringify(state));
 }
 
 function clearDiscoveryPanelState(): void {
-  if (typeof window === "undefined" || !window.localStorage) return;
-  window.localStorage.removeItem(DISCOVERY_PANEL_STORAGE_KEY);
+  if (typeof window === "undefined" || !window.sessionStorage) return;
+  window.sessionStorage.removeItem(DISCOVERY_PANEL_STORAGE_KEY);
 }
 
 export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: number) => void }) {
@@ -98,7 +98,7 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
     enabled: runId != null,
     refetchInterval: (q) => (q.state.data?.status === "running" ? 1500 : false),
   });
-  const logs = useDiscoveryLogs(runId, true, true);
+  const logs = useDiscoveryLogs(runId, true);
   const cancelMut = useMutation({
     mutationFn: (id: number) => cancelDiscoveryRun(id),
     onSuccess: () => {

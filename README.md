@@ -348,6 +348,7 @@ SYSTEM_ACCESS_PASSWORD=admin
 | `LLM_API_KEY` | `test-key` | LLM API key。 |
 | `LLM_MODEL` | `test-model` | Chat completion 模型名。 |
 | `LLM_MAX_CONCURRENCY` | `4` | LLM 并发上限。 |
+| `DISCOVERY_MAX_CONCURRENT_RUNS` | `3` | 智能探查全局并发上限，超过后返回 429 提醒等待。 |
 | `SEARCH_PROVIDER` | `none` | 搜索 Provider，当前可接 `internal`。 |
 | `FETCH_USER_AGENT` | `os-news-tracker/0.1 (+internal)` | 抓取 User-Agent。 |
 | `FETCH_PER_HOST_DELAY_SECONDS` | `2.0` | 同 host 抓取间隔。 |

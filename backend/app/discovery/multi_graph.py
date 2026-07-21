@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -604,7 +605,7 @@ def _run_and_save_multi_recipe(
         db.close()
 
 
-def start_multi_discovery_run(
+def _run_multi_discovery_sync(
     raw_input: str,
     *,
     force: bool = False,
@@ -772,6 +773,200 @@ def start_multi_discovery_run(
     result["resolved_route_type"] = selected_route_type
     result["route_source"] = route_source
     return result
+
+
+def _append_multi_run_trace(run_id: int, node_trace: list[dict[str, Any]], step: str, summary: dict[str, Any]) -> None:
+    from app.db import SessionLocal
+    from app.models import SiteDiscoveryRun
+
+    node_trace.append(
+        {
+            "step": step,
+            "status": "done",
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "summary": summary,
+        }
+    )
+    db = SessionLocal()
+    try:
+        run = db.get(SiteDiscoveryRun, run_id)
+        if run and run.status == "running":
+            run.node_trace = list(node_trace)
+            db.commit()
+    finally:
+        db.close()
+
+
+def _execute_multi_discovery_run(
+    run_id: int,
+    raw_input: str,
+    *,
+    force: bool,
+    name: str | None,
+    hints: dict[str, Any] | None,
+    selected_route_type: str | None,
+    route_source: str,
+) -> None:
+    from app.discovery.runtime import finish_discovery_run
+    from app.run_logs import append_run_log, run_log_context
+
+    source_label = name or raw_input
+    node_trace: list[dict[str, Any]] = []
+    with run_log_context(run_id):
+        try:
+            route = source_router_for_input(raw_input, hints)
+            _append_multi_run_trace(
+                run_id,
+                node_trace,
+                "fetch_homepage",
+                {
+                    "status": "ok",
+                    "title": source_label,
+                    "links": 0,
+                    "source_type": selected_route_type or route.input_type,
+                },
+            )
+            _append_multi_run_trace(
+                run_id,
+                node_trace,
+                "capture_network",
+                {
+                    "json_apis": 0,
+                    "sample_urls": route.normalized_input,
+                    "route": selected_route_type or route.input_type,
+                },
+            )
+            append_run_log(
+                "探查",
+                "多源智能探查后台任务开始",
+                source=source_label,
+                input=raw_input,
+                selected_route_type=selected_route_type,
+                route_source=route_source,
+            )
+            result = _run_multi_discovery_sync(
+                raw_input,
+                force=force,
+                name=name,
+                hints=hints,
+                selected_route_type=selected_route_type,
+                route_source=route_source,
+            )
+            _append_multi_run_trace(
+                run_id,
+                node_trace,
+                "explorer",
+                {
+                    "source_type": result.get("resolved_route_type") or selected_route_type,
+                    "success": True,
+                    "list_url": raw_input,
+                },
+            )
+            audit_result = result.get("multi_audit_result") or {}
+            _append_multi_run_trace(
+                run_id,
+                node_trace,
+                "auditor",
+                {
+                    "passed": audit_result.get("passed", result.get("status") == "completed"),
+                    "decision": audit_result.get("method_status") or result.get("status"),
+                    "issues": audit_result.get("issues"),
+                },
+            )
+            if result.get("method_id") is not None:
+                _append_multi_run_trace(
+                    run_id,
+                    node_trace,
+                    "save_method",
+                    {
+                        "method_id": result.get("method_id"),
+                        "method_status": result.get("method_status"),
+                    },
+                )
+            status = "completed" if result.get("status") == "completed" else "failed"
+            finish_discovery_run(
+                run_id,
+                status=status,
+                resulting_method_id=result.get("method_id"),
+                node_trace=node_trace,
+                error_message=None if status == "completed" else str(result.get("status") or "multi discovery failed"),
+            )
+            append_run_log(
+                "探查",
+                "多源智能探查后台任务结束",
+                source=source_label,
+                status=status,
+                method_id=result.get("method_id"),
+            )
+        except Exception as exc:
+            finish_discovery_run(
+                run_id,
+                status="failed",
+                node_trace=node_trace,
+                error_message=str(exc),
+            )
+            append_run_log(
+                "探查",
+                f"多源智能探查后台任务失败 · {exc}",
+                source=source_label,
+                level="error",
+            )
+            logger.exception("multi discovery run %s failed", run_id)
+
+
+def start_multi_discovery_run(
+    raw_input: str,
+    *,
+    force: bool = False,
+    name: str | None = None,
+    hints: dict[str, Any] | None = None,
+    selected_route_type: str | None = None,
+    route_source: str = "inferred",
+) -> dict[str, Any]:
+    from app.discovery.runtime import create_discovery_run_or_raise
+
+    route = source_router_for_input(raw_input, hints)
+    if selected_route_type == "website" or (selected_route_type is None and route.kind == "website"):
+        return _run_multi_discovery_sync(
+            raw_input,
+            force=force,
+            name=name,
+            hints=hints,
+            selected_route_type=selected_route_type,
+            route_source=route_source,
+        )
+    if selected_route_type == "internal_forum":
+        return _run_multi_discovery_sync(
+            raw_input,
+            force=force,
+            name=name,
+            hints=hints,
+            selected_route_type=selected_route_type,
+            route_source=route_source,
+        )
+
+    run_id = create_discovery_run_or_raise(raw_input)
+    threading.Thread(
+        target=_execute_multi_discovery_run,
+        kwargs={
+            "run_id": run_id,
+            "raw_input": raw_input,
+            "force": force,
+            "name": name,
+            "hints": hints,
+            "selected_route_type": selected_route_type,
+            "route_source": route_source,
+        },
+        daemon=True,
+        name=f"multi-discovery-run-{run_id}",
+    ).start()
+    return {
+        "status": "started",
+        "run_id": run_id,
+        "route": route.model_dump(),
+        "resolved_route_type": selected_route_type or route.input_type,
+        "route_source": route_source,
+    }
 
 
 def _contract_artifact(route: SourceRoute) -> dict[str, Any]:

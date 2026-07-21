@@ -1,14 +1,27 @@
 from __future__ import annotations
 
 from collections import deque
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from threading import Lock
+from collections.abc import Iterator
 from typing import Any
 
 _MAX_LOGS = 300
 _logs: deque[dict[str, Any]] = deque(maxlen=_MAX_LOGS)
 _lock = Lock()
 _next_id = 1
+_current_run_id: ContextVar[int | None] = ContextVar("current_run_id", default=None)
+
+
+@contextmanager
+def run_log_context(run_id: int | None) -> Iterator[None]:
+    token = _current_run_id.set(run_id)
+    try:
+        yield
+    finally:
+        _current_run_id.reset(token)
 
 
 def clear_run_logs() -> None:
@@ -27,6 +40,9 @@ def append_run_log(
     **fields: Any,
 ) -> dict[str, Any]:
     global _next_id
+    run_id = _current_run_id.get()
+    if run_id is not None:
+        fields.setdefault("run_id", run_id)
     with _lock:
         row = {
             "id": _next_id,

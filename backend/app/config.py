@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     tof4_from_email: str | None = None
     tof4_from_name: str | None = None
     system_access_password: str = "admin"
+    discovery_max_concurrent_runs: int = 3
 
 
 @lru_cache

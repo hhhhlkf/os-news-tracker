@@ -20,6 +20,7 @@ from app.discovery.cancel import request_cancel
 from app.discovery.execution import run_method
 from app.discovery.graph import check_existing_method, start_discovery_run
 from app.discovery.multi_graph import start_multi_discovery_run
+from app.discovery.runtime import DiscoveryCapacityExceeded
 from app.discovery.naming import (
     default_website_display_name,
     format_website_display_name,
@@ -119,51 +120,34 @@ def discover_run(body: DiscoverRequest, db: Session = Depends(get_db)):
             return {"status": "duplicate", "existing_method": existing}
     # 别名：前端选填，不填自动用"网站：..."命名
     name = body.name or default_website_display_name(site_url)
-    run_id = start_discovery_run(site_url, force=body.force, name=name)
+    try:
+        run_id = start_discovery_run(site_url, force=body.force, name=name)
+    except DiscoveryCapacityExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     return {"status": "started", "run_id": run_id, "name": name}
 
 
 @router.post("/multi-run")
 def discover_multi_run(body: MultiDiscoverRequest):
-    from app.run_logs import append_run_log
-
     effective_route = body.resolved_route_type or body.selected_route_type
     hints = _route_type_to_hints(effective_route)
-    display_input = body.display_input or body.input
-
-    append_run_log(
-        "路由",
-        "已锁定最终路由",
-        input=display_input,
-        effective_input=body.input,
-        selected_route_type=body.selected_route_type.value if body.selected_route_type else None,
-        resolved_route_type=effective_route.value if effective_route else None,
-        route_source=body.route_source.value,
-    )
-
-    append_run_log(
-        "探查",
-        "已按已保存分支启动",
-        input=display_input,
-        effective_input=body.input,
-        resolved_route_type=effective_route.value if effective_route else None,
-        route_source=body.route_source.value,
-        name=body.name,
-    )
 
     # Merge explicit hints with any user-provided hints
     merged_hints: dict[str, Any] = {**hints}
     if body.hints:
         merged_hints.update(body.hints)
 
-    result = start_multi_discovery_run(
-        body.input,
-        force=body.force,
-        name=body.name,
-        hints=merged_hints,
-        selected_route_type=effective_route.value if effective_route else None,
-        route_source=body.route_source.value,
-    )
+    try:
+        result = start_multi_discovery_run(
+            body.input,
+            force=body.force,
+            name=body.name,
+            hints=merged_hints,
+            selected_route_type=effective_route.value if effective_route else None,
+            route_source=body.route_source.value,
+        )
+    except DiscoveryCapacityExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
 
     # Attach resolved route metadata to response
     result["resolved_route_type"] = effective_route.value if effective_route else None

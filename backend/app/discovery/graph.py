@@ -2845,15 +2845,9 @@ def start_discovery_run(site_url: str, force: bool = False, name: str | None = N
 
     复用现有 agent_crawl 的 _start_agent_source_run 后台线程模式。返回 run_id 供轮询。
     """
-    from app.db import SessionLocal
-    from app.models import SiteDiscoveryRun
-    s = SessionLocal()
-    try:
-        run = SiteDiscoveryRun(site_url=site_url, status="running")
-        s.add(run); s.commit()
-        run_id = run.id
-    finally:
-        s.close()
+    from app.discovery.runtime import create_discovery_run_or_raise
+
+    run_id = create_discovery_run_or_raise(site_url)
     register_run(run_id)
     threading.Thread(
         target=_execute_discovery, args=(run_id, site_url, force, name),
