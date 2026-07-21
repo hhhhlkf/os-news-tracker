@@ -1,4 +1,4 @@
-"""DSL 规约：8 个原语的 Pydantic 模型 + 结构/语义校验 + 变量替换 + loop 条件求值。
+"""DSL 规约：9 个原语的 Pydantic 模型 + 结构/语义校验 + 变量替换 + loop 条件求值。
 
 DSL 是受限动作语言，只表达爬取动作序列，不能写文件/执行命令（零沙箱负担）。
 Recipe = actions 顺序数组，由 DslInterpreter 解释执行。
@@ -80,6 +80,18 @@ class DedupByAction(BaseModel):
     field: str
 
 
+class EnrichArticlePagesAction(BaseModel):
+    """补抓普通网站/RSS 候选详情页正文。"""
+
+    op: Literal["enrich_article_pages"]
+    fetch_content: bool = True
+    fill_missing_only: bool = True
+    max_items: int | None = Field(default=None, ge=1, le=50)
+    timeout_seconds: float = Field(default=6.0, ge=1.0, le=30.0)
+    content_char_limit: int = Field(default=3000, ge=200, le=10000)
+    min_existing_chars: int = Field(default=120, ge=0, le=2000)
+
+
 class Condition(BaseModel):
     """loop 终止条件：五种取值之一 + 操作符。"""
 
@@ -111,7 +123,7 @@ class LoopAction(BaseModel):
 # discriminated union：Pydantic 按 op 字段自动分发到对应原语模型
 Action = Annotated[
     FetchAction | GotoAction | WaitForAction | ClickAction
-    | ExtractAction | LoopAction | SetAction | DedupByAction,
+    | ExtractAction | LoopAction | SetAction | DedupByAction | EnrichArticlePagesAction,
     Field(discriminator="op"),
 ]
 

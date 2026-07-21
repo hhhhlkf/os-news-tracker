@@ -1092,6 +1092,7 @@ def _derive_exploration_candidates_from_result(state: DiscoveryState, result: di
                             "raw_url": item.get("url"),
                             "url": item.get("url"),
                             "published_at": item.get("published_at"),
+                            "summary": item.get("summary") or item.get("description"),
                         }
                         for item in (feed.get("sample_items") or [])[:5]
                         if isinstance(item, dict)
@@ -1297,6 +1298,7 @@ def _build_sample_items(items: list[dict], site_url: str) -> list[dict]:
             "raw_url": str(raw_url) if raw_url is not None else None,
             "url": urljoin(site_url, str(raw_url)) if raw_url else None,
             "title": item.get("title") or item.get("name") or item.get("subject"),
+            "summary": item.get("summary") or item.get("description") or item.get("desc") or item.get("brief"),
             "published_at": (
                 item.get("published_at")
                 or item.get("date")
@@ -2127,6 +2129,10 @@ max_iters 必须 1~20。
 8. dedup_by
 {"op": "dedup_by", "field": "url"}
 
+9. enrich_article_pages（可选）
+{"op": "enrich_article_pages", "fetch_content": true, "fill_missing_only": true, "max_items": 8, "timeout_seconds": 6, "content_char_limit": 3000}
+用途：当列表/feed 样本缺少可供 Enricher 判断的真实 summary/content，或 summary 只是 Article URL / Comments URL / Points 等聚合元数据时，按 url 补抓详情页正文。已有足够 content/summary 时不要加。
+
 # 输入
 - 站点 URL：{site_url}
 - URL 规律：{url_rule}
@@ -2164,11 +2170,12 @@ max_iters 必须 1~20。
 5. 如果 exploration.pagination.type 不是 none/null/unknown，必须写 set+loop 翻页：
    - loop.max_iters 1~20；每轮 fetch 下一页；extract 用 merge=true 追加 items；
    - 有 has_more_path/next_path 时用它作 until 条件。
-6. 最后必须 dedup_by url。
-7. source_type=html 且需浏览器交互时才允许 goto/wait_for/click；click/wait_for 必须在 goto 之后。
-8. 不要写死具体文章 id。
-9. 不要编造字段名、json path、selector、URL——都从 exploration 取。
-10. 如果 exploration 不足以写出可运行 Recipe，返回 actions=[]，并在 notes 说明缺什么。
+6. 如果需要补抓详情页正文，把 enrich_article_pages 放在 dedup_by url 之后，避免重复 URL 重复补抓；默认 max_items=8、timeout_seconds=6、content_char_limit=3000。
+7. 必须包含 dedup_by url；若使用 enrich_article_pages，则 dedup_by url 应在补抓前执行一次。
+8. source_type=html 且需浏览器交互时才允许 goto/wait_for/click；click/wait_for 必须在 goto 之后。
+9. 不要写死具体文章 id。
+10. 不要编造字段名、json path、selector、URL——都从 exploration 取。
+11. 如果 exploration 不足以写出可运行 Recipe，返回 actions=[]，并在 notes 说明缺什么。
 
 # 质量约束
 - extract.fields.url 必须可用：已有 URL 字段（mode=existing_url）或 template 拼接（mode=template）二选一。
@@ -2191,6 +2198,12 @@ def _fetch_transport_fields(fetch_cfg: dict) -> dict:
     if fetch_cfg.get("impersonate"):
         out["impersonate"] = fetch_cfg.get("impersonate")
     return out
+
+
+def _should_add_article_page_enrich(exploration: dict) -> bool:
+    from app.discovery.article_tools import should_enrich_article_pages_for_exploration
+
+    return should_enrich_article_pages_for_exploration(exploration)
 
 
 def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
@@ -2223,36 +2236,48 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
     retry_feedback = state.get("retry_feedback") or {}
     if exploration.get("source_type") in ("rss", "atom") and exploration.get("list_url"):
         fetch_cfg = exploration.get("fetch") or {}
+        actions = [
+            {
+                "op": "fetch",
+                "mode": "feed",
+                "url": exploration.get("list_url"),
+                "method": fetch_cfg.get("method", "GET"),
+                **_fetch_transport_fields(fetch_cfg),
+                "headers": fetch_cfg.get("headers", {}),
+                "query": fetch_cfg.get("query", {}),
+                "json_body": None,
+                "as": "last_fetch",
+            },
+            {
+                "op": "extract",
+                "from": "feed.entries",
+                "fields": {
+                    "title": "title",
+                    "url": "link",
+                    "published_at": ["published", "updated"],
+                    "summary": ["summary", "description"],
+                },
+                "into": "items",
+                "merge": False,
+            },
+            {"op": "dedup_by", "field": "url"},
+        ]
+        notes = [f"deterministic {exploration.get('source_type')} recipe"]
+        if _should_add_article_page_enrich(exploration):
+            actions.append({
+                "op": "enrich_article_pages",
+                "fetch_content": True,
+                "fill_missing_only": True,
+                "max_items": 8,
+                "timeout_seconds": 6,
+                "content_char_limit": 3000,
+            })
+            notes.append("article page enrichment added because feed samples lack usable summary/content.")
         recipe_dict = {
             "recipe_type": "dsl",
             "entry_url": state["site_url"],
-            "actions": [
-                {
-                    "op": "fetch",
-                    "mode": "feed",
-                    "url": exploration.get("list_url"),
-                    "method": fetch_cfg.get("method", "GET"),
-                    **_fetch_transport_fields(fetch_cfg),
-                    "headers": fetch_cfg.get("headers", {}),
-                    "query": fetch_cfg.get("query", {}),
-                    "json_body": None,
-                    "as": "last_fetch",
-                },
-                {
-                    "op": "extract",
-                    "from": "feed.entries",
-                    "fields": {
-                        "title": "title",
-                        "url": "link",
-                        "published_at": ["published", "updated"],
-                        "summary": ["summary", "description"],
-                    },
-                    "into": "items",
-                    "merge": False,
-                },
-                {"op": "dedup_by", "field": "url"},
-            ],
-            "notes": [f"deterministic {exploration.get('source_type')} recipe"],
+            "actions": actions,
+            "notes": notes,
         }
         if (fetch_cfg.get("transport") or "httpx") == "scrapling":
             recipe_dict["notes"].append("scrapling transport recipe preserved from explorer")

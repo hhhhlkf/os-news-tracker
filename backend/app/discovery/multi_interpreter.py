@@ -20,7 +20,7 @@ class MultiDslInterpreter:
         progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> dict:
         if recipe.source_kind == "website":
-            return DslInterpreter().run(
+            return DslInterpreter(progress_callback=progress_callback).run(
                 DslRecipe(
                     recipe_type="dsl",
                     entry_url=recipe.entry,

@@ -17,6 +17,7 @@ from app.discovery.dsl import (
     ClickAction,
     DedupByAction,
     DslRecipe,
+    EnrichArticlePagesAction,
     ExtractAction,
     FetchAction,
     GotoAction,
@@ -52,9 +53,11 @@ class DslInterpreter:
         self,
         fetch_fn: Callable[..., Any] | None = None,
         browser_fn: Callable[..., Any] | None = None,
+        progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
         self._fetch_fn = fetch_fn
         self._browser_fn = browser_fn
+        self._progress_callback = progress_callback
         self._page = None  # Playwright 页面句柄（Task 6 用，懒加载）
 
     def run(self, recipe: DslRecipe, *, max_items: int | None = None) -> dict[str, Any]:
@@ -92,6 +95,8 @@ class DslInterpreter:
             self._set(action, ctx)
         elif isinstance(action, DedupByAction):
             self._dedup(action, ctx)
+        elif isinstance(action, EnrichArticlePagesAction):
+            self._enrich_article_pages(action, ctx)
         elif isinstance(action, LoopAction):
             self._loop(action, ctx, max_items=max_items)
         elif isinstance(action, (GotoAction, WaitForAction, ClickAction)):
@@ -334,6 +339,22 @@ class DslInterpreter:
             seen.add(k)
             out.append(it)
         ctx["items"] = out
+
+    def _enrich_article_pages(self, action: EnrichArticlePagesAction, ctx: dict[str, Any]) -> None:
+        from app.discovery.article_tools import enrich_article_pages
+
+        result = enrich_article_pages(
+            ctx.get("items") or [],
+            fetch_content=action.fetch_content,
+            fill_missing_only=action.fill_missing_only,
+            max_items=action.max_items,
+            timeout_seconds=action.timeout_seconds,
+            content_char_limit=action.content_char_limit,
+            min_existing_chars=action.min_existing_chars,
+            progress_callback=self._progress_callback,
+        )
+        ctx["last_fetch"] = result
+        ctx["items"] = list(result.get("items") or [])
 
     def _loop(self, action: LoopAction, ctx: dict[str, Any], *, max_items: int | None = None) -> None:
         """循环：until 条件为真或 max_iters 用尽则停（先到先停，防死循环）。"""

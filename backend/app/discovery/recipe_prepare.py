@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 from app.discovery.ingester import parse_published_at
 from app.discovery.multi_graph import DEFAULT_WECHAT_SEARCH_MAX_PAGES
@@ -48,6 +49,7 @@ def apply_fetch_limits(items: list[dict], request: ManualNewsRunRequest | None) 
 
 def prepare_fetch_recipe(recipe: dict[str, Any], request: ManualNewsRunRequest | None) -> dict[str, Any]:
     prepared = json.loads(json.dumps(recipe, ensure_ascii=False, default=str))
+    ensure_aggregator_feed_article_enrich(prepared)
     if prepared.get("recipe_type") != "multi_dsl":
         return prepared
 
@@ -65,6 +67,33 @@ def prepare_fetch_recipe(recipe: dict[str, Any], request: ManualNewsRunRequest |
         if has_history and action.get("op") == "enrich_wechat_articles":
             action.setdefault("precheck_topic_with_llm", True)
     return prepared
+
+
+def ensure_aggregator_feed_article_enrich(recipe: dict[str, Any]) -> None:
+    actions = recipe.get("actions")
+    if not isinstance(actions, list):
+        return
+    if any(action.get("op") == "enrich_article_pages" for action in actions if isinstance(action, dict)):
+        return
+    feed_url = _first_feed_action_url(actions)
+    if not feed_url:
+        return
+    host = urlparse(feed_url).netloc.lower()
+    if host not in {"hnrss.org", "news.ycombinator.com"}:
+        return
+    enrich_action = {
+        "op": "enrich_article_pages",
+        "fetch_content": True,
+        "fill_missing_only": True,
+        "max_items": 8,
+        "timeout_seconds": 6,
+        "content_char_limit": 3000,
+    }
+    for index, action in enumerate(actions):
+        if isinstance(action, dict) and action.get("op") == "dedup_by":
+            actions.insert(index + 1, enrich_action)
+            return
+    actions.append(enrich_action)
 
 
 def attach_wechat_skip_keys(recipe: dict[str, Any], urls: list[str]) -> dict[str, Any]:
@@ -111,3 +140,13 @@ _apply_fetch_limits = apply_fetch_limits
 _prepare_fetch_recipe = prepare_fetch_recipe
 _attach_wechat_skip_keys = attach_wechat_skip_keys
 _ensure_wechat_history_article_enrich = ensure_wechat_history_article_enrich
+
+
+def _first_feed_action_url(actions: list[dict[str, Any]]) -> str | None:
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        if action.get("op") == "fetch" and str(action.get("mode") or "").lower() in {"feed", "rss", "atom"}:
+            url = str(action.get("url") or "").strip()
+            return url or None
+    return None
