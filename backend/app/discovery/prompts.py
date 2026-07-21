@@ -111,6 +111,18 @@ STAGES: list[StageDef] = [
         ],
     ),
     StageDef(
+        key="quality_audit",
+        label="信息源质量审计",
+        description="根据方法实跑样本宽松评估信息源质量分，影响爬取方式库里的质量评级展示。",
+        required_tokens=["{source_kind}", "{input_type}", "{items_json}"],
+    ),
+    StageDef(
+        key="wechat_prefetch",
+        label="微信正文补抓判断",
+        description="只根据微信卡片标题、摘要和 URL 判断是否值得补抓正文，控制公众号历史补抓成本。",
+        required_tokens=["{title}", "{summary}", "{url}"],
+    ),
+    StageDef(
         key="naming",
         label="站点命名",
         description="根据站点信息生成简短的站点显示名称。",
@@ -140,6 +152,8 @@ def get_stage_defaults() -> dict[str, str]:
         _AUDIT_PROMPT,
         _SYNTHESIS_PROMPT,
     )
+    from app.discovery.quality_audit import QUALITY_AUDIT_PROMPT
+    from app.discovery.wechat_tools import WECHAT_PREFETCH_PROMPT
     from app.processing.enricher import _PROMPT_TEMPLATE as ENRICH_PROMPT
 
     return {
@@ -148,6 +162,8 @@ def get_stage_defaults() -> dict[str, str]:
         "validator": VALIDATOR_PROMPT,
         "dsl_writer": DSL_WRITER_PROMPT,
         "auditor": _AUDIT_PROMPT,
+        "quality_audit": QUALITY_AUDIT_PROMPT,
+        "wechat_prefetch": WECHAT_PREFETCH_PROMPT,
         "naming": _NAMING_PROMPT,
         "enrich": ENRICH_PROMPT,
     }

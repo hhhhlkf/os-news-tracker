@@ -790,6 +790,30 @@ def wechat_fetch_article_content(
 
 WECHAT_ENRICH_MAX_WORKERS = 1
 
+WECHAT_PREFETCH_PROMPT = """你是 OS 技术情报采集系统的微信文章补抓前置判断器。
+
+只根据标题、摘要和 URL 判断是否值得继续补抓正文。不要假设正文内容。
+
+应该补抓正文的情况：
+- 明显是操作系统、Linux 内核、发行版、编译器、工具链、RISC-V、GCC、LLVM、性能、CXL、AI Agent、调优、云原生基础设施、安全维护、版本发布、兼容性变化等技术内容。
+
+不应该补抓正文的情况：
+- 活动通知、会议预告、报名链接、Meetup、峰会、大会议程、运营报告、社区月报/周报、宣传材料、招聘、纯营销内容。
+
+无法判断时返回 should_fetch=false，让后续 Enricher 使用标题/摘要保守拒收。
+
+输出严格 JSON，不要多余文字：
+- should_fetch: 布尔值
+- reason: 从 technical_article、activity_notice、conference、registration、operation_report、marketing、insufficient_info、other 中选一个
+
+示例：
+{{"should_fetch": false, "reason": "registration"}}
+
+标题：{title}
+摘要：{summary}
+URL：{url}
+"""
+
 
 def wechat_article_key(url: str) -> str | None:
     parsed = urlparse(normalize_wechat_article_url(url))
@@ -815,29 +839,17 @@ def _extract_json_object(text: str) -> dict:
 
 def _should_fetch_wechat_article_content(item: dict, llm: Any) -> tuple[bool, str]:
     """Use title/card summary only; never fetch article body for this decision."""
-    prompt = f"""你是 OS 技术情报采集系统的微信文章补抓前置判断器。
+    from app.discovery.prompts import render_prompt
 
-只根据标题、摘要和 URL 判断是否值得继续补抓正文。不要假设正文内容。
-
-应该补抓正文的情况：
-- 明显是操作系统、Linux 内核、发行版、编译器、工具链、RISC-V、GCC、LLVM、性能、CXL、AI Agent、调优、云原生基础设施、安全维护、版本发布、兼容性变化等技术内容。
-
-不应该补抓正文的情况：
-- 活动通知、会议预告、报名链接、Meetup、峰会、大会议程、运营报告、社区月报/周报、宣传材料、招聘、纯营销内容。
-
-无法判断时返回 should_fetch=false，让后续 Enricher 使用标题/摘要保守拒收。
-
-输出严格 JSON，不要多余文字：
-- should_fetch: 布尔值
-- reason: 从 technical_article、activity_notice、conference、registration、operation_report、marketing、insufficient_info、other 中选一个
-
-示例：
-{{"should_fetch": false, "reason": "registration"}}
-
-标题：{item.get("title") or ""}
-摘要：{item.get("summary") or ""}
-URL：{item.get("url") or ""}
-"""
+    prompt = render_prompt(
+        "wechat_prefetch",
+        WECHAT_PREFETCH_PROMPT,
+        {
+            "{title}": item.get("title") or "",
+            "{summary}": item.get("summary") or "",
+            "{url}": item.get("url") or "",
+        },
+    )
     raw = llm.complete(
         prompt,
         temperature=0.0,

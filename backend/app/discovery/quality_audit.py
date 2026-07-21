@@ -13,6 +13,24 @@ from app.discovery.ingester import parse_published_at
 QUALITY_AUDIT_SAMPLE_LIMIT = 12
 QUALITY_LLM_TIMEOUT_SECONDS = 20.0
 
+QUALITY_AUDIT_PROMPT = """你是 OS 技术情报系统的信息源质量审计员。
+
+请只根据真实抓取到的条目样本，宽松评估这个信息源是否值得继续观察或长期收录。
+
+评分重点：
+- 质量还可以或较高：样本中只要有一部分条目明显涉及 OS/Linux/发行版/内核/编译器/工具链/RISC-V/CXL/性能/安全/版本/兼容性/云原生基础设施等具体技术信息，就不要给低分。
+- 低质量：活动通知、会议报名、社区运营报告、营销宣传、招聘、纯观点但缺少技术细节、正文空泛。
+- 宽松原则：不要因为样本中混有活动、月报或宣传内容就整体打低分；只要能稳定抓到若干相关技术内容，quality_score 至少应在 60 分左右。
+- 只有当样本几乎全是活动、营销、招聘、空泛宣传，且没有明显技术内容时，才给 50 分以下。
+
+输出严格 JSON：
+{{"quality_score": 0-100 的整数, "reason": "一句话原因"}}
+
+source_kind: {source_kind}
+input_type: {input_type}
+items: {items_json}
+"""
+
 _TECH_KEYWORDS = (
     "linux",
     "kernel",
@@ -150,23 +168,17 @@ def _llm_quality_score(
 ) -> int | None:
     if not sample:
         return 0
-    prompt = f"""你是 OS 技术情报系统的信息源质量审计员。
+    from app.discovery.prompts import render_prompt
 
-请只根据真实抓取到的条目样本，宽松评估这个信息源是否值得继续观察或长期收录。
-
-评分重点：
-- 质量还可以或较高：样本中只要有一部分条目明显涉及 OS/Linux/发行版/内核/编译器/工具链/RISC-V/CXL/性能/安全/版本/兼容性/云原生基础设施等具体技术信息，就不要给低分。
-- 低质量：活动通知、会议报名、社区运营报告、营销宣传、招聘、纯观点但缺少技术细节、正文空泛。
-- 宽松原则：不要因为样本中混有活动、月报或宣传内容就整体打低分；只要能稳定抓到若干相关技术内容，quality_score 至少应在 60 分左右。
-- 只有当样本几乎全是活动、营销、招聘、空泛宣传，且没有明显技术内容时，才给 50 分以下。
-
-输出严格 JSON：
-{{"quality_score": 0-100 的整数, "reason": "一句话原因"}}
-
-source_kind: {source_kind}
-input_type: {input_type}
-items: {json.dumps(sample, ensure_ascii=False)}
-"""
+    prompt = render_prompt(
+        "quality_audit",
+        QUALITY_AUDIT_PROMPT,
+        {
+            "{source_kind}": source_kind,
+            "{input_type}": input_type,
+            "{items_json}": json.dumps(sample, ensure_ascii=False),
+        },
+    )
     try:
         if llm is None:
             from app.llm.client import LlmClient
