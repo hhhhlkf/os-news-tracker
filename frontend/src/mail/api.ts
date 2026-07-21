@@ -28,6 +28,20 @@ function localDateDaysAgo(days: number): string {
 }
 
 function resolvePublishedAfterBoundary(params: ItemQueryParams) {
+  if (params.published_after_mode === "relative" && params.published_after_value) {
+    return {
+      published_after_mode: "relative" as const,
+      published_after_value: params.published_after_value,
+      published_after: null,
+    };
+  }
+  if (params.published_after_mode === "absolute" && params.published_after) {
+    return {
+      published_after_mode: "absolute" as const,
+      published_after_value: null,
+      published_after: params.published_after,
+    };
+  }
   if (!params.published_after || params.published_before) {
     return {
       published_after_mode: params.published_after ? "absolute" as const : "none" as const,
@@ -99,8 +113,16 @@ export function buildMailFilterSnapshot(params: ItemQueryParams): MailTemplateCr
     sort_by: params.sort_by ?? "published_at",
     sort_dir: params.sort_dir ?? "desc",
     ...publishedAfter,
-    published_before_mode: params.published_before ? "absolute" : "none",
-    published_before_value: null,
+    published_before_mode:
+      params.published_before_mode === "relative" && params.published_before_value
+        ? "relative"
+        : params.published_before
+          ? "absolute"
+          : "none",
+    published_before_value:
+      params.published_before_mode === "relative" && params.published_before_value
+        ? params.published_before_value
+        : null,
     published_before: params.published_before ?? null,
   };
 }

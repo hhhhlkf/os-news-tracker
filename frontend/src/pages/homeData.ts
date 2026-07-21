@@ -53,6 +53,23 @@ function normalize(value: string | null | undefined): string {
 type SortBy = "published_at" | "fetched_at" | undefined;
 type SortDir = "desc" | "asc" | undefined;
 
+function relativeBoundaryIso(value: string | undefined): string | null {
+  const now = new Date();
+  if (value === "24h") {
+    now.setHours(now.getHours() - 24);
+    return now.toISOString();
+  }
+  if (value === "7d") {
+    now.setDate(now.getDate() - 7);
+    return now.toISOString();
+  }
+  if (value === "30d") {
+    now.setDate(now.getDate() - 30);
+    return now.toISOString();
+  }
+  return null;
+}
+
 export function filterDemoItems(items: ItemDetail[], filters: Record<string, string>): ItemDetail[] {
   const q = normalize(filters.q);
 
@@ -87,13 +104,20 @@ export function filterDemoItems(items: ItemDetail[], filters: Record<string, str
       || item.sub_tags.some((tag) => selectedSubTags.includes(tag));
 
     // Time-range filtering on published_at
-    const hasTimeFilter = !!(filters.published_after || filters.published_before);
+    const relativeAfter = filters.published_after_mode === "relative"
+      ? relativeBoundaryIso(filters.published_after_value)
+      : null;
+    const hasTimeFilter = !!(relativeAfter || filters.published_after || filters.published_before);
     let matchesTimeRange = true;
     if (hasTimeFilter) {
       if (!item.published_at) {
         matchesTimeRange = false; // exclude items with null published_at when time filter is active
       } else {
-        if (filters.published_after) {
+        if (relativeAfter) {
+          if (item.published_at < relativeAfter) {
+            matchesTimeRange = false;
+          }
+        } else if (filters.published_after) {
           if (item.published_at < filters.published_after) {
             matchesTimeRange = false;
           }

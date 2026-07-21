@@ -42,6 +42,11 @@ function localDateDaysAgo(days: number): string {
 }
 
 function summarizeTimeFilter(filters: Record<string, string>): string | null {
+  if (filters.published_after_mode === "relative" && filters.published_after_value) {
+    if (filters.published_after_value === "24h") return "时间：最近 24h";
+    if (filters.published_after_value === "7d") return "时间：最近 7d";
+    if (filters.published_after_value === "30d") return "时间：最近 30d";
+  }
   const after = filters.published_after;
   const before = filters.published_before;
   if (!after && !before) return null;

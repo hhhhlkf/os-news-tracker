@@ -57,7 +57,11 @@ export interface ItemQueryParams {
   offset?: number | string;
   sort_by?: "published_at" | "fetched_at";
   sort_dir?: "desc" | "asc";
+  published_after_mode?: "none" | "absolute" | "relative";
+  published_after_value?: "24h" | "7d" | "30d";
   published_after?: string;
+  published_before_mode?: "none" | "absolute" | "relative";
+  published_before_value?: "24h" | "7d" | "30d";
   published_before?: string;
 }
 

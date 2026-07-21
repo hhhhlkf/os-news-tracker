@@ -8,15 +8,6 @@ interface Props {
   onSelect: (key: string, value: string) => void;
 }
 
-function daysAgo(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
 type TimePreset = "all" | "24h" | "7d" | "30d" | "custom";
 
 const HOTSPOT_SCROLL_HEIGHT = 164;
@@ -60,30 +51,54 @@ export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
   const [customExpanded, setCustomExpanded] = useState(false);
 
   const activePreset: TimePreset = useMemo(() => {
-    const after = selected.published_after;
-    const before = selected.published_before;
-    if (!after && !before) return "all";
-    if (after === daysAgo(1) && !before) return "24h";
-    if (after === daysAgo(7) && !before) return "7d";
-    if (after === daysAgo(30) && !before) return "30d";
+    const afterMode = selected.published_after_mode;
+    const afterValue = selected.published_after_value;
+    const hasAbsoluteRange = !!(selected.published_after || selected.published_before);
+    if (afterMode === "relative" && afterValue === "24h" && !selected.published_before) return "24h";
+    if (afterMode === "relative" && afterValue === "7d" && !selected.published_before) return "7d";
+    if (afterMode === "relative" && afterValue === "30d" && !selected.published_before) return "30d";
+    if (!hasAbsoluteRange && !afterMode && !afterValue && !selected.published_before_mode && !selected.published_before_value) return "all";
     return "custom";
-  }, [selected.published_after, selected.published_before]);
+  }, [
+    selected.published_after,
+    selected.published_after_mode,
+    selected.published_after_value,
+    selected.published_before,
+    selected.published_before_mode,
+    selected.published_before_value,
+  ]);
 
   function handlePresetClick(preset: TimePreset) {
     if (preset === "all") {
+      onSelect("published_after_mode", "");
+      onSelect("published_after_value", "");
       onSelect("published_after", "");
+      onSelect("published_before_mode", "");
+      onSelect("published_before_value", "");
       onSelect("published_before", "");
       setCustomExpanded(false);
     } else if (preset === "24h") {
-      onSelect("published_after", daysAgo(1));
+      onSelect("published_after_mode", "relative");
+      onSelect("published_after_value", "24h");
+      onSelect("published_after", "");
+      onSelect("published_before_mode", "");
+      onSelect("published_before_value", "");
       onSelect("published_before", "");
       setCustomExpanded(false);
     } else if (preset === "7d") {
-      onSelect("published_after", daysAgo(7));
+      onSelect("published_after_mode", "relative");
+      onSelect("published_after_value", "7d");
+      onSelect("published_after", "");
+      onSelect("published_before_mode", "");
+      onSelect("published_before_value", "");
       onSelect("published_before", "");
       setCustomExpanded(false);
     } else if (preset === "30d") {
-      onSelect("published_after", daysAgo(30));
+      onSelect("published_after_mode", "relative");
+      onSelect("published_after_value", "30d");
+      onSelect("published_after", "");
+      onSelect("published_before_mode", "");
+      onSelect("published_before_value", "");
       onSelect("published_before", "");
       setCustomExpanded(false);
     } else {
@@ -217,7 +232,11 @@ export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
               <input
                 type="date"
                 value={selected.published_after ?? ""}
-                onChange={(e) => onSelect("published_after", e.target.value)}
+                onChange={(e) => {
+                  onSelect("published_after_mode", e.target.value ? "absolute" : "");
+                  onSelect("published_after_value", "");
+                  onSelect("published_after", e.target.value);
+                }}
                 style={{
                   border: "1px solid #d0d5dd",
                   borderRadius: 8,
@@ -234,7 +253,11 @@ export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
               <input
                 type="date"
                 value={selected.published_before ?? ""}
-                onChange={(e) => onSelect("published_before", e.target.value)}
+                onChange={(e) => {
+                  onSelect("published_before_mode", e.target.value ? "absolute" : "");
+                  onSelect("published_before_value", "");
+                  onSelect("published_before", e.target.value);
+                }}
                 style={{
                   border: "1px solid #d0d5dd",
                   borderRadius: 8,

@@ -14,6 +14,8 @@ router = APIRouter()
 
 SortBy = Literal["published_at", "fetched_at"]
 SortDir = Literal["desc", "asc"]
+BoundaryMode = Literal["none", "absolute", "relative"]
+RelativeRange = Literal["24h", "7d", "30d"]
 
 
 def _item_summary(item: Item) -> dict:
@@ -95,6 +97,39 @@ def _tag_ids_for_root_names(db: Session, names: list[str]) -> list[int]:
     return tag_ids
 
 
+def _relative_time_delta(value: str | None) -> timedelta | None:
+    if value == "24h":
+        return timedelta(hours=24)
+    if value == "7d":
+        return timedelta(days=7)
+    if value == "30d":
+        return timedelta(days=30)
+    return None
+
+
+def _resolve_time_boundary(
+    *,
+    mode: str | None,
+    value: str | None,
+    absolute_date: str | None,
+    inclusive_end: bool,
+    field_name: str,
+) -> datetime | None:
+    if mode == "relative":
+        delta = _relative_time_delta(value)
+        if delta is None:
+            raise HTTPException(status_code=422, detail=f"{field_name}_value is required for relative mode")
+        return datetime.now(timezone.utc) - delta
+    if absolute_date:
+        try:
+            parsed = date.fromisoformat(absolute_date)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"invalid {field_name} date: {absolute_date!r}")
+        boundary = datetime(parsed.year, parsed.month, parsed.day, tzinfo=timezone.utc)
+        return boundary + timedelta(days=1) if inclusive_end else boundary
+    return None
+
+
 @router.get("/items")
 def list_items(
     db: Session = Depends(get_db),
@@ -107,7 +142,11 @@ def list_items(
     offset: int = 0,
     sort_by: SortBy = "published_at",
     sort_dir: SortDir = "desc",
+    published_after_mode: BoundaryMode | None = None,
+    published_after_value: RelativeRange | None = None,
     published_after: str | None = None,
+    published_before_mode: BoundaryMode | None = None,
+    published_before_value: RelativeRange | None = None,
     published_before: str | None = None,
 ):
     stmt = select(Item)
@@ -132,21 +171,28 @@ def list_items(
         like = f"%{q}%"
         stmt = stmt.where((Item.title.ilike(like)) | (Item.summary.ilike(like)))
 
-    # Time-range filters on published_at
-    if published_after is not None:
-        try:
-            after_date = date.fromisoformat(published_after)
-        except ValueError:
-            raise HTTPException(status_code=422, detail=f"invalid published_after date: {published_after!r}")
-        stmt = stmt.where(Item.published_at >= datetime(after_date.year, after_date.month, after_date.day, tzinfo=timezone.utc))
+    # Time-range filters on published_at.
+    # Absolute dates keep the historical natural-day semantics; relative presets
+    # are rolling windows from the current instant so the list count matches mail previews.
+    after_boundary = _resolve_time_boundary(
+        mode=published_after_mode,
+        value=published_after_value,
+        absolute_date=published_after,
+        inclusive_end=False,
+        field_name="published_after",
+    )
+    if after_boundary is not None:
+        stmt = stmt.where(Item.published_at >= after_boundary)
 
-    if published_before is not None:
-        try:
-            before_date = date.fromisoformat(published_before)
-        except ValueError:
-            raise HTTPException(status_code=422, detail=f"invalid published_before date: {published_before!r}")
-        before_end = datetime(before_date.year, before_date.month, before_date.day, tzinfo=timezone.utc) + timedelta(days=1)
-        stmt = stmt.where(Item.published_at < before_end)
+    before_boundary = _resolve_time_boundary(
+        mode=published_before_mode,
+        value=published_before_value,
+        absolute_date=published_before,
+        inclusive_end=True,
+        field_name="published_before",
+    )
+    if before_boundary is not None:
+        stmt = stmt.where(Item.published_at < before_boundary)
 
     sort_col = Item.published_at if sort_by == "published_at" else Item.fetched_at
     if sort_dir == "desc":

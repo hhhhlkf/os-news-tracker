@@ -36,7 +36,11 @@ def _build_header_summary(filters: dict) -> str:
         segments.append(str(filters["q"]))
 
     published_label = "全部时间"
-    if filters.get("published_after") or filters.get("published_before"):
+    if filters.get("published_after_mode") == "relative" and filters.get("published_after_value"):
+        value = str(filters.get("published_after_value") or "")
+        labels = {"24h": "最近 24h", "7d": "最近 7d", "30d": "最近 30d"}
+        published_label = labels.get(value, f"最近 {value}")
+    elif filters.get("published_after") or filters.get("published_before"):
         after = str(filters.get("published_after") or "").strip()
         before = str(filters.get("published_before") or "").strip()
         if after or before:
