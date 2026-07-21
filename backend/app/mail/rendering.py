@@ -95,7 +95,7 @@ def _render_source_cta(url: str) -> str:
     return f"""
     <a
       href="{safe_url}"
-      style="display:inline-flex;align-items:center;gap:6px;padding:6px 9px;border:1px solid #d0d5dd;border-radius:8px;background:#fff;color:#344054;font-size:12px;text-decoration:none;line-height:1;max-width:168px;width:fit-content;white-space:nowrap;"
+      style="display:inline-flex;align-items:center;gap:6px;height:28px;box-sizing:border-box;padding:6px 9px;border:1px solid #d0d5dd;border-radius:8px;background:#fff;color:#344054;font-size:12px;text-decoration:none;line-height:1;max-width:168px;width:fit-content;white-space:nowrap;"
     >
       <span>阅读原文</span>
       <span style="color:#98a2b3;max-width:80px;overflow:hidden;text-overflow:ellipsis;">{safe_domain}</span>
@@ -132,7 +132,7 @@ def _render_source_quality(item: dict) -> str:
     )
     if score_value is None:
         badge_style = (
-            "min-width:58px;text-align:center;border-radius:8px;padding:4px 7px;font-size:11px;"
+            "min-width:58px;text-align:center;border-radius:8px;padding:3px 7px;font-size:12px;"
             "font-weight:800;line-height:1.1;white-space:nowrap;border:1px solid #d0d5dd;"
             "color:#475467;background:#f9fafb;"
         )
@@ -145,13 +145,13 @@ def _render_source_quality(item: dict) -> str:
         else:
             colors = ("#abefc6", "#027a48", "#ecfdf3")
         badge_style = (
-            "min-width:58px;text-align:center;border-radius:8px;padding:4px 7px;font-size:11px;"
+            "min-width:58px;text-align:center;border-radius:8px;padding:3px 7px;font-size:12px;"
             f"font-weight:800;line-height:1.1;white-space:nowrap;border:1px solid {colors[0]};"
             f"color:{colors[1]};background:{colors[2]};"
         )
         label = f"{grade} {score_value}".strip()
     return (
-        '<div style="display:inline-flex;align-items:center;gap:8px;min-width:0;max-width:320px;'
+        '<div style="display:inline-flex;align-items:center;gap:8px;height:28px;box-sizing:border-box;min-width:0;max-width:320px;'
         'padding:6px 9px;border:1px solid #d0d5dd;border-radius:8px;background:#fff;line-height:1;">'
         f"{source_html}"
         f'<span style="{badge_style}">{escape(label)}</span>'
