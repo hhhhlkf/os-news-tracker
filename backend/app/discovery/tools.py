@@ -13,45 +13,8 @@ from html.parser import HTMLParser
 
 from langchain_core.tools import tool
 
+from app.discovery.browser_actions import exercise_dynamic_page
 from app.discovery.cancel import ensure_not_cancelled
-
-
-def _exercise_dynamic_page(page, *, scroll_rounds: int = 6, wait_ms: int = 700) -> None:
-    """触发 infinite scroll / lazy-loaded list / load-more 类页面的后续请求。"""
-    load_more_texts = (
-        "加载更多",
-        "更多",
-        "下一页",
-        "查看更多",
-        "Load more",
-        "More",
-        "Next",
-        "Show more",
-    )
-    try:
-        page.wait_for_timeout(wait_ms)
-    except Exception:
-        pass
-    for _ in range(max(scroll_rounds, 0)):
-        ensure_not_cancelled()
-        try:
-            page.mouse.wheel(0, 2400)
-            page.wait_for_timeout(wait_ms)
-        except Exception:
-            break
-    for text in load_more_texts:
-        ensure_not_cancelled()
-        try:
-            locator = page.get_by_text(text, exact=False)
-            count = min(locator.count(), 2)
-            for idx in range(count):
-                try:
-                    locator.nth(idx).click(timeout=1500)
-                    page.wait_for_timeout(wait_ms)
-                except Exception:
-                    continue
-        except Exception:
-            continue
 
 
 @tool
@@ -94,7 +57,7 @@ def fetch_page(
             p = b.new_page()
             ensure_not_cancelled()
             p.goto(url, wait_until="networkidle")
-            _exercise_dynamic_page(p, scroll_rounds=2, wait_ms=500)
+            exercise_dynamic_page(p, scroll_rounds=2, wait_ms=500)
             html = p.content()
             title = p.title()
             links = p.eval_on_selector_all("a[href]", "els=>els.map(e=>e.href)")
@@ -258,7 +221,7 @@ def capture_network(url: str) -> list:
             p.goto(url, wait_until="networkidle", timeout=15000)
         except Exception:
             pass
-        _exercise_dynamic_page(p, scroll_rounds=8, wait_ms=700)
+        exercise_dynamic_page(p, scroll_rounds=8, wait_ms=700)
         b.close()
     return caps
 
@@ -487,7 +450,7 @@ def probe_html_entries(
         browser = pw.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(url, wait_until="domcontentloaded", timeout=15000)
-        _exercise_dynamic_page(page, scroll_rounds=2, wait_ms=500)
+        exercise_dynamic_page(page, scroll_rounds=2, wait_ms=500)
         elements = page.query_selector_all(item_selector)
 
         def _pick(el, selector: str | None):
@@ -837,7 +800,7 @@ def _capture_article_json_responses(article_url: str) -> list[dict]:
             page.goto(article_url, wait_until="networkidle", timeout=15000)
         except Exception:
             pass
-        _exercise_dynamic_page(page, scroll_rounds=3, wait_ms=600)
+        exercise_dynamic_page(page, scroll_rounds=3, wait_ms=600)
         browser.close()
     return caps[:10]
 
