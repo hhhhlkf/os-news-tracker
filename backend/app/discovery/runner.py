@@ -21,6 +21,7 @@ def execute_discovery_fetch(
     from app.discovery.execution import run_method
     from app.discovery.fetch_runs import finish_method_fetch_run
     from app.discovery.ingester import CrawlOutputIngester
+    from app.discovery.interpreter import DslExecutionPartialError
     from app.discovery.progress import log_discovery_progress
     from app.discovery.recipe_prepare import (
         apply_fetch_limits,
@@ -84,6 +85,8 @@ def execute_discovery_fetch(
 
         stored = 0
         discovered_count = 0
+        final_status = "empty"
+        partial_error: DslExecutionPartialError | None = None
         try:
             def _log_fetch_progress(event: str, payload: dict[str, Any]) -> None:
                 log_discovery_progress(
@@ -95,16 +98,38 @@ def execute_discovery_fetch(
                     method_id=method.id,
                 )
 
-            output = run_method(recipe, progress_callback=_log_fetch_progress)
+            try:
+                output = run_method(recipe, progress_callback=_log_fetch_progress)
+            except DslExecutionPartialError as exc:
+                partial_error = exc
+                output = {
+                    "items": list(exc.items),
+                    "stats": {
+                        **(exc.stats or {}),
+                        "status": "partial",
+                        "error": str(exc),
+                    },
+                }
+                _log(
+                    "抓方式",
+                    f"DSL 执行部分完成，已保留已抓到候选继续处理 · {exc}",
+                    source=method.domain,
+                    method_id=method.id,
+                    level="warning",
+                    raw_count=len(output.get("items", [])),
+                    stats_count=output.get("stats", {}).get("discovered_count"),
+                    error_type=type(exc).__name__,
+                )
             raw_items = list(output.get("items", []))
-            _log(
-                "抓方式",
-                "DSL 执行完成",
-                source=method.domain,
-                method_id=method.id,
-                raw_count=len(raw_items),
-                stats_count=output.get("stats", {}).get("discovered_count"),
-            )
+            if partial_error is None:
+                _log(
+                    "抓方式",
+                    "DSL 执行完成",
+                    source=method.domain,
+                    method_id=method.id,
+                    raw_count=len(raw_items),
+                    stats_count=output.get("stats", {}).get("discovered_count"),
+                )
 
             filtered_items = apply_fetch_limits(raw_items, request)
             output["items"] = filtered_items
@@ -157,7 +182,7 @@ def execute_discovery_fetch(
                         **build_not_stored_log_fields(result),
                     )
 
-            last_run_status = "ok" if stored > 0 else "empty"
+            final_status = "partial" if partial_error is not None else ("ok" if stored > 0 else "empty")
             _log(
                 "process",
                 "抓取结果处理完成",
@@ -174,9 +199,13 @@ def execute_discovery_fetch(
                 method_id=method.id,
                 discovered_count=len(raws),
                 stored_count=stored,
-                last_run_status=last_run_status,
+                last_run_status=final_status,
                 summary=(
-                    f"抓取 {len(raws)} 条，入库 {stored} 条"
+                    f"部分抓取 {len(raws)} 条，入库 {stored} 条"
+                    if partial_error is not None and stored > 0
+                    else f"部分抓取 {len(raws)} 条，未入库（可能重复或被富化拒绝）"
+                    if partial_error is not None
+                    else f"抓取 {len(raws)} 条，入库 {stored} 条"
                     if stored > 0
                     else f"抓取 {len(raws)} 条，未入库（可能重复或被富化拒绝）"
                 ),
@@ -205,12 +234,13 @@ def execute_discovery_fetch(
             raise
 
         method.last_run_at = datetime.now(timezone.utc)
-        method.last_run_status = "ok" if stored > 0 else "empty"
+        method.last_run_status = final_status
         finish_method_fetch_run(
             run_id,
             method.last_run_status,
             discovered_count=len(raws),
             stored_count=stored,
+            error_message=str(partial_error) if partial_error is not None else None,
             db=db,
         )
         db.commit()

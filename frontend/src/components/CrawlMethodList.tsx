@@ -566,6 +566,7 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState, allo
 function formatIdleStatus(method: CrawlMethod) {
   if (method.last_run_status === "ok") return "最近运行成功";
   if (method.last_run_status === "empty") return "最近查询 0 条";
+  if (method.last_run_status === "partial") return "最近部分成功";
   if (method.last_run_status === "failed") return "最近运行失败";
   return "未运行";
 }
