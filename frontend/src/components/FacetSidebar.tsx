@@ -12,7 +12,7 @@ interface Props {
 
 type TimePreset = "all" | "24h" | "7d" | "30d" | "custom";
 
-const HOTSPOT_SCROLL_HEIGHT = 92;
+const HOTSPOT_SCROLL_HEIGHT = 128;
 const SOURCE_SCROLL_HEIGHT = 184;
 
 export function getFacetFilterKey(key: keyof Facets): string {
