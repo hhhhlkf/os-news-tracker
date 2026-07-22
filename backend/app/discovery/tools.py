@@ -399,11 +399,14 @@ def probe_article_content(
             "article_url": html_result.get("resolved_url") or article_url,
         }
 
-    id_value = _sample_id_value(sample_item, id_field)
-    detail_candidates = _detail_api_candidates(article_url=article_url, list_url=list_url, id_value=id_value)
-    for api_url in detail_candidates:
+    for cap in _capture_article_json_responses(article_url):
         ensure_not_cancelled()
-        api_result = _probe_detail_api_url(api_url, min_content_chars=min_content_chars)
+        payload = cap.get("parsed_json")
+        api_result = _probe_detail_api_payload(
+            payload,
+            api_url=cap.get("api_url"),
+            min_content_chars=min_content_chars,
+        )
         if api_result.get("content_verified"):
             return {
                 **api_result,
@@ -412,13 +415,19 @@ def probe_article_content(
                 "article_url": article_url,
             }
 
-    for cap in _capture_article_json_responses(article_url):
+    id_value = _sample_id_value(sample_item, id_field)
+    detail_candidates = _detail_api_candidates(
+        article_url=article_url,
+        list_url=list_url,
+        id_value=id_value,
+        id_field=id_field,
+    )
+    for api_url in detail_candidates:
         ensure_not_cancelled()
-        payload = cap.get("parsed_json")
-        api_result = _probe_detail_api_payload(
-            payload,
-            api_url=cap.get("api_url"),
+        api_result = _probe_detail_api_url(
+            api_url,
             min_content_chars=min_content_chars,
+            guessed=True,
         )
         if api_result.get("content_verified"):
             return {
@@ -449,36 +458,35 @@ def _sample_id_value(sample_item: dict, id_field: str | None) -> str | None:
     return str(value) if value is not None else None
 
 
-def _detail_api_candidates(*, article_url: str, list_url: str | None, id_value: str | None) -> list[str]:
+def _detail_api_candidates(
+    *,
+    article_url: str,
+    list_url: str | None,
+    id_value: str | None,
+    id_field: str | None,
+) -> list[str]:
     if not id_value:
         return []
     candidates: list[str] = []
     parsed_article = urlparse(article_url)
     origin = f"{parsed_article.scheme}://{parsed_article.netloc}"
+    query_keys = [key for key in (id_field, "id", "no", "slug", "uuid") if key]
     if list_url:
         parsed_list = urlparse(list_url)
         list_path = parsed_list.path
         parent = list_path.rsplit("/", 1)[0]
         if parent:
-            for filename in (
-                "detail.json",
-                "getDetail.json",
-                "getArticleDetail.json",
-                "articleDetail.json",
-                "getBlogDetail.json",
-                "blogDetail.json",
-            ):
-                candidates.append(_url_with_query(urljoin(f"{parsed_list.scheme}://{parsed_list.netloc}", f"{parent}/{filename}"), {"no": id_value}))
-                candidates.append(_url_with_query(urljoin(f"{parsed_list.scheme}://{parsed_list.netloc}", f"{parent}/{filename}"), {"id": id_value}))
-        if "ByCategory" in list_path:
-            detail_path = list_path.replace("blogByCategoryPage", "detail").replace("ByCategoryPage", "Detail")
-            candidates.append(_url_with_query(urljoin(f"{parsed_list.scheme}://{parsed_list.netloc}", detail_path), {"no": id_value}))
+            for filename in ("detail.json", "detail"):
+                base = urljoin(f"{parsed_list.scheme}://{parsed_list.netloc}", f"{parent}/{filename}")
+                for key in query_keys:
+                    candidates.append(_url_with_query(base, {key: id_value}))
     article_parts = [part for part in parsed_article.path.split("/") if part]
     if "detail" in article_parts:
         idx = article_parts.index("detail")
         api_parts = ["api", *article_parts[:idx], "detail.json"]
-        candidates.append(_url_with_query(urljoin(origin, "/" + "/".join(api_parts)), {"no": id_value}))
-        candidates.append(_url_with_query(urljoin(origin, "/" + "/".join(api_parts)), {"id": id_value}))
+        base = urljoin(origin, "/" + "/".join(api_parts))
+        for key in query_keys:
+            candidates.append(_url_with_query(base, {key: id_value}))
     deduped: list[str] = []
     for candidate in candidates:
         if candidate not in deduped:
@@ -493,7 +501,7 @@ def _url_with_query(url: str, values: dict[str, str]) -> str:
     return urlunparse(parsed._replace(query=urlencode(query)))
 
 
-def _probe_detail_api_url(api_url: str, *, min_content_chars: int) -> dict:
+def _probe_detail_api_url(api_url: str, *, min_content_chars: int, guessed: bool = False) -> dict:
     import httpx
 
     try:
@@ -504,10 +512,16 @@ def _probe_detail_api_url(api_url: str, *, min_content_chars: int) -> dict:
         payload = response.json()
     except Exception:
         return {"content_verified": False}
-    return _probe_detail_api_payload(payload, api_url=api_url, min_content_chars=min_content_chars)
+    return _probe_detail_api_payload(payload, api_url=api_url, min_content_chars=min_content_chars, guessed=guessed)
 
 
-def _probe_detail_api_payload(payload: object, *, api_url: str | None, min_content_chars: int) -> dict:
+def _probe_detail_api_payload(
+    payload: object,
+    *,
+    api_url: str | None,
+    min_content_chars: int,
+    guessed: bool = False,
+) -> dict:
     content_path, content_text = _find_best_text_path(payload, ("content", "body", "html", "article"))
     if not content_path or len(_strip_tags(content_text)) < min_content_chars:
         return {"content_verified": False}
@@ -519,7 +533,7 @@ def _probe_detail_api_payload(payload: object, *, api_url: str | None, min_conte
     }
     return {
         "content_verified": True,
-        "content_strategy": "detail_api",
+        "content_strategy": "guessed_detail_api" if guessed else "detail_api",
         "content_chars": len(_strip_tags(content_text)),
         "detail_api": {
             "url_template": _template_api_url(api_url),

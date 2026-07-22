@@ -2321,7 +2321,7 @@ max_iters 必须 1~20。
 
 10. enrich_article_api（可选）
 {"op": "enrich_article_api", "url_template": "https://x.com/api/detail.json?no={item.no}", "fields": {"title": "data.title", "summary": "data.summary", "content": "data.content", "published_at": "data.publishTime"}, "method": "GET", "headers": {}, "query": {}, "json_body": null, "fill_missing_only": true, "max_items": 8, "timeout_seconds": 6, "content_char_limit": 3000}
-用途：当 validator 的 url_rule.content_strategy=detail_api 且 detail_api 已给出 url_template/fields 时，必须用该 action 补抓正文，不要改写字段路径。
+用途：当 validator 的 url_rule.content_strategy=detail_api/guessed_detail_api 且 detail_api 已给出 url_template/fields 时，必须用该 action 补抓正文，不要改写字段路径。
 
 # 输入
 - 站点 URL：{site_url}
@@ -2360,7 +2360,7 @@ max_iters 必须 1~20。
 5. 如果 exploration.pagination.type 不是 none/null/unknown，必须写 set+loop 翻页：
    - loop.max_iters 1~20；每轮 fetch 下一页；extract 用 merge=true 追加 items；
    - 有 has_more_path/next_path 时用它作 until 条件；没有明确终止字段时用 {"count_of":"items","op":">=","value":50}。
-6. 如果 url_rule.content_strategy=detail_api，必须把 enrich_article_api 放在 dedup_by url 之后，并原样使用 url_rule.detail_api.url_template 与 fields。
+6. 如果 url_rule.content_strategy=detail_api/guessed_detail_api，必须把 enrich_article_api 放在 dedup_by url 之后，并原样使用 url_rule.detail_api.url_template 与 fields。
 6.1 使用 enrich_article_api 时，extract.fields 必须保留 url_template 中引用的字段，如 {item.no} 就必须提取 no 字段。
 6.2 如果需要补抓普通 HTML 详情页正文，把 enrich_article_pages 放在 dedup_by url 之后，避免重复 URL 重复补抓；默认 max_items=8、timeout_seconds=6、content_char_limit=3000。
 7. 必须包含 dedup_by url；若使用 enrich_article_pages/enrich_article_api，则 dedup_by url 应在补抓前执行一次。
