@@ -92,6 +92,23 @@ class EnrichArticlePagesAction(BaseModel):
     min_existing_chars: int = Field(default=120, ge=0, le=2000)
 
 
+class EnrichArticleApiAction(BaseModel):
+    """用详情 JSON API 补抓候选正文。"""
+
+    op: Literal["enrich_article_api"]
+    url_template: str
+    fields: dict[str, str]
+    method: str = "GET"
+    headers: dict[str, str] = Field(default_factory=dict)
+    query: dict[str, str] = Field(default_factory=dict)
+    json_body: dict[str, Any] | None = None
+    fill_missing_only: bool = True
+    max_items: int | None = Field(default=None, ge=1, le=50)
+    timeout_seconds: float = Field(default=6.0, ge=1.0, le=30.0)
+    content_char_limit: int = Field(default=3000, ge=200, le=10000)
+    min_existing_chars: int = Field(default=120, ge=0, le=2000)
+
+
 class Condition(BaseModel):
     """loop 终止条件：五种取值之一 + 操作符。"""
 
@@ -123,7 +140,7 @@ class LoopAction(BaseModel):
 # discriminated union：Pydantic 按 op 字段自动分发到对应原语模型
 Action = Annotated[
     FetchAction | GotoAction | WaitForAction | ClickAction
-    | ExtractAction | LoopAction | SetAction | DedupByAction | EnrichArticlePagesAction,
+    | ExtractAction | LoopAction | SetAction | DedupByAction | EnrichArticlePagesAction | EnrichArticleApiAction,
     Field(discriminator="op"),
 ]
 

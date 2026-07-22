@@ -17,6 +17,7 @@ from app.discovery.dsl import (
     ClickAction,
     DedupByAction,
     DslRecipe,
+    EnrichArticleApiAction,
     EnrichArticlePagesAction,
     ExtractAction,
     FetchAction,
@@ -97,6 +98,8 @@ class DslInterpreter:
             self._dedup(action, ctx)
         elif isinstance(action, EnrichArticlePagesAction):
             self._enrich_article_pages(action, ctx)
+        elif isinstance(action, EnrichArticleApiAction):
+            self._enrich_article_api(action, ctx)
         elif isinstance(action, LoopAction):
             self._loop(action, ctx, max_items=max_items)
         elif isinstance(action, (GotoAction, WaitForAction, ClickAction)):
@@ -355,6 +358,88 @@ class DslInterpreter:
         )
         ctx["last_fetch"] = result
         ctx["items"] = list(result.get("items") or [])
+
+    def _enrich_article_api(self, action: EnrichArticleApiAction, ctx: dict[str, Any]) -> None:
+        import httpx
+
+        next_items = [dict(item) for item in (ctx.get("items") or [])]
+        attempted = 0
+        enriched = 0
+        for item in next_items:
+            existing_content = " ".join(str(item.get("content") or "").split())
+            if action.fill_missing_only and len(existing_content) >= action.min_existing_chars:
+                continue
+            if action.max_items is not None and attempted >= action.max_items:
+                break
+            attempted += 1
+            url = self._render_item_template(action.url_template, item, ctx)
+            headers = {k: self._render_item_template(v, item, ctx) for k, v in action.headers.items()}
+            params = {k: self._render_item_template(v, item, ctx) for k, v in action.query.items()}
+            body = self._render_item_json_like(action.json_body, item, ctx) if action.json_body is not None else None
+            try:
+                request_kwargs = {
+                    "timeout": action.timeout_seconds,
+                    "follow_redirects": True,
+                }
+                if headers:
+                    request_kwargs["headers"] = headers
+                if params:
+                    request_kwargs["params"] = params
+                if body is not None:
+                    request_kwargs["json"] = body
+                response = httpx.request(action.method, url, **request_kwargs)
+                response.raise_for_status()
+                payload = response.json()
+            except Exception:
+                continue
+            changed = False
+            for field, path in action.fields.items():
+                value = self._json_path_value(payload, path)
+                if value in (None, ""):
+                    continue
+                text = str(value)
+                if field == "content":
+                    text = re.sub(r"<[^>]+>", " ", text)
+                    text = " ".join(text.split())[: action.content_char_limit]
+                if action.fill_missing_only and item.get(field):
+                    continue
+                item[field] = text
+                changed = True
+            if changed and item.get("content"):
+                enriched += 1
+        ctx["last_fetch"] = {
+            "status": "ok" if enriched else "empty",
+            "attempted_count": attempted,
+            "enriched_count": enriched,
+        }
+        ctx["items"] = next_items
+
+    def _render_item_template(self, text: str, item: dict[str, Any], ctx: dict[str, Any]) -> str:
+        def repl_item(m: "re.Match[str]") -> str:
+            return str(item.get(m.group(1), ""))
+
+        rendered = re.sub(r"\{item\.(\w+)\}", repl_item, text)
+        return render_vars(rendered, ctx)
+
+    def _render_item_json_like(self, value: Any, item: dict[str, Any], ctx: dict[str, Any]) -> Any:
+        if isinstance(value, str):
+            return self._render_item_template(value, item, ctx)
+        if isinstance(value, list):
+            return [self._render_item_json_like(v, item, ctx) for v in value]
+        if isinstance(value, dict):
+            return {k: self._render_item_json_like(v, item, ctx) for k, v in value.items()}
+        return value
+
+    def _json_path_value(self, payload: Any, path: str) -> Any:
+        node = payload
+        for part in path.split("."):
+            if isinstance(node, dict):
+                node = node.get(part)
+            elif isinstance(node, list) and part.isdigit():
+                node = node[int(part)]
+            else:
+                return None
+        return node
 
     def _loop(self, action: LoopAction, ctx: dict[str, Any], *, max_items: int | None = None) -> None:
         """循环：until 条件为真或 max_iters 用尽则停（先到先停，防死循环）。"""

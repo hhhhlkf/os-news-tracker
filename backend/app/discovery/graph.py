@@ -11,7 +11,7 @@ import logging
 import re
 import threading
 import time
-from typing import TypedDict
+from typing import Any, TypedDict
 from urllib.parse import urljoin, urlparse
 
 from pydantic import BaseModel, Field
@@ -1824,6 +1824,10 @@ class UrlRule(BaseModel):
     url_field: str | None = None                # 列表里直接给出 URL 的字段名（mode=existing_url）
     sample_items: list[dict] = Field(default_factory=list)  # [{id,url,title,raw}]
     validation_samples: list[dict] = Field(default_factory=list)  # 验证样例 URL/值/状态
+    content_strategy: str | None = None
+    content_verified: bool = False
+    content_chars: int | None = None
+    detail_api: dict | None = None
     confidence: str = "low"                     # high | medium | low
     reason: str = ""
 
@@ -1854,6 +1858,7 @@ explorer 只给了候选，最终的 UrlRule 由你产出。
 
 # 背景
 - 你的职责只判断“文章详情页 URL 如何从列表 item 得到”，不要处理列表 API 的分页、筛选、query 参数。
+- 你的输出后续会被程序强制验证正文获取能力：至少一条样本必须能拿到足够 content，URL 正常但正文为空不能算可用。
 - exploration.list_url / exploration.fetch.query / exploration.pagination 描述的是“列表接口怎么请求”，不是详情页 URL 规律。
 - 如果列表里已有 url/link 字段，应直接使用该字段（mode=existing_url），不要多此一举去推模板。
 - 如果列表里给的是 path/href 这类相对路径字段，应输出 mode=path_join，填写 base_url 与 path_field。
@@ -1883,6 +1888,10 @@ explorer 只给了候选，最终的 UrlRule 由你产出。
       "raw": "来自 exploration 的原始样本片段"
     }
   ],
+  "content_strategy": null,
+  "content_verified": false,
+  "content_chars": null,
+  "detail_api": null,
   "confidence": "high | medium | low",
   "reason": "为什么这样判断，必须引用 exploration 中的字段/样本/验证结果"
 }
@@ -1904,7 +1913,78 @@ explorer 只给了候选，最终的 UrlRule 由你产出。
 - 没把握就 mode=unknown，不要为了输出模板而猜。
 - id_field 必须是 exploration 里真实存在的字段名。
 - path_field 必须是 exploration 里真实存在的字段名。
+- 不要自己编造 detail_api；正文策略由程序探查补充。
 """
+
+
+def _sample_content_probe_result(sample: dict | None) -> dict | None:
+    if not isinstance(sample, dict):
+        return None
+    content = sample.get("content") or ""
+    if len(" ".join(str(content).split())) >= 300:
+        return {
+            "content_verified": True,
+            "content_strategy": "existing_content",
+            "content_chars": len(" ".join(str(content).split())),
+        }
+    raw = sample.get("raw")
+    if isinstance(raw, dict):
+        for key in ("content", "textContent", "body", "text"):
+            value = raw.get(key)
+            if value and len(" ".join(str(value).split())) >= 300:
+                return {
+                    "content_verified": True,
+                    "content_strategy": "existing_content",
+                    "content_chars": len(" ".join(str(value).split())),
+                }
+    return None
+
+
+def _validated_rule_payload(rule_obj: UrlRule, **updates: Any) -> dict[str, Any]:
+    payload = {
+        "mode": rule_obj.mode,
+        "template": rule_obj.template,
+        "base_url": rule_obj.base_url,
+        "path_field": rule_obj.path_field,
+        "id_field": rule_obj.id_field,
+        "url_field": rule_obj.url_field,
+        "confidence": rule_obj.confidence,
+        "validation_samples": rule_obj.validation_samples,
+        "content_strategy": None,
+        "content_verified": False,
+        "content_chars": None,
+        "detail_api": None,
+    }
+    payload.update({key: value for key, value in updates.items() if value is not None})
+    return payload
+
+
+def _probe_content_for_rule(
+    *,
+    site_url: str,
+    exploration: dict,
+    rule_obj: UrlRule,
+    article_url: str,
+    sample_item: dict | None,
+) -> dict:
+    existing = _sample_content_probe_result(sample_item)
+    if existing:
+        return existing
+    if not article_url:
+        return {"content_verified": False, "content_strategy": "none", "content_chars": 0, "reason": "missing article_url"}
+    from app.discovery.tools import probe_article_content
+
+    return _invoke_tool_node(probe_article_content, {
+        "article_url": article_url,
+        "sample_item": sample_item or {},
+        "list_url": exploration.get("list_url") or site_url,
+        "id_field": rule_obj.id_field,
+        "min_content_chars": 300,
+    })
+
+
+def _content_probe_ok(content_probe: dict | None) -> bool:
+    return bool(content_probe and content_probe.get("content_verified") and int(content_probe.get("content_chars") or 0) >= 300)
 
 
 def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
@@ -1931,14 +2011,24 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
             })
             samples = probe.get("samples") or []
             if probe.get("looks_like_article_list"):
-                return {"url_rule": {
-                    "mode": "existing_url",
-                    "url_field": "url",
-                    "id_field": None,
-                    "evidence": f"html_validated {probe.get('valid_count')}/{probe.get('count')}",
-                    "confidence": "high",
-                    "validation_samples": samples[:5],
-                }, "audit_result": None, "validator_llm_output": json.dumps(probe, ensure_ascii=False)}
+                sample = samples[0] if samples else {}
+                content_probe = _probe_content_for_rule(
+                    site_url=state["site_url"],
+                    exploration=exploration,
+                    rule_obj=UrlRule(mode="existing_url", url_field="url", confidence="high"),
+                    article_url=sample.get("url") or "",
+                    sample_item=sample,
+                )
+                if _content_probe_ok(content_probe):
+                    return {"url_rule": {
+                        "mode": "existing_url",
+                        "url_field": "url",
+                        "id_field": None,
+                        "evidence": f"html_validated {probe.get('valid_count')}/{probe.get('count')}",
+                        "confidence": "high",
+                        "validation_samples": samples[:5],
+                        **content_probe,
+                    }, "audit_result": None, "validator_llm_output": json.dumps(probe, ensure_ascii=False)}
     worker_feedback = None
     last_out: DiscoveryState | None = None
     for attempt in range(1, WORKER_RETRY_LIMIT + 1):
@@ -1988,18 +2078,35 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
             })
 
         if rule_obj.mode == "existing_url" and rule_obj.url_field:
-            _append_worker_attempt_log(
-                state,
-                node_name="validator",
-                attempt=attempt,
-                status="success",
-                detail=f"mode=existing_url · evidence=existing_url · url_field={rule_obj.url_field}",
+            sample = rule_obj.sample_items[0] if rule_obj.sample_items else {}
+            article_url = sample.get("url") or sample.get("raw_url") or ""
+            content_probe = _probe_content_for_rule(
+                site_url=state["site_url"],
+                exploration=exploration,
+                rule_obj=rule_obj,
+                article_url=article_url,
+                sample_item=sample,
             )
-            return {"url_rule": {
-                "mode": "existing_url", "url_field": rule_obj.url_field,
-                "id_field": rule_obj.id_field, "evidence": "existing_url",
-                "confidence": rule_obj.confidence, "validation_samples": rule_obj.validation_samples,
-            }, "audit_result": None, "validator_llm_output": raw}
+            if _content_probe_ok(content_probe):
+                _append_worker_attempt_log(
+                    state,
+                    node_name="validator",
+                    attempt=attempt,
+                    status="success",
+                    detail=(
+                        f"mode=existing_url · evidence=existing_url · url_field={rule_obj.url_field} "
+                        f"· content_strategy={content_probe.get('content_strategy')} · content_chars={content_probe.get('content_chars')}"
+                    ),
+                )
+                return {"url_rule": _validated_rule_payload(
+                    rule_obj,
+                    mode="existing_url",
+                    url_field=rule_obj.url_field,
+                    evidence="existing_url",
+                    validation_samples=rule_obj.validation_samples,
+                    **content_probe,
+                ), "audit_result": None, "validator_llm_output": raw}
+            worker_feedback = f"mode=existing_url · URL 正常但正文验证失败 · probe={json.dumps(content_probe, ensure_ascii=False)[:500]}"
 
         if rule_obj.mode == "path_join" and rule_obj.base_url and rule_obj.path_field and rule_obj.sample_items:
             test_out = _invoke_tool_node(test_path_join, {
@@ -2010,20 +2117,43 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
             results = test_out.get("results", [])
             valid = [r for r in results if r.get("is_article_page")]
             if valid:
+                sample = rule_obj.sample_items[0]
+                content_probe = _probe_content_for_rule(
+                    site_url=state["site_url"],
+                    exploration=exploration,
+                    rule_obj=rule_obj,
+                    article_url=valid[0].get("url") or "",
+                    sample_item=sample,
+                )
+                if not _content_probe_ok(content_probe):
+                    worker_feedback = f"mode=path_join · URL 正常但正文验证失败 · probe={json.dumps(content_probe, ensure_ascii=False)[:500]}"
+                    _append_worker_attempt_log(
+                        state,
+                        node_name="validator",
+                        attempt=attempt,
+                        status="failed",
+                        detail=worker_feedback,
+                    )
+                    continue
                 _append_worker_attempt_log(
                     state,
                     node_name="validator",
                     attempt=attempt,
                     status="success",
-                    detail=f"mode=path_join · evidence=validated {len(valid)}/{len(results)} · path_field={rule_obj.path_field}",
+                    detail=(
+                        f"mode=path_join · evidence=validated {len(valid)}/{len(results)} · path_field={rule_obj.path_field} "
+                        f"· content_strategy={content_probe.get('content_strategy')} · content_chars={content_probe.get('content_chars')}"
+                    ),
                 )
-                return {"url_rule": {
-                    "mode": "path_join", "base_url": rule_obj.base_url,
-                    "path_field": rule_obj.path_field,
-                    "evidence": f"validated {len(valid)}/{len(results)}",
-                    "confidence": rule_obj.confidence,
-                    "validation_samples": results[:5],
-                }, "audit_result": None, "validator_llm_output": raw}
+                return {"url_rule": _validated_rule_payload(
+                    rule_obj,
+                    mode="path_join",
+                    base_url=rule_obj.base_url,
+                    path_field=rule_obj.path_field,
+                    evidence=f"validated {len(valid)}/{len(results)}",
+                    validation_samples=results[:5],
+                    **content_probe,
+                ), "audit_result": None, "validator_llm_output": raw}
 
         if rule_obj.mode == "template" and rule_obj.template and rule_obj.sample_items:
             test_out = _invoke_tool_node(test_url_template, {
@@ -2034,19 +2164,43 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
             results = test_out.get("results", [])
             valid = [r for r in results if r.get("is_article_page")]
             if valid:
+                sample = rule_obj.sample_items[0]
+                content_probe = _probe_content_for_rule(
+                    site_url=state["site_url"],
+                    exploration=exploration,
+                    rule_obj=rule_obj,
+                    article_url=valid[0].get("url") or "",
+                    sample_item=sample,
+                )
+                if not _content_probe_ok(content_probe):
+                    worker_feedback = f"mode=template · URL 正常但正文验证失败 · probe={json.dumps(content_probe, ensure_ascii=False)[:500]}"
+                    _append_worker_attempt_log(
+                        state,
+                        node_name="validator",
+                        attempt=attempt,
+                        status="failed",
+                        detail=worker_feedback,
+                    )
+                    continue
                 _append_worker_attempt_log(
                     state,
                     node_name="validator",
                     attempt=attempt,
                     status="success",
-                    detail=f"mode=template · evidence=validated {len(valid)}/{len(results)} · template={rule_obj.template}",
+                    detail=(
+                        f"mode=template · evidence=validated {len(valid)}/{len(results)} · template={rule_obj.template} "
+                        f"· content_strategy={content_probe.get('content_strategy')} · content_chars={content_probe.get('content_chars')}"
+                    ),
                 )
-                return {"url_rule": {
-                    "mode": "template", "template": rule_obj.template,
-                    "id_field": rule_obj.id_field, "evidence": f"validated {len(valid)}/{len(results)}",
-                    "confidence": rule_obj.confidence,
-                    "validation_samples": results[:5],
-                }, "audit_result": None, "validator_llm_output": raw}
+                return {"url_rule": _validated_rule_payload(
+                    rule_obj,
+                    mode="template",
+                    template=rule_obj.template,
+                    id_field=rule_obj.id_field,
+                    evidence=f"validated {len(valid)}/{len(results)}",
+                    validation_samples=results[:5],
+                    **content_probe,
+                ), "audit_result": None, "validator_llm_output": raw}
 
         probe_out = _invoke_tool_node(probe_url_patterns, {
             "base_url": state["site_url"],
@@ -2054,19 +2208,44 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
         })
         hit = next((p for p in probe_out if p.get("is_article_page")), None)
         if hit:
+            sample = rule_obj.sample_items[0] if rule_obj.sample_items else {"id": _first_sample_id(rule_obj)}
+            content_probe = _probe_content_for_rule(
+                site_url=state["site_url"],
+                exploration=exploration,
+                rule_obj=rule_obj,
+                article_url=hit.get("generated_url") or "",
+                sample_item=sample,
+            )
+            if not _content_probe_ok(content_probe):
+                worker_feedback = f"mode=template · pattern URL 正常但正文验证失败 · probe={json.dumps(content_probe, ensure_ascii=False)[:500]}"
+                _append_worker_attempt_log(
+                    state,
+                    node_name="validator",
+                    attempt=attempt,
+                    status="failed",
+                    detail=worker_feedback,
+                )
+                continue
             _append_worker_attempt_log(
                 state,
                 node_name="validator",
                 attempt=attempt,
                 status="success",
-                detail=f"mode=template · evidence=probed: {hit['pattern']} · template={urljoin(state['site_url'], hit['pattern'])}",
+                detail=(
+                    f"mode=template · evidence=probed: {hit['pattern']} · template={urljoin(state['site_url'], hit['pattern'])} "
+                    f"· content_strategy={content_probe.get('content_strategy')} · content_chars={content_probe.get('content_chars')}"
+                ),
             )
-            return {"url_rule": {
-                "mode": "template", "template": urljoin(state["site_url"], hit["pattern"]),
-                "id_field": rule_obj.id_field, "evidence": f"probed: {hit['pattern']}",
-                "confidence": "low",
-                "validation_samples": [hit],
-            }, "audit_result": None, "validator_llm_output": raw}
+            return {"url_rule": _validated_rule_payload(
+                rule_obj,
+                mode="template",
+                template=urljoin(state["site_url"], hit["pattern"]),
+                id_field=rule_obj.id_field,
+                evidence=f"probed: {hit['pattern']}",
+                confidence="low",
+                validation_samples=[hit],
+                **content_probe,
+            ), "audit_result": None, "validator_llm_output": raw}
         last_out = {"url_rule": {
             "mode": rule_obj.mode, "template": rule_obj.template,
             "base_url": rule_obj.base_url, "path_field": rule_obj.path_field,
@@ -2140,6 +2319,10 @@ max_iters 必须 1~20。
 {"op": "enrich_article_pages", "fetch_content": true, "fill_missing_only": true, "max_items": 8, "timeout_seconds": 6, "content_char_limit": 3000}
 用途：当列表/feed 样本缺少可供 Enricher 判断的真实 summary/content，或 summary 只是 Article URL / Comments URL / Points 等聚合元数据时，按 url 补抓详情页正文。已有足够 content/summary 时不要加。
 
+10. enrich_article_api（可选）
+{"op": "enrich_article_api", "url_template": "https://x.com/api/detail.json?no={item.no}", "fields": {"title": "data.title", "summary": "data.summary", "content": "data.content", "published_at": "data.publishTime"}, "method": "GET", "headers": {}, "query": {}, "json_body": null, "fill_missing_only": true, "max_items": 8, "timeout_seconds": 6, "content_char_limit": 3000}
+用途：当 validator 的 url_rule.content_strategy=detail_api 且 detail_api 已给出 url_template/fields 时，必须用该 action 补抓正文，不要改写字段路径。
+
 # 输入
 - 站点 URL：{site_url}
 - URL 规律：{url_rule}
@@ -2177,8 +2360,10 @@ max_iters 必须 1~20。
 5. 如果 exploration.pagination.type 不是 none/null/unknown，必须写 set+loop 翻页：
    - loop.max_iters 1~20；每轮 fetch 下一页；extract 用 merge=true 追加 items；
    - 有 has_more_path/next_path 时用它作 until 条件；没有明确终止字段时用 {"count_of":"items","op":">=","value":50}。
-6. 如果需要补抓详情页正文，把 enrich_article_pages 放在 dedup_by url 之后，避免重复 URL 重复补抓；默认 max_items=8、timeout_seconds=6、content_char_limit=3000。
-7. 必须包含 dedup_by url；若使用 enrich_article_pages，则 dedup_by url 应在补抓前执行一次。
+6. 如果 url_rule.content_strategy=detail_api，必须把 enrich_article_api 放在 dedup_by url 之后，并原样使用 url_rule.detail_api.url_template 与 fields。
+6.1 使用 enrich_article_api 时，extract.fields 必须保留 url_template 中引用的字段，如 {item.no} 就必须提取 no 字段。
+6.2 如果需要补抓普通 HTML 详情页正文，把 enrich_article_pages 放在 dedup_by url 之后，避免重复 URL 重复补抓；默认 max_items=8、timeout_seconds=6、content_char_limit=3000。
+7. 必须包含 dedup_by url；若使用 enrich_article_pages/enrich_article_api，则 dedup_by url 应在补抓前执行一次。
 8. source_type=html 且需浏览器交互时才允许 goto/wait_for/click；click/wait_for 必须在 goto 之后。
 9. 不要写死具体文章 id。
 10. 不要编造字段名、json path、selector、URL——都从 exploration 取。
@@ -2212,6 +2397,41 @@ def _should_add_article_page_enrich(exploration: dict) -> bool:
     from app.discovery.article_tools import should_enrich_article_pages_for_exploration
 
     return should_enrich_article_pages_for_exploration(exploration)
+
+
+def _detail_api_action_from_url_rule(url_rule: dict | None) -> dict | None:
+    if not isinstance(url_rule, dict):
+        return None
+    detail_api = url_rule.get("detail_api")
+    if not isinstance(detail_api, dict):
+        return None
+    url_template = detail_api.get("url_template")
+    fields = detail_api.get("fields")
+    if not url_template or not isinstance(fields, dict) or not fields.get("content"):
+        return None
+    return {
+        "op": "enrich_article_api",
+        "url_template": url_template,
+        "fields": {key: value for key, value in fields.items() if value},
+        "method": detail_api.get("method") or "GET",
+        "headers": detail_api.get("headers") or {},
+        "query": detail_api.get("query") or {},
+        "json_body": detail_api.get("json_body"),
+        "fill_missing_only": True,
+        "max_items": 8,
+        "timeout_seconds": 6,
+        "content_char_limit": 3000,
+    }
+
+
+def _ensure_id_field_for_detail_api(fields: dict[str, Any], url_rule: dict | None) -> dict[str, Any]:
+    next_fields = dict(fields)
+    if not isinstance(url_rule, dict):
+        return next_fields
+    id_field = url_rule.get("id_field")
+    if isinstance(id_field, str) and id_field and id_field not in next_fields:
+        next_fields[id_field] = id_field
+    return next_fields
 
 
 def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
@@ -2271,7 +2491,11 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
             {"op": "dedup_by", "field": "url"},
         ]
         notes = [f"deterministic {exploration.get('source_type')} recipe"]
-        if _should_add_article_page_enrich(exploration):
+        detail_api_action = _detail_api_action_from_url_rule(url_rule)
+        if detail_api_action:
+            actions.append(detail_api_action)
+            notes.append("article detail API enrichment added because validator verified detail content API.")
+        elif _should_add_article_page_enrich(exploration):
             actions.append({
                 "op": "enrich_article_pages",
                 "fetch_content": True,
@@ -2369,11 +2593,27 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
                 "notes": notes,
             }
             return finalize_recipe(recipe_dict)
-    if url_rule.get("mode") == "path_join" and url_rule.get("base_url") and url_rule.get("path_field"):
+    if (
+        url_rule.get("mode") == "path_join"
+        and url_rule.get("base_url")
+        and url_rule.get("path_field")
+    ) or (
+        url_rule.get("mode") == "template"
+        and url_rule.get("template")
+        and url_rule.get("id_field")
+    ):
         fields = dict(exploration.get("fields") or {})
-        path_field = url_rule["path_field"]
-        base_url = str(url_rule["base_url"]).rstrip("/")
-        fields["url"] = f"template:{base_url}/{{item.{path_field}}}"
+        if url_rule.get("mode") == "path_join":
+            path_field = url_rule["path_field"]
+            base_url = str(url_rule["base_url"]).rstrip("/")
+            fields["url"] = f"template:{base_url}/{{item.{path_field}}}"
+            recipe_note = "deterministic path_join recipe"
+        else:
+            id_field = str(url_rule["id_field"])
+            template_url = urljoin(state["site_url"], str(url_rule["template"]))
+            fields["url"] = f"template:{template_url.replace('{id}', '{item.' + id_field + '}')}"
+            recipe_note = "deterministic template recipe"
+        fields = _ensure_id_field_for_detail_api(fields, url_rule)
         pagination = exploration.get("pagination") or {}
         fetch_cfg = exploration.get("fetch") or {}
         format_value = (exploration.get("format_locator") or {}).get("value", "obj.records")
@@ -2426,13 +2666,25 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
                 },
                 {"op": "dedup_by", "field": "url"},
             ]
+            detail_api_action = _detail_api_action_from_url_rule(url_rule)
+            if detail_api_action:
+                actions.append(detail_api_action)
             recipe_dict = {
                 "recipe_type": "dsl",
                 "entry_url": state["site_url"],
                 "actions": actions,
-                "notes": ["deterministic path_join recipe", "deterministic page_param loop", pagination_note],
+                "notes": [
+                    recipe_note,
+                    "deterministic page_param loop",
+                    pagination_note,
+                    *(
+                        ["article detail API enrichment added because validator verified detail content API."]
+                        if detail_api_action else []
+                    ),
+                ],
             }
             return finalize_recipe(recipe_dict)
+        detail_api_action = _detail_api_action_from_url_rule(url_rule)
         recipe_dict = {
             "recipe_type": "dsl",
             "entry_url": state["site_url"],
@@ -2457,8 +2709,16 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
                 },
                 {"op": "dedup_by", "field": "url"},
             ],
-            "notes": ["deterministic path_join recipe"],
+            "notes": [
+                recipe_note,
+                *(
+                    ["article detail API enrichment added because validator verified detail content API."]
+                    if detail_api_action else []
+                ),
+            ],
         }
+        if detail_api_action:
+            recipe_dict["actions"].append(detail_api_action)
         return finalize_recipe(recipe_dict)
     prompt = render_prompt(
         "dsl_writer",
@@ -2643,6 +2903,7 @@ _AUDIT_PROMPT = """# 角色
 # 质量约束
 - 只看真实抓到的条目判断，不要凭配方结构猜结果。
 - 条目标题含"验证/403/access denied/请验证/robot"或正文为空/全是 JS 占位 → is_real_content=false。
+- URL/title 正常但 content_chars 全为 0 或明显不足，也必须视为正文策略失败，不能放行。
 - 配方里没有 loop 动作，且条数像单页量（如 ≤20 且无明显分页截断）→ has_pagination=false。
 - 条数很少（如 <3）且不像正常分页截断 → 怀疑被限制，not_blocked=false。
 - 不通过必须给具体 issues + suggested_fix；通过时 issues 可为空。
@@ -2736,11 +2997,30 @@ def _audit_items_sample(items: list) -> list[dict]:
     sample = []
     for it in items[:8]:
         s = {"title": it.get("title"), "url": it.get("url")}
-        content = it.get("content") or it.get("summary") or ""
-        if content:
-            s["content_snippet"] = str(content)[:200]
+        content = str(it.get("content") or "")
+        summary = str(it.get("summary") or "")
+        s["content_chars"] = len(" ".join(content.split()))
+        s["summary_chars"] = len(" ".join(summary.split()))
+        display_text = content or summary
+        if display_text:
+            s["content_snippet"] = str(display_text)[:200]
         sample.append(s)
     return sample
+
+
+def _has_verified_item_content(items: list) -> bool:
+    for item in items[:8]:
+        content = " ".join(str(item.get("content") or "").split())
+        if len(content) >= 300:
+            return True
+    return False
+
+
+def _recipe_has_content_enrich(recipe: DslRecipe) -> bool:
+    for action in recipe.actions:
+        if action.op in {"enrich_article_pages", "enrich_article_api"}:
+            return True
+    return False
 
 
 def auditor(state: DiscoveryState, llm=None, test_fn=None) -> DiscoveryState:
@@ -2768,11 +3048,19 @@ def auditor(state: DiscoveryState, llm=None, test_fn=None) -> DiscoveryState:
         errors = [*errors, f"runtime error: {test_result['error']}"]
     items = test_result.get("items", [])
     discovered_count = test_result.get("stats", {}).get("discovered_count", len(items))
+    content_verified = _has_verified_item_content(items)
+    if discovered_count and not content_verified:
+        errors = [
+            *errors,
+            "article content verification failed: URL/title may be valid but no sampled item has content_chars >= 300",
+        ]
     audit_input = {
         "recipe_summary": _recipe_summary(recipe),
         "errors": errors,
         "dsl_sanitize_warnings": sanitize_warnings,
         "discovered_count": discovered_count,
+        "content_verified": content_verified,
+        "has_content_enrich_action": _recipe_has_content_enrich(recipe),
         "items_sample": _audit_items_sample(items),
     }
     if test_result.get("error"):
@@ -2920,6 +3208,9 @@ def _step_summary(node_name: str, update: dict) -> dict:
             "path_field": u.get("path_field"),
             "id_field": u.get("id_field"),
             "evidence": u.get("evidence"),
+            "content_strategy": u.get("content_strategy"),
+            "content_verified": u.get("content_verified"),
+            "content_chars": u.get("content_chars"),
             "validation_samples": u.get("validation_samples"),
         }
     if node_name == "dsl_writer":

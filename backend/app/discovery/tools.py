@@ -7,7 +7,8 @@ render_js=True 或 capture_network 时按需启动，模块加载零浏览器开
 from __future__ import annotations
 
 import json
-from urllib.parse import urljoin
+import re
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 from html.parser import HTMLParser
 
 from langchain_core.tools import tool
@@ -374,4 +375,241 @@ def probe_url_patterns(base_url: str, id_value: str, patterns: list[str] | None 
     return results
 
 
-TOOLS = [fetch_page, capture_network, inspect_item, probe_html_entries, test_url_template, test_path_join, probe_url_patterns]
+@tool
+def probe_article_content(
+    article_url: str,
+    sample_item: dict,
+    list_url: str | None = None,
+    id_field: str | None = None,
+    min_content_chars: int = 300,
+) -> dict:
+    """验证文章详情正文获取策略；HTML 失败后探测详情 JSON API。"""
+    import httpx
+    from app.discovery.article_tools import fetch_article_page_content
+
+    ensure_not_cancelled()
+    html_result = fetch_article_page_content(article_url, timeout_seconds=8, content_char_limit=3000)
+    html_content_chars = len(html_result.get("content") or "")
+    if html_content_chars >= min_content_chars:
+        return {
+            "content_verified": True,
+            "content_strategy": "html_page",
+            "content_chars": html_content_chars,
+            "html_status": html_result.get("status"),
+            "article_url": html_result.get("resolved_url") or article_url,
+        }
+
+    id_value = _sample_id_value(sample_item, id_field)
+    detail_candidates = _detail_api_candidates(article_url=article_url, list_url=list_url, id_value=id_value)
+    for api_url in detail_candidates:
+        ensure_not_cancelled()
+        api_result = _probe_detail_api_url(api_url, min_content_chars=min_content_chars)
+        if api_result.get("content_verified"):
+            return {
+                **api_result,
+                "html_status": html_result.get("status"),
+                "html_content_chars": html_content_chars,
+                "article_url": article_url,
+            }
+
+    for cap in _capture_article_json_responses(article_url):
+        ensure_not_cancelled()
+        payload = cap.get("parsed_json")
+        api_result = _probe_detail_api_payload(
+            payload,
+            api_url=cap.get("api_url"),
+            min_content_chars=min_content_chars,
+        )
+        if api_result.get("content_verified"):
+            return {
+                **api_result,
+                "html_status": html_result.get("status"),
+                "html_content_chars": html_content_chars,
+                "article_url": article_url,
+            }
+
+    return {
+        "content_verified": False,
+        "content_strategy": "none",
+        "content_chars": 0,
+        "html_status": html_result.get("status"),
+        "html_content_chars": html_content_chars,
+        "article_url": article_url,
+        "detail_api_candidates": detail_candidates[:6],
+    }
+
+
+def _sample_id_value(sample_item: dict, id_field: str | None) -> str | None:
+    if id_field:
+        raw = sample_item.get("raw") if isinstance(sample_item.get("raw"), dict) else {}
+        value = raw.get(id_field) or sample_item.get(id_field)
+        if value is not None:
+            return str(value)
+    value = sample_item.get("id")
+    return str(value) if value is not None else None
+
+
+def _detail_api_candidates(*, article_url: str, list_url: str | None, id_value: str | None) -> list[str]:
+    if not id_value:
+        return []
+    candidates: list[str] = []
+    parsed_article = urlparse(article_url)
+    origin = f"{parsed_article.scheme}://{parsed_article.netloc}"
+    if list_url:
+        parsed_list = urlparse(list_url)
+        list_path = parsed_list.path
+        parent = list_path.rsplit("/", 1)[0]
+        if parent:
+            for filename in (
+                "detail.json",
+                "getDetail.json",
+                "getArticleDetail.json",
+                "articleDetail.json",
+                "getBlogDetail.json",
+                "blogDetail.json",
+            ):
+                candidates.append(_url_with_query(urljoin(f"{parsed_list.scheme}://{parsed_list.netloc}", f"{parent}/{filename}"), {"no": id_value}))
+                candidates.append(_url_with_query(urljoin(f"{parsed_list.scheme}://{parsed_list.netloc}", f"{parent}/{filename}"), {"id": id_value}))
+        if "ByCategory" in list_path:
+            detail_path = list_path.replace("blogByCategoryPage", "detail").replace("ByCategoryPage", "Detail")
+            candidates.append(_url_with_query(urljoin(f"{parsed_list.scheme}://{parsed_list.netloc}", detail_path), {"no": id_value}))
+    article_parts = [part for part in parsed_article.path.split("/") if part]
+    if "detail" in article_parts:
+        idx = article_parts.index("detail")
+        api_parts = ["api", *article_parts[:idx], "detail.json"]
+        candidates.append(_url_with_query(urljoin(origin, "/" + "/".join(api_parts)), {"no": id_value}))
+        candidates.append(_url_with_query(urljoin(origin, "/" + "/".join(api_parts)), {"id": id_value}))
+    deduped: list[str] = []
+    for candidate in candidates:
+        if candidate not in deduped:
+            deduped.append(candidate)
+    return deduped[:12]
+
+
+def _url_with_query(url: str, values: dict[str, str]) -> str:
+    parsed = urlparse(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.update(values)
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
+def _probe_detail_api_url(api_url: str, *, min_content_chars: int) -> dict:
+    import httpx
+
+    try:
+        response = httpx.get(api_url, timeout=8, follow_redirects=True)
+        content_type = response.headers.get("content-type", "")
+        if response.status_code >= 400 or "json" not in content_type.lower():
+            return {"content_verified": False}
+        payload = response.json()
+    except Exception:
+        return {"content_verified": False}
+    return _probe_detail_api_payload(payload, api_url=api_url, min_content_chars=min_content_chars)
+
+
+def _probe_detail_api_payload(payload: object, *, api_url: str | None, min_content_chars: int) -> dict:
+    content_path, content_text = _find_best_text_path(payload, ("content", "body", "html", "article"))
+    if not content_path or len(_strip_tags(content_text)) < min_content_chars:
+        return {"content_verified": False}
+    field_paths = {
+        "content": content_path,
+        "title": _find_first_text_path(payload, ("title", "name", "subject")),
+        "summary": _find_first_text_path(payload, ("summary", "description", "desc", "brief")),
+        "published_at": _find_first_text_path(payload, ("publishTime", "published_at", "publishedAt", "date", "created_at", "gmtCreate")),
+    }
+    return {
+        "content_verified": True,
+        "content_strategy": "detail_api",
+        "content_chars": len(_strip_tags(content_text)),
+        "detail_api": {
+            "url_template": _template_api_url(api_url),
+            "fields": {k: v for k, v in field_paths.items() if v},
+            "method": "GET",
+        },
+    }
+
+
+def _capture_article_json_responses(article_url: str) -> list[dict]:
+    from playwright.sync_api import sync_playwright
+
+    caps: list[dict] = []
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+
+        def on_response(resp):
+            try:
+                content_type = resp.headers.get("content-type", "")
+                if "json" not in content_type.lower():
+                    return
+                body = resp.text()
+                if not body or len(body) > 500000:
+                    return
+                caps.append({"api_url": resp.url, "status": resp.status, "parsed_json": json.loads(body)})
+            except Exception:
+                return
+
+        page.on("response", on_response)
+        try:
+            page.goto(article_url, wait_until="networkidle", timeout=15000)
+        except Exception:
+            pass
+        page.wait_for_timeout(1000)
+        browser.close()
+    return caps[:10]
+
+
+def _find_best_text_path(payload: object, names: tuple[str, ...]) -> tuple[str | None, str]:
+    best_path = None
+    best_text = ""
+
+    def walk(node: object, path: str) -> None:
+        nonlocal best_path, best_text
+        if isinstance(node, dict):
+            for key, value in node.items():
+                child_path = f"{path}.{key}" if path else key
+                if any(name.lower() in key.lower() for name in names) and isinstance(value, str):
+                    text = _strip_tags(value)
+                    if len(text) > len(best_text):
+                        best_path = child_path
+                        best_text = value
+                walk(value, child_path)
+        elif isinstance(node, list):
+            for idx, value in enumerate(node[:5]):
+                walk(value, f"{path}.{idx}" if path else str(idx))
+
+    walk(payload, "")
+    return best_path, best_text
+
+
+def _find_first_text_path(payload: object, names: tuple[str, ...]) -> str | None:
+    path, text = _find_best_text_path(payload, names)
+    return path if text else None
+
+
+def _strip_tags(value: str) -> str:
+    return " ".join(re.sub(r"<[^>]+>", " ", str(value or "")).split())
+
+
+def _template_api_url(api_url: str | None) -> str:
+    if not api_url:
+        return ""
+    parsed = urlparse(api_url)
+    query = parse_qsl(parsed.query, keep_blank_values=True)
+    templated = [
+        f"{key}={{item.{key}}}" if key in {"id", "no", "slug", "uuid"} else f"{key}={value}"
+        for key, value in query
+    ]
+    return urlunparse(parsed._replace(query="&".join(templated)))
+
+
+TOOLS = [
+    fetch_page,
+    capture_network,
+    inspect_item,
+    probe_html_entries,
+    test_url_template,
+    test_path_join,
+    probe_url_patterns,
+    probe_article_content,
+]
