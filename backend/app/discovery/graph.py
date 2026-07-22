@@ -195,7 +195,7 @@ def supervisor_route(state: DiscoveryState) -> str:
         return "save_method"  # 审计通过，存方法
     if audit and not audit.get("passed") and state.get("attempt", 0) >= MAX_ATTEMPTS:
         return "__end__"  # 重试用尽，判 failed
-    if decision == "reexplore":
+    if decision == "reexplore" and not state.get("exploration"):
         return "explorer"
     if decision == "rewrite" and state.get("url_rule") and not state.get("dsl_recipe"):
         return "dsl_writer"
@@ -583,6 +583,9 @@ def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
         last_update = update
         if (update.get("exploration") or {}).get("success") is True:
             exploration = update.get("exploration") or {}
+            # reexplore 决策已被本次成功探查消费；清除旧审计结果，
+            # 否则 supervisor 会继续按旧 decision 路由回 explorer。
+            update["audit_result"] = None
             _append_worker_attempt_log(
                 state,
                 node_name="explorer",
