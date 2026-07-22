@@ -131,10 +131,32 @@ def _page_summary(
         "links": parser.links[:100],
         "html": text[:2000],
     }
+    embedded_json_html = _extract_embedded_json_html(text)
+    if embedded_json_html:
+        out["embedded_json_html"] = embedded_json_html
     feed = _summarize_feed(text)
     if feed:
         out["feed"] = feed
     return out
+
+
+def _extract_embedded_json_html(text: str, *, limit: int = 300000) -> str:
+    snippets: list[str] = []
+    interesting = re.compile(
+        r"_ROUTER_DATA|_SSR_DATA|__INITIAL_STATE__|__NEXT_DATA__|__NUXT__|"
+        r"__MODERN_SERVER_DATA__|article_list|articles|posts|loaderData",
+        re.IGNORECASE,
+    )
+    total = 0
+    for match in re.finditer(r"<script[^>]*>.*?</script>", text, re.IGNORECASE | re.DOTALL):
+        snippet = match.group(0)
+        if not interesting.search(snippet):
+            continue
+        snippets.append(snippet)
+        total += len(snippet)
+        if total >= limit:
+            break
+    return "\n".join(snippets)[:limit]
 
 
 def _summarize_feed(text: str) -> dict | None:
@@ -200,6 +222,213 @@ def capture_network(url: str) -> list:
         p.wait_for_timeout(1000)
         b.close()
     return caps
+
+
+@tool
+def probe_embedded_json(url: str) -> dict:
+    """探测页面内 script/window 状态 JSON，返回像文章列表的候选 path 和字段样本。"""
+    import httpx
+
+    ensure_not_cancelled()
+    response = httpx.get(url, timeout=15, follow_redirects=True)
+    html = response.text
+    candidates = _embedded_json_article_candidates(html, site_url=str(response.url))
+    return {
+        "url": str(response.url),
+        "status": response.status_code,
+        "candidate_count": len(candidates),
+        "candidates": candidates[:5],
+    }
+
+
+def _embedded_json_article_candidates(html: str, *, site_url: str) -> list[dict]:
+    candidates: list[dict] = []
+    for source_name, payload in _iter_embedded_json_payloads(html):
+        for score, path, items in _rank_json_item_lists(payload):
+            fields = _infer_embedded_item_fields(items[0], site_url=site_url)
+            if not fields.get("title"):
+                continue
+            sample_items = _build_embedded_sample_items(items, site_url=site_url, fields=fields)
+            if not sample_items:
+                continue
+            candidates.append({
+                "source_name": source_name,
+                "path": path,
+                "format_locator": f"embedded_json:{source_name}:{path}",
+                "score": score,
+                "item_count": len(items),
+                "fields": fields,
+                "sample_items": sample_items[:3],
+            })
+    candidates.sort(key=lambda item: item.get("score", 0), reverse=True)
+    return candidates
+
+
+def _iter_embedded_json_payloads(html: str) -> list[tuple[str, object]]:
+    payloads: list[tuple[str, object]] = []
+    decoder = json.JSONDecoder()
+    for match in re.finditer(
+        r"<script(?P<attrs>[^>]*)>(?P<body>.*?)</script>",
+        html,
+        re.IGNORECASE | re.DOTALL,
+    ):
+        attrs = match.group("attrs") or ""
+        body = (match.group("body") or "").strip()
+        if not body:
+            continue
+        id_match = re.search(r'id=["\']([^"\']+)["\']', attrs, re.IGNORECASE)
+        type_match = re.search(r'type=["\']([^"\']+)["\']', attrs, re.IGNORECASE)
+        script_id = id_match.group(1) if id_match else None
+        script_type = (type_match.group(1).lower() if type_match else "")
+        if script_type in {"application/json", "application/ld+json"} or script_id in {
+            "__NEXT_DATA__",
+            "__MODERN_SERVER_DATA__",
+        }:
+            try:
+                payloads.append((f"script#{script_id}" if script_id else "script#json", json.loads(body)))
+            except Exception:
+                pass
+        for assignment in (
+            "window._ROUTER_DATA",
+            "window._SSR_DATA",
+            "window.__INITIAL_STATE__",
+            "window.__NUXT__",
+            "__INITIAL_STATE__",
+        ):
+            match_assignment = re.search(rf"{re.escape(assignment)}\s*=\s*", body)
+            if not match_assignment:
+                continue
+            text = body[match_assignment.end():].lstrip()
+            try:
+                payload, _ = decoder.raw_decode(text)
+            except Exception:
+                continue
+            payloads.append((assignment, payload))
+    return payloads
+
+
+def _rank_json_item_lists(payload: object) -> list[tuple[int, str, list[dict]]]:
+    ranked: list[tuple[int, str, list[dict]]] = []
+
+    def walk(node: object, path: str) -> None:
+        if isinstance(node, list) and node and all(isinstance(item, dict) for item in node[:5]):
+            score = _score_embedded_item_list(node)
+            if score > 0:
+                ranked.append((score, path or "obj", node))
+            return
+        if isinstance(node, dict):
+            for key, value in node.items():
+                walk(value, f"{path}.{key}" if path else key)
+
+    walk(payload, "")
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return ranked
+
+
+def _score_embedded_item_list(items: list[dict]) -> int:
+    first = items[0] if items else {}
+    keys = set(first.keys())
+    nested_leaf_keys = {path.rsplit(".", 1)[-1] for path in _nested_key_paths(first)}
+    score = 0
+    if keys & {"title", "name", "subject"} or nested_leaf_keys & {"Title", "title", "Name", "name", "subject"}:
+        score += 3
+    if keys & {"url", "link", "href", "path"} or nested_leaf_keys & {
+        "url", "link", "href", "path", "TitleKey", "slug"
+    }:
+        score += 3
+    if (
+        keys & {"date", "published_at", "pubDate", "publishTime", "created_at", "time"}
+        or nested_leaf_keys & {"PublishDate", "published_at", "pubDate", "publishTime", "created_at", "time"}
+    ):
+        score += 2
+    if len(items) >= 2:
+        score += 1
+    return score
+
+
+def _infer_embedded_item_fields(sample: dict, *, site_url: str) -> dict:
+    locale = "zh" if "/zh/" in urlparse(site_url).path else ("en" if "/en/" in urlparse(site_url).path else "")
+
+    def pick(*names: str) -> str | None:
+        exact = [name for name in names if name in sample]
+        if exact:
+            return exact[0]
+        paths = _nested_key_paths(sample)
+        for name in names:
+            matches = [
+                path for path in paths
+                if path.rsplit(".", 1)[-1].lower() == name.lower()
+            ]
+            if not matches:
+                continue
+            if locale:
+                locale_token = locale.lower()
+                preferred = [
+                    path for path in matches
+                    if locale_token in path.lower()
+                ]
+                if preferred:
+                    return preferred[0]
+            return matches[0]
+        return None
+
+    return {
+        "id": pick("TitleKey", "titleKey", "slug", "id", "no", "uuid", "ArticleID", "ID"),
+        "title": pick("Title", "title", "name", "subject"),
+        "url": pick("url", "link", "href", "path"),
+        "published_at": pick("PublishDate", "published_at", "date", "pubDate", "publishTime", "created_at", "time"),
+        "summary": pick("Abstract", "summary", "description", "desc", "brief"),
+        "content": pick("content", "textContent", "body", "text"),
+    }
+
+
+def _nested_key_paths(item: dict) -> list[str]:
+    paths: list[str] = []
+
+    def walk(node: object, prefix: str) -> None:
+        if not isinstance(node, dict):
+            return
+        for key, value in node.items():
+            path = f"{prefix}.{key}" if prefix else key
+            paths.append(path)
+            if isinstance(value, dict):
+                walk(value, path)
+
+    walk(item, "")
+    return paths
+
+
+def _embedded_json_path_value(node: object, path: str | None) -> object:
+    current = node
+    for part in (path or "").split("."):
+        if part == "":
+            continue
+        current = current.get(part) if isinstance(current, dict) else None
+        if current is None:
+            return None
+    return current
+
+
+def _build_embedded_sample_items(items: list[dict], *, site_url: str, fields: dict) -> list[dict]:
+    sample_items: list[dict] = []
+    for item in items[:5]:
+        raw_url = _embedded_json_path_value(item, fields.get("url")) if fields.get("url") else None
+        raw_id = _embedded_json_path_value(item, fields.get("id")) if fields.get("id") else None
+        title = _embedded_json_path_value(item, fields.get("title")) if fields.get("title") else None
+        summary = _embedded_json_path_value(item, fields.get("summary")) if fields.get("summary") else None
+        published_at = (
+            _embedded_json_path_value(item, fields.get("published_at"))
+            if fields.get("published_at") else None
+        )
+        sample_items.append({
+            "id": str(raw_id) if raw_id is not None else None,
+            "raw_url": str(raw_url) if raw_url is not None else None,
+            "url": urljoin(site_url, str(raw_url)) if raw_url else None,
+            "title": str(title) if title is not None else None,
+            "summary": str(summary) if summary is not None else None,
+            "published_at": str(published_at) if published_at is not None else None,
+        })
+    return sample_items
 
 
 @tool
@@ -625,5 +854,6 @@ TOOLS = [
     test_url_template,
     test_path_join,
     probe_url_patterns,
+    probe_embedded_json,
     probe_article_content,
 ]

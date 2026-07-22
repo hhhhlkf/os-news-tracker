@@ -30,13 +30,15 @@ DEFAULT_SYNTHESIS = """你是站点探查结果整理器。请根据给定站点
 5.1 对 JSON API：list_url 只放不带 query string 的接口 URL；URL 上的 ?a=b&page=1 等参数必须拆到 fetch.query；POST 请求体参数必须放 fetch.json_body。不要把分页/筛选参数混在 list_url 里。
 6. 若 success=true 且 source_type=rss/atom，必须给出 list_url 且 format_locator.kind=feed_entries。
 7. 若 success=true 且 source_type=html，必须给出 html_selectors 四项和 sample_items。
+8. 若 success=true 且 source_type=embedded_json，必须给出 list_url、format_locator.kind=embedded_json、
+   format_locator.value（如 embedded_json:window._ROUTER_DATA:loaderData.xxx.article_list）和字段映射。
 
 输出 schema：
 {
-  "source_type": "json_api | rss | atom | html | unknown",
+  "source_type": "json_api | rss | atom | html | embedded_json | unknown",
   "list_url": "string or null",
   "fetch": {"method": "GET | POST", "transport": "httpx | scrapling", "impersonate": null, "stealthy_headers": true, "headers": {}, "query": {}, "json_body": null},
-  "format_locator": {"kind": "json_path | feed_entries | html_selector | unknown", "value": "string"},
+  "format_locator": {"kind": "json_path | feed_entries | html_selector | embedded_json | unknown", "value": "string"},
   "fields": {"id": null, "title": null, "url": null, "published_at": null, "summary": null, "content": null},
   "html_selectors": {"item_selector": null, "link_selector": null, "title_selector": null, "date_selector": null},
   "sample_items": [{"id": null, "title": null, "raw_url": null, "url": null, "published_at": null, "raw": null}],

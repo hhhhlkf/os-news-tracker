@@ -345,10 +345,11 @@ EXPLORER_SYSTEM_PROMPT = """# 角色
 你不要正式产出最终的 URL 规律（UrlRule），那是 validator 的职责。你在 url_candidates 里给出候选 + 初步验证结果即可。
 
 # 任务
-对给定站点，找出它的文章列表数据源（三者之一）：
+对给定站点，找出它的文章列表数据源（下列之一）：
 - JSON API
 - RSS/Atom
 - 服务端渲染 HTML（SSR）
+- 页面内嵌结构化 JSON（如 window._ROUTER_DATA、window.__INITIAL_STATE__、__NEXT_DATA__、__NUXT__、application/json script）
 以及列表里每条文章的字段结构（id/slug/no、标题、链接、发布时间、摘要/正文片段），
 并初步判断详情页 URL 规律。
 你的产出是后续 validator 和 dsl_writer 的唯一信息来源，必须准确、具体、有工具调用证据，不能猜。
@@ -366,6 +367,7 @@ EXPLORER_SYSTEM_PROMPT = """# 角色
   transport=httpx 为默认；transport=scrapling 会用 Scrapling 浏览器指纹 HTTP 调取，适合 Oracle/Akamai 等普通 httpx/curl 403 但浏览器指纹可通的站点。
 - capture_network(url)：用浏览器抓页面加载时的 XHR/Fetch JSON 响应，用于发现 SPA 隐藏 API。
 - inspect_item(api_url, method, json_body)：看某个 API 返回的 item 结构。
+- probe_embedded_json(url)：探测页面内 script/window 状态 JSON，返回像文章列表的候选 path 和字段样本。
 - probe_html_entries(url, item_selector, link_selector, title_selector, date_selector)：按 selector 真实抽取 HTML 列表样本。
 - test_url_template(template, id_field, sample_items)：用真实 id 填模板逐个请求，验证详情页能否打开。
 - probe_url_patterns(base_url, id_value)：没头绪时批量试常见 URL pattern（/blog/{id}、/post/{id} 等）。
@@ -385,6 +387,9 @@ EXPLORER_SYSTEM_PROMPT = """# 角色
    若 RSS/Atom 可用，优先记录为 rss/atom 数据源（format_locator.kind=feed_entries）。
 3. 若页面链接很少、内容靠 JS 加载、或 HTML 中没有真实文章链接（SPA），必须 capture_network(url)，
    寻找返回文章列表的 JSON XHR/Fetch。
+3.1 若 HTML 中没有 `<a href>` 文章链接，但页面源码里出现 `window._ROUTER_DATA`、`window.__INITIAL_STATE__`、
+    `__NEXT_DATA__`、`__NUXT__`、`__MODERN_SERVER_DATA__`、`article_list`、`posts`、`articles` 等脚本状态数据，
+    应调用 probe_embedded_json(url) 并优先判断是否为页面内嵌结构化 JSON；不要误判成“无列表数据源”。
 4. 找到候选 JSON API 后，用 inspect_item 看 item 结构，确认：列表 path、id/slug/no 字段、
    title 字段、url/link 字段（或可拼详情页的 id 字段）、published_at/date/time 字段。
 5. 若是服务端渲染 HTML，必须从页面中识别四个 selector 并各列 3 条真实样本：
@@ -577,7 +582,7 @@ def _select_explorer_tools(state: DiscoveryState, tools: list) -> list:
     )
     if not has_high_quality_json_capture:
         return tools
-    preferred = ["fetch_page", "test_url_template", "test_path_join", "probe_url_patterns"]
+    preferred = ["fetch_page", "probe_embedded_json", "test_url_template", "test_path_join", "probe_url_patterns"]
     return [tool_map[name] for name in preferred if name in tool_map]
 
 
@@ -748,6 +753,12 @@ def _summarize_explorer_tool_result(tool_name: str, tool_result: object) -> obje
                     "parsed_json_preview": _compact_explorer_value(cap.get("parsed_json"), depth=2),
                 })
         return caps
+    if tool_name == "probe_embedded_json" and isinstance(tool_result, dict):
+        return {
+            "status": tool_result.get("status"),
+            "candidate_count": tool_result.get("candidate_count"),
+            "candidates": _compact_explorer_value(tool_result.get("candidates"), depth=3),
+        }
     if tool_name in {"test_url_template", "test_path_join"} and isinstance(tool_result, dict):
         results = tool_result.get("results") or []
         valid = sum(1 for item in results if isinstance(item, dict) and item.get("is_article_page"))
@@ -824,10 +835,19 @@ def _derive_exploration_candidates_from_state(state: DiscoveryState) -> list[dic
     candidates: list[dict] = []
     homepage = state.get("homepage") or {}
     html = homepage.get("html")
+    embedded_json_html = homepage.get("embedded_json_html")
     if isinstance(html, str):
         feed_exploration = _derive_feed_exploration_from_html(site_url=state["site_url"], html=html)
         if feed_exploration:
             candidates.append(feed_exploration)
+    if isinstance(embedded_json_html, str):
+        embedded_json_exploration = _derive_embedded_json_exploration_from_html(
+            site_url=state["site_url"],
+            html=embedded_json_html,
+        )
+        if embedded_json_exploration:
+            candidates.append(embedded_json_exploration)
+    if isinstance(html, str):
         html_exploration = _derive_html_exploration_from_homepage(
             site_url=state["site_url"],
             html=html,
@@ -952,6 +972,106 @@ def _derive_html_exploration_from_homepage(*, site_url: str, html: str, links: l
     ).model_dump()
 
 
+def _derive_embedded_json_exploration_from_html(*, site_url: str, html: str) -> dict | None:
+    best: tuple[str, str, list[dict]] | None = None
+    for source_name, payload in _iter_embedded_json_payloads(html):
+        found = _find_best_json_items_path(payload)
+        if not found:
+            continue
+        path, items = found
+        if best is None or _score_item_list(items) > _score_item_list(best[2]):
+            best = (source_name, path, items)
+    if best is None:
+        return None
+
+    source_name, path, items = best
+    fields = _infer_item_fields(items[0], site_url)
+    sample_items = _build_sample_items(items, site_url, fields=fields)
+    if not sample_items:
+        return None
+    id_field = fields.get("id")
+    template = None
+    if id_field and "/blog" in urlparse(site_url).path:
+        template = f"{site_url.rstrip('/')}/{{id}}"
+        for sample in sample_items:
+            if sample.get("id") and not sample.get("url"):
+                sample["raw_url"] = str(sample["id"])
+                sample["url"] = template.replace("{id}", str(sample["id"]))
+
+    return ExplorationResult(
+        source_type="embedded_json",
+        list_url=site_url,
+        fetch={"method": "GET", "transport": "httpx", "headers": {}, "query": {}, "json_body": None},
+        format_locator={"kind": "embedded_json", "value": f"embedded_json:{source_name}:{path}"},
+        fields=fields,
+        html_selectors={
+            "item_selector": None, "link_selector": None, "title_selector": None, "date_selector": None,
+        },
+        sample_items=sample_items,
+        url_candidates=[{
+            "mode": "template" if template else ("existing_url" if fields.get("url") else "unknown"),
+            "url_field": fields.get("url"),
+            "id_field": id_field,
+            "template": template,
+            "verification": "embedded_json_script_state",
+        }],
+        pagination={
+            "type": "unknown", "page_param": None, "size_param": None, "offset_param": None,
+            "limit_param": None, "cursor_param": None, "next_path": None, "has_more_path": None,
+            "start": 1, "size": None, "notes": f"embedded JSON state via {source_name}",
+        },
+        evidence=[{
+            "tool": "fetch_page",
+            "summary": f"embedded JSON article list detected · source={source_name} · path={path} · sample_items={len(sample_items)}",
+        }],
+        notes=["deterministic fallback from embedded script JSON state"],
+        success=True,
+    ).model_dump()
+
+
+def _iter_embedded_json_payloads(html: str) -> list[tuple[str, object]]:
+    payloads: list[tuple[str, object]] = []
+    decoder = json.JSONDecoder()
+    for match in re.finditer(
+        r'<script(?P<attrs>[^>]*)>(?P<body>.*?)</script>',
+        html,
+        re.IGNORECASE | re.DOTALL,
+    ):
+        attrs = match.group("attrs") or ""
+        body = (match.group("body") or "").strip()
+        if not body:
+            continue
+        id_match = re.search(r'id=["\']([^"\']+)["\']', attrs, re.IGNORECASE)
+        type_match = re.search(r'type=["\']([^"\']+)["\']', attrs, re.IGNORECASE)
+        script_id = id_match.group(1) if id_match else None
+        script_type = (type_match.group(1).lower() if type_match else "")
+        if script_type in {"application/json", "application/ld+json"} or script_id in {
+            "__NEXT_DATA__",
+            "__MODERN_SERVER_DATA__",
+        }:
+            try:
+                payloads.append((f"script#{script_id}" if script_id else "script#json", json.loads(body)))
+            except Exception:
+                pass
+        for assignment in (
+            "window._ROUTER_DATA",
+            "window._SSR_DATA",
+            "window.__INITIAL_STATE__",
+            "window.__NUXT__",
+            "__INITIAL_STATE__",
+        ):
+            match_assignment = re.search(rf"{re.escape(assignment)}\s*=\s*", body)
+            if not match_assignment:
+                continue
+            text = body[match_assignment.end():].lstrip()
+            try:
+                payload, _ = decoder.raw_decode(text)
+            except Exception:
+                continue
+            payloads.append((assignment, payload))
+    return payloads
+
+
 def _pick_homepage_article_links(*, site_url: str, links: list[str]) -> list[str]:
     site_host = urlparse(site_url).netloc
     article_patterns = (
@@ -1066,6 +1186,47 @@ def _derive_exploration_candidates_from_result(state: DiscoveryState, result: di
     """从 ReAct 工具轨迹里提炼候选池。"""
     candidates: list[dict] = []
     for event in _iter_tool_events(result):
+        if event["name"] == "probe_embedded_json":
+            payload = event.get("payload") or {}
+            for candidate in (payload.get("candidates") or [])[:3]:
+                if not isinstance(candidate, dict):
+                    continue
+                fields = candidate.get("fields") or {}
+                id_field = fields.get("id")
+                template = None
+                if id_field and "/blog" in urlparse(state["site_url"]).path:
+                    template = f"{state['site_url'].rstrip('/')}/{{id}}"
+                candidates.append(ExplorationResult(
+                    source_type="embedded_json",
+                    list_url=payload.get("url") or state["site_url"],
+                    fetch={
+                        "method": "GET",
+                        "transport": "httpx",
+                        "headers": {},
+                        "query": {},
+                        "json_body": None,
+                    },
+                    format_locator={"kind": "embedded_json", "value": candidate.get("format_locator")},
+                    fields=fields,
+                    sample_items=candidate.get("sample_items") or [],
+                    url_candidates=[{
+                        "mode": "template" if template else ("existing_url" if fields.get("url") else "unknown"),
+                        "url_field": fields.get("url"),
+                        "id_field": id_field,
+                        "template": template,
+                        "verification": "probe_embedded_json",
+                    }],
+                    evidence=[{
+                        "tool": "probe_embedded_json",
+                        "summary": (
+                            f"embedded_json={candidate.get('format_locator')} "
+                            f"· item_count={candidate.get('item_count')}"
+                        ),
+                    }],
+                    notes=["embedded JSON candidate from probe_embedded_json"],
+                    success=True,
+                ).model_dump())
+            continue
         if event["name"] == "fetch_page":
             payload = event.get("payload") or {}
             feed = payload.get("feed") if isinstance(payload, dict) else None
@@ -1254,12 +1415,21 @@ def _find_best_json_items_path(payload: object) -> tuple[str, list[dict]] | None
 def _score_item_list(items: list[dict]) -> int:
     first = items[0] if items else {}
     keys = set(first.keys())
+    nested_leaf_keys = {
+        path.rsplit(".", 1)[-1]
+        for path in _nested_key_paths(first)
+    }
     score = 0
-    if keys & {"title", "name", "subject"}:
+    if keys & {"title", "name", "subject"} or nested_leaf_keys & {"Title", "title", "Name", "name", "subject"}:
         score += 3
-    if keys & {"url", "link", "href", "path"}:
+    if keys & {"url", "link", "href", "path"} or nested_leaf_keys & {
+        "url", "link", "href", "path", "TitleKey", "slug"
+    }:
         score += 3
-    if keys & {"date", "published_at", "pubDate", "publishTime", "created_at", "time"}:
+    if (
+        keys & {"date", "published_at", "pubDate", "publishTime", "created_at", "time"}
+        or nested_leaf_keys & {"PublishDate", "published_at", "pubDate", "publishTime", "created_at", "time"}
+    ):
         score += 2
     if len(items) >= 2:
         score += 1
@@ -1267,46 +1437,109 @@ def _score_item_list(items: list[dict]) -> int:
 
 
 def _infer_item_fields(sample: dict, site_url: str) -> dict:
+    locale = "zh" if "/zh/" in urlparse(site_url).path else ("en" if "/en/" in urlparse(site_url).path else "")
+
     def pick(*names: str) -> str | None:
+        exact = [name for name in names if name in sample]
+        if exact:
+            return exact[0]
+        paths = _nested_key_paths(sample)
         for name in names:
-            if name in sample:
-                return name
+            matches = [
+                path for path in paths
+                if path.rsplit(".", 1)[-1].lower() == name.lower()
+            ]
+            if not matches:
+                continue
+            if locale:
+                locale_token = locale.lower()
+                preferred = [
+                    path for path in matches
+                    if locale_token in path.lower()
+                ]
+                if preferred:
+                    return preferred[0]
+            return matches[0]
         return None
 
     return {
-        "id": pick("id", "no", "slug", "uuid"),
-        "title": pick("title", "name", "subject"),
+        "id": pick("TitleKey", "titleKey", "slug", "id", "no", "uuid", "ArticleID", "ID"),
+        "title": pick("Title", "title", "name", "subject"),
         "url": pick("url", "link", "href", "path"),
-        "published_at": pick("published_at", "date", "pubDate", "publishTime", "created_at", "time"),
-        "summary": pick("summary", "description", "desc", "brief"),
+        "published_at": pick("PublishDate", "published_at", "date", "pubDate", "publishTime", "created_at", "time"),
+        "summary": pick("Abstract", "summary", "description", "desc", "brief"),
         "content": pick("content", "textContent", "body", "text"),
     }
 
 
-def _build_sample_items(items: list[dict], site_url: str) -> list[dict]:
+def _nested_key_paths(item: dict) -> list[str]:
+    paths: list[str] = []
+
+    def walk(node: object, prefix: str) -> None:
+        if not isinstance(node, dict):
+            return
+        for key, value in node.items():
+            path = f"{prefix}.{key}" if prefix else key
+            paths.append(path)
+            if isinstance(value, dict):
+                walk(value, path)
+
+    walk(item, "")
+    return paths
+
+
+def _json_path_value(node: object, path: str | None) -> object:
+    current = node
+    for part in (path or "").split("."):
+        if part == "":
+            continue
+        current = current.get(part) if isinstance(current, dict) else None
+        if current is None:
+            return None
+    return current
+
+
+def _build_sample_items(items: list[dict], site_url: str, fields: dict | None = None) -> list[dict]:
     sample_items: list[dict] = []
+    fields = fields or {}
     for item in items[:5]:
         url_field = None
-        for candidate in ("url", "link", "href", "path"):
-            if candidate in item and item.get(candidate):
+        for candidate in (fields.get("url"), "url", "link", "href", "path"):
+            if candidate and _json_path_value(item, candidate):
                 url_field = candidate
                 break
-        raw_url = item.get(url_field) if url_field else None
-        raw_id = item.get("id") or item.get("no") or item.get("slug") or item.get("uuid")
-        sample_items.append({
-            "id": str(raw_id) if raw_id is not None else None,
-            "raw_url": str(raw_url) if raw_url is not None else None,
-            "url": urljoin(site_url, str(raw_url)) if raw_url else None,
-            "title": item.get("title") or item.get("name") or item.get("subject"),
-            "summary": item.get("summary") or item.get("description") or item.get("desc") or item.get("brief"),
-            "published_at": (
+        raw_url = _json_path_value(item, url_field) if url_field else None
+        id_field = fields.get("id")
+        raw_id = (
+            _json_path_value(item, id_field)
+            if id_field else item.get("id") or item.get("no") or item.get("slug") or item.get("uuid")
+        )
+        title_value = (
+            _json_path_value(item, fields.get("title"))
+            if fields.get("title") else item.get("title") or item.get("name") or item.get("subject")
+        )
+        summary_value = (
+            _json_path_value(item, fields.get("summary"))
+            if fields.get("summary") else item.get("summary") or item.get("description") or item.get("desc") or item.get("brief")
+        )
+        published_value = (
+            _json_path_value(item, fields.get("published_at"))
+            if fields.get("published_at") else (
                 item.get("published_at")
                 or item.get("date")
                 or item.get("pubDate")
                 or item.get("publishTime")
                 or item.get("created_at")
                 or item.get("time")
-            ),
+            )
+        )
+        sample_items.append({
+            "id": str(raw_id) if raw_id is not None else None,
+            "raw_url": str(raw_url) if raw_url is not None else None,
+            "url": urljoin(site_url, str(raw_url)) if raw_url else None,
+            "title": str(title_value) if title_value is not None else None,
+            "summary": str(summary_value) if summary_value is not None else None,
+            "published_at": str(published_value) if published_value is not None else None,
             "raw": _sanitize_sample_raw(item),
         })
     return sample_items
@@ -1364,7 +1597,11 @@ def _explorer_input_message(state: DiscoveryState, worker_retry_feedback: object
             "title": homepage.get("title"),
             "status": homepage.get("status"),
             "links_sample": (homepage.get("links") or [])[:10],
+            "has_embedded_json_html": bool(homepage.get("embedded_json_html")),
         }, ensure_ascii=False))
+        if homepage.get("embedded_json_html"):
+            lines.append("首页脚本状态 JSON 线索：")
+            lines.append(_truncate_text(str(homepage.get("embedded_json_html")), 1000))
         if article_links:
             lines.append("首页文章链接线索：")
             lines.append(json.dumps({
@@ -1478,6 +1715,14 @@ def _summarize_explorer_tool_content(tool_name: str | None, raw_content: str | N
             "title": parsed.get("title"),
             "links_count": len(parsed.get("links") or []),
             "feed": parsed.get("feed"),
+        }
+        return json.dumps(compact, ensure_ascii=False)
+
+    if tool_name == "probe_embedded_json" and isinstance(parsed, dict):
+        compact = {
+            "status": parsed.get("status"),
+            "candidate_count": parsed.get("candidate_count"),
+            "candidates": _compact_explorer_value(parsed.get("candidates"), depth=3),
         }
         return json.dumps(compact, ensure_ascii=False)
 
@@ -1638,6 +1883,29 @@ def _exploration_constraint_errors(exploration: dict) -> list[str]:
                 errors.append(f"missing html_selectors.{key}")
         if not exploration.get("sample_items"):
             errors.append("missing sample_items")
+        return errors
+
+    if source_type == "embedded_json":
+        errors = []
+        if _exploration_value_empty(exploration.get("list_url")):
+            errors.append("missing list_url")
+        format_locator = exploration.get("format_locator") or {}
+        if format_locator.get("kind") != "embedded_json":
+            errors.append("format_locator.kind must be embedded_json")
+        value = format_locator.get("value")
+        if _exploration_value_empty(value) or not str(value).startswith("embedded_json:"):
+            errors.append("missing embedded_json format_locator.value")
+        fields = exploration.get("fields") or {}
+        if _exploration_value_empty(fields.get("title")):
+            errors.append("missing fields.title")
+        samples = exploration.get("sample_items") or []
+        if not samples:
+            errors.append("missing sample_items")
+        has_url_clue = bool(fields.get("url") or fields.get("id"))
+        if not has_url_clue:
+            has_url_clue = any(_sample_has_url_clue(s) for s in samples)
+        if not has_url_clue:
+            errors.append("missing url/path/id clue for validator")
         return errors
 
     return []
@@ -2338,7 +2606,7 @@ DSL_WRITER_PROMPT = """# 角色
 {"op": "click", "selector": "..."}
 
 5. extract
-{"op": "extract", "from": "json path | feed.entries | selector:...", "fields": {"title": "...", "url": "...", "published_at": "...或 null", "summary": "...或 null", "content": "...或 null"}, "into": "items", "merge": false}
+{"op": "extract", "from": "json path | feed.entries | selector:... | embedded_json:...", "fields": {"title": "...", "url": "...", "published_at": "...或 null", "summary": "...或 null", "content": "...或 null"}, "into": "items", "merge": false}
 
 extract.fields 字段值规则：
 - 裸字段名：从 JSON/RSS item 取该字段。
@@ -2382,7 +2650,7 @@ max_iters 必须 1~20。
 }
 
 # 编写规则
-1. 根据 exploration.source_type 选 fetch.mode：json_api→json；rss/atom→feed；html→html。
+1. 根据 exploration.source_type 选 fetch.mode：json_api→json；rss/atom→feed；html/embedded_json→html。
 2. 第一阶段必须 fetch 列表数据源：url 用 exploration.list_url；method/query/json_body/headers 用 exploration.fetch。
 2.1 如果 exploration.fetch.transport=scrapling，所有对应 fetch 动作必须原样写入 transport、impersonate、stealthy_headers；这是探查阶段验证出的调取配方，不允许丢失。
 2.2 fetch.url 必须是干净 endpoint，不要把 query string 写进 url；所有 ?a=b&page=1&pageSize=10 参数必须写进 fetch.query。
@@ -2392,6 +2660,7 @@ max_iters 必须 1~20。
    - json_api：from 用 exploration.format_locator.value
    - rss/atom：from 用 feed.entries
    - html：from 用 selector:{exploration.html_selectors.item_selector}
+   - embedded_json：from 原样使用 exploration.format_locator.value，格式如 embedded_json:window._ROUTER_DATA:loaderData.xxx.article_list
 4. extract.fields 必须产出 title 和 url：
    - title 从 exploration.fields.title 或 html title_selector 来。
    - 如果 url_rule.mode=existing_url：url 直接用 url_rule.url_field（裸字段名），不要拼模板。
@@ -2556,6 +2825,57 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
         }
         if (fetch_cfg.get("transport") or "httpx") == "scrapling":
             recipe_dict["notes"].append("scrapling transport recipe preserved from explorer")
+        return finalize_recipe(recipe_dict)
+    if exploration.get("source_type") == "embedded_json":
+        fields = dict(exploration.get("fields") or {})
+        embedded_template_candidate = next(
+            (
+                item for item in (exploration.get("url_candidates") or [])
+                if isinstance(item, dict) and item.get("mode") == "template" and item.get("template") and item.get("id_field")
+            ),
+            None,
+        )
+        if embedded_template_candidate:
+            id_field = str(embedded_template_candidate["id_field"])
+            fields["url"] = (
+                "template:"
+                + str(embedded_template_candidate["template"]).replace("{id}", "{item." + id_field + "}")
+            )
+        elif url_rule.get("mode") == "path_join" and url_rule.get("base_url") and url_rule.get("path_field"):
+            path_field = str(url_rule["path_field"])
+            base_url = str(url_rule["base_url"]).rstrip("/")
+            fields["url"] = f"template:{base_url}/{{item.{path_field}}}"
+        elif url_rule.get("mode") == "template" and url_rule.get("template") and url_rule.get("id_field"):
+            id_field = str(url_rule["id_field"])
+            template_url = urljoin(state["site_url"], str(url_rule["template"]))
+            fields["url"] = f"template:{template_url.replace('{id}', '{item.' + id_field + '}')}"
+        fetch_cfg = exploration.get("fetch") or {}
+        recipe_dict = {
+            "recipe_type": "dsl",
+            "entry_url": state["site_url"],
+            "actions": [
+                {
+                    "op": "fetch",
+                    "mode": "html",
+                    "url": exploration.get("list_url") or state["site_url"],
+                    "method": fetch_cfg.get("method", "GET"),
+                    **_fetch_transport_fields(fetch_cfg),
+                    "headers": fetch_cfg.get("headers", {}),
+                    "query": fetch_cfg.get("query", {}),
+                    "json_body": None,
+                    "as": "last_fetch",
+                },
+                {
+                    "op": "extract",
+                    "from": (exploration.get("format_locator") or {}).get("value"),
+                    "fields": {k: v for k, v in fields.items() if v is not None},
+                    "into": "items",
+                    "merge": False,
+                },
+                {"op": "dedup_by", "field": "url"},
+            ],
+            "notes": ["deterministic embedded_json recipe"],
+        }
         return finalize_recipe(recipe_dict)
     if exploration.get("source_type") == "html":
         selectors = exploration.get("html_selectors") or {}

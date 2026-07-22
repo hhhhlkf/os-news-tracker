@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import urlencode
 
@@ -149,8 +150,7 @@ class DslInterpreter:
 
             ctx["last_fetch"] = {"feed": feedparser.parse(text)}
         else:
-            ctx["last_fetch"] = {"html": text}
-            self._load_html_page_for_extract(url, params=params)
+            ctx["last_fetch"] = {"html": text, "_url": url, "_params": params}
 
     def _request(
         self,
@@ -254,6 +254,8 @@ class DslInterpreter:
         """按 from 取记录列表：json path 逐层取，selector: 走 HTML 提取。"""
         if action.from_.startswith("selector:"):
             return self._extract_from_html(action, ctx)  # Task 6 实装 Playwright
+        if action.from_.startswith("embedded_json:"):
+            return self._extract_from_embedded_json(action, ctx)
         # json path 逐层取
         node: Any = ctx.get("last_fetch")
         for p in action.from_.split("."):
@@ -263,7 +265,8 @@ class DslInterpreter:
         for rec in records:
             item: dict[str, Any] = {}
             for field, spec in action.fields.items():
-                item[field] = self._resolve_field(spec, rec, ctx)
+                value = self._resolve_field(spec, rec, ctx)
+                item[field] = self._normalize_published_at(value) if field == "published_at" else value
             result.append(item)
         return result
 
@@ -281,19 +284,98 @@ class DslInterpreter:
             tmpl = spec.removeprefix("template:")
 
             def repl_item(m: "re.Match[str]") -> str:
-                return str(rec.get(m.group(1), ""))
+                value = self._json_path_value(rec, m.group(1))
+                return str(value if value is not None else "")
 
-            tmpl = re.sub(r"\{item\.(\w+)\}", repl_item, tmpl)
+            tmpl = re.sub(r"\{item\.([^}]+)\}", repl_item, tmpl)
             return render_vars(tmpl, ctx)
         if isinstance(spec, str) and spec.startswith("attr:"):
             return ""  # HTML 属性提取在 Task 6
         # 裸字段名，直接取
-        return str(rec.get(spec, "")) if isinstance(spec, str) else ""
+        if isinstance(spec, str):
+            value = self._json_path_value(rec, spec)
+            return str(value if value is not None else "")
+        return ""
+
+    def _extract_from_embedded_json(self, action: ExtractAction, ctx: dict[str, Any]) -> list[dict]:
+        """从 HTML 中的 script JSON/window 状态对象抽取列表。"""
+        last_fetch = ctx.get("last_fetch")
+        html = str(last_fetch.get("html") or "") if isinstance(last_fetch, dict) else ""
+        if not html:
+            return []
+        source = action.from_.removeprefix("embedded_json:")
+        source_name, _, path = source.partition(":")
+        payload = self._embedded_json_payload(html, source_name)
+        if payload is None:
+            return []
+        node = self._json_path_value(payload, path) if path else payload
+        records = node if isinstance(node, list) else []
+        result: list[dict] = []
+        for rec in records:
+            if not isinstance(rec, dict):
+                continue
+            item: dict[str, Any] = {}
+            for field, spec in action.fields.items():
+                value = self._resolve_field(spec, rec, ctx)
+                item[field] = self._normalize_published_at(value) if field == "published_at" else value
+            result.append(item)
+        return result
+
+    def _normalize_published_at(self, value: str) -> str:
+        text = str(value or "").strip()
+        if not text.isdigit():
+            return text
+        try:
+            number = int(text)
+            if number > 10_000_000_000:
+                number = number // 1000
+            return datetime.fromtimestamp(number, tz=timezone.utc).isoformat()
+        except Exception:
+            return text
+
+    def _embedded_json_payload(self, html: str, source_name: str) -> Any:
+        decoder = json.JSONDecoder()
+        if source_name.startswith("script#"):
+            script_id = re.escape(source_name.removeprefix("script#"))
+            match = re.search(
+                rf'<script[^>]+id=["\']{script_id}["\'][^>]*>(.*?)</script>',
+                html,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if not match:
+                return None
+            text = match.group(1).strip()
+        else:
+            match = re.search(rf"{re.escape(source_name)}\s*=\s*", html)
+            if not match:
+                return None
+            text = html[match.end():]
+        try:
+            payload, _ = decoder.raw_decode(text)
+            return payload
+        except Exception:
+            return None
+
+    def _json_path_value(self, node: object, path: str | None) -> object:
+        current = node
+        for part in (path or "").split("."):
+            if part == "":
+                continue
+            current = current.get(part) if isinstance(current, dict) else None
+            if current is None:
+                return None
+        return current
 
     def _extract_from_html(self, action: ExtractAction, ctx: dict[str, Any]) -> list[dict]:
         """按 selector: 从 Playwright 页面提取 items。"""
         if self._browser_fn:
             return self._browser_fn(action, ctx, page=self._page) or []
+        if self._page is None:
+            last_fetch = ctx.get("last_fetch") if isinstance(ctx.get("last_fetch"), dict) else {}
+            self._load_html_page_for_extract(
+                str(last_fetch.get("_url") or ctx.get("vars", {}).get("entry_url") or ""),
+                params=last_fetch.get("_params") or {},
+            )
         elements = self._page.query_selector_all(action.from_.removeprefix("selector:"))
         result: list[dict] = []
         for el in elements:

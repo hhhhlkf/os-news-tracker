@@ -246,8 +246,13 @@ def validate_semantics(recipe: DslRecipe) -> list[str]:
             # 规则 2：from 与 mode 匹配
             if last_mode == "json" and a.from_.startswith("selector:"):
                 errors.append(f"action {i}: extract.from selector: 与 fetch.mode=json 不匹配")
-            if last_mode in ("html",) and not a.from_.startswith("selector:") and not a.from_.startswith("feed"):
-                errors.append(f"action {i}: extract.from 须为 selector: 前缀（mode=html）")
+            if (
+                last_mode in ("html",)
+                and not a.from_.startswith("selector:")
+                and not a.from_.startswith("embedded_json:")
+                and not a.from_.startswith("feed")
+            ):
+                errors.append(f"action {i}: extract.from 须为 selector: 或 embedded_json: 前缀（mode=html）")
             # 规则 3：至少有一个能产 url（裸 url 字段 或 template:{item.}）
             has_url = any(
                 k == "url" or (isinstance(v, str) and v.startswith("template:") and "{item." in v)
