@@ -26,8 +26,15 @@ DEFAULT_SYNTHESIS = """你是站点探查结果整理器。请根据给定站点
 4. 尽量保留证据中已经确认的字段和值。
 4.1 下面会提供一个程序提取出的候选池，它们只是候选，不是最终答案；由你来选择最像文章列表的那个。
 4.2 若候选像 tags/archives/count 统计接口，而不是文章列表，不要选它。
+4.3 若证据里有 api_reviews，且存在 usable=true、score>=80 的 article_list_api 或 paginated_article_api，应优先选择对应 JSON API；embedded_json 只作为没有高分真实网络 API 时的兜底。
 5. 若 success=true 且 source_type=json_api，必须同时给出：list_url、format_locator.value（json path）、fields.title、至少 1 条 sample_items，以及 fields.url 或 fields.id 或 sample_items 中的 path/url。
 5.1 对 JSON API：list_url 只放不带 query string 的接口 URL；URL 上的 ?a=b&page=1 等参数必须拆到 fetch.query；POST 请求体参数必须放 fetch.json_body。不要把分页/筛选参数混在 list_url 里。
+5.2 对 JSON API：必须认真填写 pagination。若 api_reviews 或证据显示同 endpoint 有分页：
+   - page_param：页码型，参数按 1、2、3 递增；
+   - offset_limit：偏移型，某个数字参数按每页大小递增，如 offset=0/20/40，或 page_token=12/24/36 且 count=12；
+   - cursor：游标型，下一页参数来自响应里的 next_cursor/next_page_token，不能靠加法得到；
+   - next_url：响应直接给下一页 URL。
+   若判断为 offset_limit，必须填写 offset_param、limit_param、start、size；若响应有 has_more/hasMore，填写 has_more_path。
 6. 若 success=true 且 source_type=rss/atom，必须给出 list_url 且 format_locator.kind=feed_entries。
 7. 若 success=true 且 source_type=html，必须给出 html_selectors 四项和 sample_items。
 8. 若 success=true 且 source_type=embedded_json，必须给出 list_url、format_locator.kind=embedded_json、

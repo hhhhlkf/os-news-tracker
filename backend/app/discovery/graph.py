@@ -12,7 +12,7 @@ import re
 import threading
 import time
 from typing import Any, TypedDict
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlunparse
 
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, END
@@ -86,6 +86,7 @@ class DiscoveryState(TypedDict, total=False):
     explorer_synthesis_output: str | None
     explorer_parse_error: str | None
     explorer_trace_logs: list[dict] | None
+    api_reviews: list[dict] | None
     validator_llm_output: str | None
     dsl_writer_llm_output: str | None
     auditor_llm_output: str | None
@@ -387,6 +388,8 @@ EXPLORER_SYSTEM_PROMPT = """# 角色
    若 RSS/Atom 可用，优先记录为 rss/atom 数据源（format_locator.kind=feed_entries）。
 3. 若页面链接很少、内容靠 JS 加载、或 HTML 中没有真实文章链接（SPA），必须 capture_network(url)，
    寻找返回文章列表的 JSON XHR/Fetch。
+3.0 若上下文里提供 api_reviews，必须优先参考这些 API 判断结果；若某个 API 分数高、理由充分，
+    应把它作为 JSON API 候选继续验证或直接纳入最终探查结论。
 3.1 若 HTML 中没有 `<a href>` 文章链接，但页面源码里出现 `window._ROUTER_DATA`、`window.__INITIAL_STATE__`、
     `__NEXT_DATA__`、`__NUXT__`、`__MODERN_SERVER_DATA__`、`article_list`、`posts`、`articles` 等脚本状态数据，
     应调用 probe_embedded_json(url) 并优先判断是否为页面内嵌结构化 JSON；不要误判成“无列表数据源”。
@@ -424,7 +427,42 @@ EXPLORER_SYSTEM_PROMPT = """# 角色
 - 不要凭空猜字段名、selector、URL 模板；凡写的都要能在工具结果里找到依据。
 - sample/item 相关结论必须来自真实工具结果，严禁编造。
 - 如果 capture_network / inspect_item 已经拿到足够证据，优先复用，不要重复探测。
+- 如果 api_reviews 中已有高分 JSON API 候选，不要因为 embedded_json 也能抽到样本就忽略真实网络 API。
 - 如果没有找到可靠列表数据源，如实说明未确认，不要强行下结论。
+"""
+
+
+API_REVIEW_PROMPT = """你是站点探查 Explorer 的 API 快速判断子步骤。请只根据输入的 API 摘要判断每个 API 是否适合作为技术资讯/新闻文章列表数据源。
+
+要求：
+1. 输入一次最多包含 3 个 API；
+2. 逐个 API 独立打分，score 为 0-100；
+3. 不要调用工具，不要补充假设；
+4. 只输出 JSON array，不要 Markdown，不要解释；
+5. api_type 只能使用：article_list_api、paginated_article_api、detail_api、search_api、category_or_tag_api、telemetry_or_monitor、config_api、stats_api、unknown_json；
+6. reason 用一句中文说明判断依据；
+7. 如果判断为文章列表 API，请尽量给出 suggested_items_path、suggested_pagination；不确定则填 null。
+8. suggested_pagination 必须明确类型：
+   - page_param：页码型，参数按 1、2、3 递增；
+   - offset_limit：偏移型，某个数字参数按每页大小递增，如 offset=0/20/40 或 page_token=12/24/36 且 count=12；
+   - cursor：游标型，下一页参数来自响应里的 next_cursor/next_page_token，不能靠加法得到；
+   - next_url：响应直接给下一页 URL；
+   格式尽量写成 JSON 字符串，如 {"type":"offset_limit","offset_param":"page_token","limit_param":"count","size":12,"has_more_path":"has_more"}。
+
+输出 schema：
+[
+  {
+    "idx": 1,
+    "api_url": "string",
+    "score": 0,
+    "grade": "A | B | C | D",
+    "api_type": "unknown_json",
+    "usable": false,
+    "reason": "string",
+    "suggested_items_path": null,
+    "suggested_pagination": null
+  }
+]
 """
 
 
@@ -462,9 +500,11 @@ def _run_single_explorer_attempt(state: DiscoveryState, *, llm, user_message: st
             site_url=state["site_url"],
             result=result,
             deterministic_candidates=deterministic_candidates,
+            api_reviews=state.get("api_reviews") or [],
         )
         matched_hint = _match_deterministic_candidate(exploration, deterministic_candidates)
         exploration = _apply_exploration_constraints(exploration, matched_hint)
+        exploration = _apply_api_review_selection(exploration, deterministic_candidates, state.get("api_reviews") or [])
     except Exception as e:
         parse_error = str(e)
         exploration = _pick_best_deterministic_candidate(deterministic_candidates) or _unknown_exploration()
@@ -518,6 +558,10 @@ def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
     """Explorer worker：ReAct 探证据，最终结果统一由程序对象产出。"""
     ensure_not_cancelled()
     llm = llm or _make_llm()
+    api_reviews = state.get("api_reviews") or _review_network_captures_for_explorer(state, llm=llm)
+    if api_reviews:
+        state = dict(state)
+        state["api_reviews"] = api_reviews
     worker_feedback = None
     last_update: DiscoveryState | None = None
     for attempt in range(1, WORKER_RETRY_LIMIT + 1):
@@ -534,6 +578,8 @@ def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
                 "explorer_synthesis_output": "",
                 "explorer_parse_error": str(exc),
             }
+        if api_reviews:
+            update["api_reviews"] = api_reviews
         last_update = update
         if (update.get("exploration") or {}).get("success") is True:
             exploration = update.get("exploration") or {}
@@ -560,6 +606,129 @@ def explorer(state: DiscoveryState, llm=None) -> DiscoveryState:
     failed["verdict"] = "failed"
     failed["error"] = "探查连续失败 3 次，程序无法继续进行"
     return failed
+
+
+def _review_network_captures_for_explorer(state: DiscoveryState, *, llm) -> list[dict]:
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from app.run_logs import append_run_log
+
+    caps = _dedup_network_captures_by_endpoint(state.get("network_captures") or [])
+    if not caps:
+        return []
+    run_id = state.get("run_id")
+    source_label = state.get("log_source") or state.get("name") or state.get("site_url")
+    reviews: list[dict] = []
+    for start in range(0, len(caps), 3):
+        batch = [
+            _summarize_network_capture_for_explorer(cap, idx=start + offset + 1)
+            for offset, cap in enumerate(caps[start:start + 3])
+            if isinstance(cap, dict)
+        ]
+        if not batch:
+            continue
+        prompt = f"站点 URL: {state['site_url']}\n待判断 API 摘要：\n{json.dumps(batch, ensure_ascii=False)}"
+        try:
+            raw_response = llm.invoke([
+                SystemMessage(content=API_REVIEW_PROMPT),
+                HumanMessage(content=prompt),
+            ])
+            content = getattr(raw_response, "content", None) or str(raw_response)
+            parsed = json.loads(str(content))
+            if not isinstance(parsed, list):
+                raise ValueError("API 判断输出不是 JSON array")
+        except Exception as exc:
+            if run_id is not None:
+                append_run_log(
+                    "探查",
+                    "API 判断失败",
+                    source=source_label,
+                    run_id=run_id,
+                    step="explorer_api_review",
+                    api_range=f"{start + 1}-{start + len(batch)}",
+                    error=str(exc),
+                    level="warning",
+                )
+            continue
+        by_idx = {item.get("idx"): item for item in batch}
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            source = by_idx.get(item.get("idx")) or {}
+            review = {
+                "idx": item.get("idx"),
+                "api_url": item.get("api_url") or source.get("api_url"),
+                "score": _normalize_api_review_score(item.get("score")),
+                "grade": str(item.get("grade") or "")[:1],
+                "api_type": item.get("api_type") or "unknown_json",
+                "usable": bool(item.get("usable")),
+                "reason": _truncate_text(item.get("reason"), 240),
+                "suggested_items_path": item.get("suggested_items_path"),
+                "suggested_pagination": item.get("suggested_pagination"),
+            }
+            reviews.append(review)
+            if run_id is not None:
+                append_run_log(
+                    "探查",
+                    "API 判断完成",
+                    source=source_label,
+                    run_id=run_id,
+                    step="explorer_api_review",
+                    api_idx=review.get("idx"),
+                    score=review.get("score"),
+                    grade=review.get("grade"),
+                    api_type=review.get("api_type"),
+                    usable=review.get("usable"),
+                    url=review.get("api_url"),
+                    reason=review.get("reason"),
+                )
+    reviews.sort(key=lambda item: item.get("score") or 0, reverse=True)
+    if run_id is not None and reviews:
+        best = reviews[0]
+        append_run_log(
+            "探查",
+            "API 当前最高分候选",
+            source=source_label,
+            run_id=run_id,
+            step="explorer_api_review_best",
+            api_idx=best.get("idx"),
+            score=best.get("score"),
+            grade=best.get("grade"),
+            api_type=best.get("api_type"),
+            usable=best.get("usable"),
+            url=best.get("api_url"),
+            reason=best.get("reason"),
+        )
+    return reviews
+
+
+def _dedup_network_captures_by_endpoint(caps: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for cap in caps:
+        if not isinstance(cap, dict):
+            continue
+        endpoint = _network_capture_endpoint(cap.get("api_url"))
+        key = endpoint or cap.get("api_url")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(cap)
+    return deduped
+
+
+def _network_capture_endpoint(api_url: str | None) -> str | None:
+    if not api_url:
+        return None
+    parsed = urlparse(api_url)
+    return urlunparse(parsed._replace(query="", fragment=""))
+
+
+def _normalize_api_review_score(value: object) -> int:
+    try:
+        score = int(float(value))
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(100, score))
 
 
 def _select_explorer_tools(state: DiscoveryState, tools: list) -> list:
@@ -1613,20 +1782,32 @@ def _explorer_input_message(state: DiscoveryState, worker_retry_feedback: object
     if caps:
         lines.append("已抓到的网络请求证据（优先复用这些结果，必要时再调用 inspect_item 做二次请求）：")
         summarized = []
-        for cap in caps[:6]:
-            parsed = cap.get("parsed_json")
-            preview = parsed
-            if isinstance(parsed, dict):
-                preview = dict(list(parsed.items())[:6])
-            summarized.append({
-                "api_url": cap.get("api_url"),
-                "method": cap.get("method"),
-                "status": cap.get("status"),
-                "request_json_body": cap.get("request_json_body"),
-                "parsed_json_preview": preview,
-            })
+        for idx, cap in enumerate(caps, 1):
+            if isinstance(cap, dict):
+                summarized.append(_summarize_network_capture_for_explorer(cap, idx=idx))
         lines.append(json.dumps(summarized, ensure_ascii=False))
+    api_reviews = state.get("api_reviews") or []
+    if api_reviews:
+        lines.append("Explorer 已完成的 API 逐组判断结果（每 3 个 API 一组，供最终选择时统一比较）：")
+        lines.append(json.dumps(api_reviews, ensure_ascii=False))
     return "\n".join(lines)
+
+
+def _summarize_network_capture_for_explorer(cap: dict, *, idx: int | None = None) -> dict:
+    parsed = cap.get("parsed_json")
+    preview = parsed
+    if isinstance(parsed, dict):
+        preview = dict(list(parsed.items())[:6])
+    summarized = {
+        "api_url": cap.get("api_url"),
+        "method": cap.get("method"),
+        "status": cap.get("status"),
+        "request_json_body": cap.get("request_json_body"),
+        "parsed_json_preview": preview,
+    }
+    if idx is not None:
+        summarized = {"idx": idx, **summarized}
+    return summarized
 
 
 def _truncate_text(text: str | None, limit: int = 500) -> str:
@@ -1772,11 +1953,19 @@ def _explorer_evidence_payload(result: dict) -> list[dict]:
     return payload[-8:]
 
 
-def _synthesize_exploration(*, site_url: str, result: dict, deterministic_candidates: list[dict]) -> tuple[str, dict]:
+def _synthesize_exploration(
+    *,
+    site_url: str,
+    result: dict,
+    deterministic_candidates: list[dict],
+    api_reviews: list[dict] | None = None,
+) -> tuple[str, dict]:
     """第二阶段：根据 ReAct 证据整理结构化 exploration JSON。"""
     from app.llm.client import LlmClient
 
     evidence = _explorer_evidence_payload(result)
+    if api_reviews:
+        evidence.append({"kind": "api_reviews", "content": api_reviews[:10]})
     ensure_not_cancelled()
     prompt = render_prompt(
         "synthesis",
@@ -1795,6 +1984,69 @@ def _synthesize_exploration(*, site_url: str, result: dict, deterministic_candid
     )
     parsed = _parse_strict_exploration_output(raw)
     return raw, parsed
+
+
+def _apply_api_review_selection(exploration: dict, candidates: list[dict], api_reviews: list[dict]) -> dict:
+    if not api_reviews:
+        return exploration
+    best = max(api_reviews, key=lambda item: item.get("score") or 0)
+    if not best.get("usable") or (best.get("score") or 0) < 80:
+        return exploration
+    if best.get("api_type") not in {"article_list_api", "paginated_article_api"}:
+        return exploration
+    best_endpoint = _network_capture_endpoint(best.get("api_url"))
+    if exploration.get("source_type") == "json_api" and _network_capture_endpoint(exploration.get("list_url")) == best_endpoint:
+        return _apply_api_review_hints(exploration, best)
+    for candidate in candidates:
+        if candidate.get("source_type") != "json_api":
+            continue
+        if _network_capture_endpoint(candidate.get("list_url")) == best_endpoint:
+            out = ExplorationResult(**candidate).model_dump()
+            out = _apply_api_review_hints(out, best)
+            notes = list(out.get("notes") or [])
+            notes.append(
+                f"selected by Explorer API review score={best.get('score')} type={best.get('api_type')}"
+            )
+            out["notes"] = notes
+            return out
+    return exploration
+
+
+def _apply_api_review_hints(exploration: dict, api_review: dict) -> dict:
+    out = ExplorationResult(**exploration).model_dump()
+    suggested_items_path = api_review.get("suggested_items_path")
+    if isinstance(suggested_items_path, str) and suggested_items_path.strip():
+        locator = dict(out.get("format_locator") or {})
+        locator["kind"] = "json_path"
+        locator["value"] = suggested_items_path.strip()
+        out["format_locator"] = locator
+    pagination = _parse_api_review_pagination(api_review.get("suggested_pagination"))
+    if pagination:
+        merged = dict(out.get("pagination") or {})
+        for key, value in pagination.items():
+            if value not in (None, "", [], {}):
+                merged[key] = value
+        out["pagination"] = merged
+    return ExplorationResult(**out).model_dump()
+
+
+def _parse_api_review_pagination(value: object) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _template_source_field(field_name: str, fields: dict) -> str:
+    source = fields.get(field_name)
+    if isinstance(source, str) and source and not source.startswith(("template:", "attr:")):
+        return source
+    return field_name
 
 
 def _exploration_value_empty(value: object) -> bool:
@@ -2131,6 +2383,9 @@ explorer 只给了候选，最终的 UrlRule 由你产出。
 - 如果列表里已有 url/link 字段，应直接使用该字段（mode=existing_url），不要多此一举去推模板。
 - 如果列表里给的是 path/href 这类相对路径字段，应输出 mode=path_join，填写 base_url 与 path_field。
 - 如果列表只有 id/slug/no，则需要推断模板，如 https://x.com/blog/{id}（mode=template）。
+- 对 SPA 站点，如果 source_type=json_api 且列表只有 id/slug/no，可拼出同源详情路由；
+  只要详情路由 HTTP 200/表现为 SPA shell，即使正文抽取为空，也可认为 URL 规律成立。
+  此时 reason 说明“URL 规律成立，正文需要后续 JS/接口补抓”。
 - 如果没有把握，不要猜，mode=unknown。
 
 # 输入
@@ -2178,6 +2433,7 @@ explorer 只给了候选，最终的 UrlRule 由你产出。
 - template 必须使用 {id} 占位符，不要写 {item.no}。
 - sample_items 必须来自 exploration.sample_items，严禁编造。
 - sample_items 数量 3~5 个；不足则给已有数量并说明。
+- SPA shell 场景不要因为详情页正文为空否定 template URL 规律；URL 规律验证和正文获取策略是两件事。
 - 没把握就 mode=unknown，不要为了输出模板而猜。
 - id_field 必须是 exploration 里真实存在的字段名。
 - path_field 必须是 exploration 里真实存在的字段名。
@@ -2259,6 +2515,51 @@ def _content_probe_payload(content_probe: dict | None) -> dict[str, Any]:
     if isinstance(content_probe, dict):
         return content_probe
     return {"content_verified": False, "content_strategy": "none", "content_chars": 0}
+
+
+def _spa_route_http_200_payload(*, site_url: str, exploration: dict, rule_obj: UrlRule) -> dict | None:
+    if exploration.get("source_type") != "json_api":
+        return None
+    if rule_obj.mode != "template" or not rule_obj.template or not rule_obj.id_field:
+        return None
+    site_host = urlparse(site_url).netloc
+    template_host = urlparse(rule_obj.template).netloc
+    if template_host and template_host != site_host:
+        return None
+
+    import httpx
+
+    samples = rule_obj.sample_items or exploration.get("sample_items") or []
+    results: list[dict] = []
+    for sample in samples[:3]:
+        if not isinstance(sample, dict):
+            continue
+        sample_id = sample.get("id")
+        if sample_id is None:
+            continue
+        article_url = rule_obj.template.replace("{id}", str(sample_id))
+        parsed_url = urlparse(article_url)
+        if parsed_url.netloc and parsed_url.netloc != site_host:
+            continue
+        try:
+            resp = httpx.get(article_url, timeout=8, follow_redirects=True)
+        except Exception as exc:
+            results.append({"url": article_url, "status": 0, "error": str(exc), "is_spa_route": False})
+            continue
+        is_spa_route = resp.status_code == 200 and ("<title" in resp.text.lower() or "<script" in resp.text.lower())
+        results.append({"url": str(resp.url), "status": resp.status_code, "is_spa_route": is_spa_route})
+
+    valid = [item for item in results if item.get("is_spa_route")]
+    if not valid:
+        return None
+    return {
+        "evidence": "spa_route_http_200",
+        "validation_samples": results,
+        "content_verified": False,
+        "content_strategy": "spa_route",
+        "content_chars": 0,
+        "reason": f"同源 SPA 详情路由 HTTP 200 {len(valid)}/{len(results)}，URL 规律成立，正文需后续 JS/接口补抓",
+    }
 
 
 def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
@@ -2557,6 +2858,29 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
                 validation_samples=[hit],
                 **content_probe,
             ), "audit_result": None, "validator_llm_output": raw}
+        spa_route_payload = _spa_route_http_200_payload(
+            site_url=state["site_url"],
+            exploration=exploration,
+            rule_obj=rule_obj,
+        )
+        if spa_route_payload:
+            _append_worker_attempt_log(
+                state,
+                node_name="validator",
+                attempt=attempt,
+                status="success",
+                detail=(
+                    f"mode=template · evidence=spa_route_http_200 · template={rule_obj.template} "
+                    f"· {spa_route_payload.get('reason')}"
+                ),
+            )
+            return {"url_rule": _validated_rule_payload(
+                rule_obj,
+                mode="template",
+                template=rule_obj.template,
+                id_field=rule_obj.id_field,
+                **spa_route_payload,
+            ), "audit_result": None, "validator_llm_output": raw}
         last_out = {"url_rule": {
             "mode": rule_obj.mode, "template": rule_obj.template,
             "base_url": rule_obj.base_url, "path_field": rule_obj.path_field,
@@ -2672,6 +2996,9 @@ max_iters 必须 1~20。
 5. 如果 exploration.pagination.type 不是 none/null/unknown，必须写 set+loop 翻页：
    - loop.max_iters 1~20；每轮 fetch 下一页；extract 用 merge=true 追加 items；
    - 有 has_more_path/next_path 时用它作 until 条件；没有明确终止字段时用 {"count_of":"items","op":">=","value":50}。
+   - page_param：分页变量每轮 +1。
+   - offset_limit：offset/page_token 等偏移变量每轮 + size 或 limit_param 的数值；例如 page_token=12/24/36 且 count=12，则 on_each 用 "{{page_token}} + 12"。
+   - cursor/next_url：只有 DSL 可表达出下一页变量时才写 loop；不能表达时先写单页抓取，并在 notes 说明需要后续支持 cursor/next_url。
 6. 如果 url_rule.content_strategy=detail_api/guessed_detail_api，必须把 enrich_article_api 放在 dedup_by url 之后，并原样使用 url_rule.detail_api.url_template 与 fields。
 6.1 使用 enrich_article_api 时，extract.fields 必须保留 url_template 中引用的字段，如 {item.no} 就必须提取 no 字段。
 6.2 如果需要补抓普通 HTML 详情页正文，把 enrich_article_pages 放在 dedup_by url 之后，避免重复 URL 重复补抓；默认 max_items=8、timeout_seconds=6、content_char_limit=3000。
@@ -2847,8 +3174,9 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
             fields["url"] = f"template:{base_url}/{{item.{path_field}}}"
         elif url_rule.get("mode") == "template" and url_rule.get("template") and url_rule.get("id_field"):
             id_field = str(url_rule["id_field"])
+            item_field = _template_source_field(id_field, fields)
             template_url = urljoin(state["site_url"], str(url_rule["template"]))
-            fields["url"] = f"template:{template_url.replace('{id}', '{item.' + id_field + '}')}"
+            fields["url"] = f"template:{template_url.replace('{id}', '{item.' + item_field + '}')}"
         fetch_cfg = exploration.get("fetch") or {}
         recipe_dict = {
             "recipe_type": "dsl",
@@ -2973,8 +3301,9 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
             recipe_note = "deterministic path_join recipe"
         else:
             id_field = str(url_rule["id_field"])
+            item_field = _template_source_field(id_field, fields)
             template_url = urljoin(state["site_url"], str(url_rule["template"]))
-            fields["url"] = f"template:{template_url.replace('{id}', '{item.' + id_field + '}')}"
+            fields["url"] = f"template:{template_url.replace('{id}', '{item.' + item_field + '}')}"
             recipe_note = "deterministic template recipe"
         fields = _ensure_id_field_for_detail_api(fields, url_rule)
         pagination = exploration.get("pagination") or {}
@@ -3040,6 +3369,90 @@ def dsl_writer(state: DiscoveryState, llm=None) -> DiscoveryState:
                     recipe_note,
                     "deterministic page_param loop",
                     pagination_note,
+                    *(
+                        ["article detail API enrichment added because validator verified detail content API."]
+                        if detail_api_action else []
+                    ),
+                ],
+            }
+            return finalize_recipe(recipe_dict)
+        if pagination.get("type") == "offset_limit" and pagination.get("offset_param"):
+            offset_param = str(pagination["offset_param"])
+            limit_param = str(pagination.get("limit_param") or "")
+            size = int(pagination.get("size") or 10)
+            start = int(pagination.get("start") or size)
+            loop_query = dict(fetch_cfg.get("query") or {})
+            if limit_param and limit_param not in loop_query:
+                loop_query[limit_param] = str(size)
+            loop_query[offset_param] = f"{{{{{offset_param}}}}}"
+            loop_json_body = dict(fetch_cfg.get("json_body") or {})
+            if loop_json_body or offset_param in loop_json_body:
+                if limit_param and limit_param not in loop_json_body:
+                    loop_json_body[limit_param] = size
+                loop_json_body[offset_param] = f"{{{{{offset_param}}}}}"
+            until_condition = (
+                {"path": pagination["has_more_path"], "op": "==", "value": False}
+                if pagination.get("has_more_path")
+                else {"path": format_value, "op": "==", "value": []}
+            )
+            actions = [
+                {
+                    "op": "fetch",
+                    "mode": "json",
+                    "url": exploration.get("list_url") or state["site_url"],
+                    "method": fetch_cfg.get("method", "GET"),
+                    **_fetch_transport_fields(fetch_cfg),
+                    "headers": fetch_cfg.get("headers", {}),
+                    "query": fetch_cfg.get("query", {}),
+                    "json_body": fetch_cfg.get("json_body"),
+                    "as": "last_fetch",
+                },
+                {
+                    "op": "extract",
+                    "from": format_value,
+                    "fields": {k: v for k, v in fields.items() if v is not None},
+                    "into": "items",
+                    "merge": False,
+                },
+                {"op": "set", "var": offset_param, "value": start},
+                {
+                    "op": "loop",
+                    "until": until_condition,
+                    "max_iters": 10,
+                    "body": [
+                        {
+                            "op": "fetch",
+                            "mode": "json",
+                            "url": exploration.get("list_url") or state["site_url"],
+                            "method": fetch_cfg.get("method", "GET"),
+                            **_fetch_transport_fields(fetch_cfg),
+                            "headers": fetch_cfg.get("headers", {}),
+                            "query": loop_query,
+                            "json_body": loop_json_body or None,
+                            "as": "last_fetch",
+                        },
+                        {
+                            "op": "extract",
+                            "from": format_value,
+                            "fields": {k: v for k, v in fields.items() if v is not None},
+                            "into": "items",
+                            "merge": True,
+                        },
+                    ],
+                    "on_each": [{"op": "set", "var": offset_param, "expr": f"{{{{{offset_param}}}}} + {size}"}],
+                },
+                {"op": "dedup_by", "field": "url"},
+            ]
+            detail_api_action = _detail_api_action_from_url_rule(url_rule)
+            if detail_api_action:
+                actions.append(detail_api_action)
+            recipe_dict = {
+                "recipe_type": "dsl",
+                "entry_url": state["site_url"],
+                "actions": actions,
+                "notes": [
+                    recipe_note,
+                    f"deterministic offset_limit loop via {offset_param}+{size}",
                     *(
                         ["article detail API enrichment added because validator verified detail content API."]
                         if detail_api_action else []
@@ -3238,7 +3651,7 @@ _AUDIT_PROMPT = """# 角色
 # 任务
 看程序按这份配方真实抓到的条目，判断以下四件事，综合给出"是否值得把这份配方存下来"：
 1. 抓到的是不是真文章——不是反爬验证页、错误页(403/404)、登录页、占位内容、JS 未渲染的空壳、或与该站无关的页面。
-2. 抓取是否全面——有没有覆盖足够条目。普通列表/API 看是否有翻页；RSS/Atom feed 若单次已返回较多条目，也可以视为阶段性够用。
+2. 抓取覆盖度——有没有抓到足够支撑入库判断的条目。翻页只是覆盖度改进项，不是硬性门槛；单页已抓到多条真实有效文章时，可以阶段性通过。
 3. 有没有被页面限制/反爬挡住——条目很少、内容为空、标题异常、或明显被截断/被挡的迹象。
 4. 整体有没有抓取价值——值得存进新闻流吗。
 
@@ -3257,20 +3670,20 @@ _AUDIT_PROMPT = """# 角色
 # 输出（结构化 AuditVerdict）
 - passed：综合判断，true=这份配方值得存，false=不通过。
 - is_real_content：抓到的是真文章吗（false=反爬页/错误页/占位/无关页面）。
-- has_pagination：实现了翻页或覆盖足够条目吗。普通列表/API 依据 loop 和条数判断；RSS/Atom feed 没有 loop 但抓到 >=10 条有效文章时，不应因“无翻页”一票否决。
+- has_pagination：实现了翻页或覆盖足够条目吗。没有 loop 不等于失败；只要单页抓到多条真实有效文章，has_pagination 可为 false 但 passed 仍可为 true。
 - not_blocked：没被反爬/页面限制挡住吗（false=有被挡迹象）。
 - value_assessment：一句话价值评估。
-- issues：发现的问题列表（如"只抓到单页，未实现翻页"、"标题疑似反爬验证页"、"正文为空，疑似 JS 未渲染"）。
-- suggested_fix：不通过时给配方编写员的修改建议（如"加 loop 翻页直到抓满"、"extract 的 from 选错了"、"换 render_js=true / 加反爬绕过"）。
+- issues：发现的问题列表（如"标题疑似反爬验证页"、"正文为空，疑似 JS 未渲染"）。缺少翻页通常只作为覆盖度建议，不应作为主要失败原因。
+- suggested_fix：不通过时给配方编写员的修改建议（如"extract 的 from 选错了"、"换 render_js=true / 加反爬绕过"）。如果只是缺少翻页但内容有效，应写成后续优化建议而不是不通过理由。
 
 # 质量约束
 - 只看真实抓到的条目判断，不要凭配方结构猜结果。
 - 条目标题含"验证/403/access denied/请验证/robot"或正文/摘要都为空、全是 JS 占位 → is_real_content=false。
 - URL/title 正常但 content_chars 全为 0 时，先看 summary/description：如果 summary_chars 足够且不是 Article URL/Comments URL/Points 这类聚合元数据，可以降级认为信息可用，不要只因全文缺失拒绝。
-- 配方里没有 loop 动作，且普通列表/API 条数像单页量（如 ≤20 且无明显分页截断）→ has_pagination=false；RSS/Atom feed 抓到 >=10 条时只作为改进建议，不作为失败主因。
+- 配方里没有 loop 动作，且普通列表/API 条数像单页量（如 ≤20）→ has_pagination=false；但只要抓到的条目是真文章且有摘要/正文支撑新闻判断，不要因此一票否决。
 - 条数很少（如 <3）且不像正常分页截断 → 怀疑被限制，not_blocked=false。
 - 不通过必须给具体 issues + suggested_fix；通过时 issues 可为空。
-- 不要吹毛求疵：抓到多条真文章、有翻页或 RSS/Atom feed 覆盖足够条目、没被挡、且正文或摘要足够支撑新闻判断 → 通过。
+- 不要吹毛求疵：抓到多条真文章、没被挡、且正文或摘要足够支撑新闻判断 → 通过；翻页不足可以进入 issues/suggested_fix，但不要压过真实内容质量。
 """
 
 
@@ -3385,6 +3798,18 @@ def _has_usable_item_context(items: list) -> bool:
     for item in items[:8]:
         if not article_page_needs_content(item, min_existing_chars=80):
             return True
+    usable_brief_items = 0
+    checked = 0
+    for item in items[:8]:
+        title = " ".join(str(item.get("title") or "").split())
+        url = str(item.get("url") or "").strip()
+        summary = " ".join(str(item.get("summary") or item.get("content_snippet") or "").split())
+        if not title or not url.startswith(("http://", "https://")):
+            continue
+        checked += 1
+        if len(title) >= 8 and len(summary) >= 20:
+            usable_brief_items += 1
+    return checked >= 3 and usable_brief_items >= max(2, (checked + 1) // 2)
     return False
 
 
@@ -3402,6 +3827,10 @@ def _recipe_is_feed(recipe: DslRecipe) -> bool:
 _RELAXABLE_AUDIT_ISSUE_PATTERNS = (
     "正文",
     "content_chars",
+    "摘要",
+    "summary",
+    "片段",
+    "信息量",
     "enrich_article_pages",
     "全文",
     "翻页",
