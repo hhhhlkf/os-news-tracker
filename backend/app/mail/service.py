@@ -1,6 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import case, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -367,10 +367,20 @@ class MailService:
     def _fetch_items_for_snapshot(self, snapshot: MailFilterSnapshot, *, limit: int = 100) -> list[Item]:
         stmt = self._build_item_stmt(snapshot)
         sort_col = Item.published_at if snapshot.sort_by == "published_at" else Item.fetched_at
-        order_clause = sort_col.desc() if snapshot.sort_dir == "desc" else sort_col.asc()
+        time_order_clause = sort_col.desc() if snapshot.sort_dir == "desc" else sort_col.asc()
         if snapshot.sort_by == "published_at":
-            order_clause = order_clause.nullslast()
-        return list(self._db.scalars(stmt.order_by(order_clause).limit(limit)))
+            time_order_clause = time_order_clause.nullslast()
+        importance_order_clause = case(
+            (Item.importance == "高", 0),
+            (Item.importance == "中", 1),
+            (Item.importance == "低", 2),
+            else_=3,
+        )
+        return list(
+            self._db.scalars(
+                stmt.order_by(importance_order_clause, time_order_clause, Item.id.desc()).limit(limit)
+            )
+        )
 
     def _extract_hotspots(self, item: Item) -> list[str]:
         hotspots = [tag.name for tag in item.tags if getattr(tag, "kind", None) == "sub_tag"]
