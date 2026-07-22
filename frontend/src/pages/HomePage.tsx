@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchFacets, fetchItems, listDiscoveryMethods } from "../api/client";
 import { FacetSidebar } from "../components/FacetSidebar";
@@ -204,7 +204,11 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
   const hasLiveEmptyState = mode === "live" && listData?.total === 0;
   const activeFilterCount = countActiveFilters(filters);
   const crawlMethods = crawlMethodsQuery.data ?? [];
-  const filterChips = summarizeActiveFilters(filters, crawlMethods);
+  const activeCrawlMethods = useMemo(
+    () => crawlMethods.filter((method) => method.status === "active"),
+    [crawlMethods],
+  );
+  const filterChips = summarizeActiveFilters(filters, activeCrawlMethods);
   const templateCount = mailTemplatesQuery.data?.length ?? 0;
   const scheduleCount = mailSchedulesQuery.data?.length ?? 0;
   const enabledScheduleCount = (mailSchedulesQuery.data ?? []).filter((s) => s.enabled).length;
@@ -220,6 +224,24 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
   const morningDashboard = morningCrawlQuery.data;
   const morningStatus = morningDashboard?.today_status ?? "not_run";
   const morningStatusMeta = MORNING_STATUS_META[morningStatus] ?? MORNING_STATUS_META.not_run;
+
+  useEffect(() => {
+    if (!crawlMethodsQuery.data || !filters.source_id) return;
+    const activeSourceIds = new Set(
+      activeCrawlMethods
+        .map((method) => method.source_id)
+        .filter((sourceId): sourceId is number => typeof sourceId === "number")
+        .map(String),
+    );
+    const kept = filters.source_id
+      .split(",")
+      .map((id) => id.trim())
+      .filter((id) => id && activeSourceIds.has(id));
+    const nextValue = kept.join(",");
+    if (nextValue !== filters.source_id) {
+      setFilter("source_id", nextValue);
+    }
+  }, [activeCrawlMethods, crawlMethodsQuery.data, filters.source_id]);
 
   return (
     <div style={{ minHeight: "100vh", background: "#f5f7fb" }}>
@@ -488,7 +510,7 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
 
             <FacetSidebar
               facets={facets ?? { main_category: [], info_type: [], importance: [], sub_tags: [] }}
-              crawlMethods={crawlMethods}
+              crawlMethods={activeCrawlMethods}
               isLoading={mode === "live" && facetsQuery.isLoading}
               isMethodsLoading={crawlMethodsQuery.isLoading}
               selected={filters}

@@ -58,6 +58,10 @@ export function FacetSidebar({ facets, crawlMethods = [], isLoading, isMethodsLo
   const [customExpanded, setCustomExpanded] = useState(false);
   const [queryCustomExpanded, setQueryCustomExpanded] = useState(false);
   const [timeTab, setTimeTab] = useState<"published" | "fetched">("published");
+  const activeCrawlMethods = useMemo(
+    () => crawlMethods.filter((method) => method.status === "active"),
+    [crawlMethods],
+  );
 
   function resolveTimePreset(prefix: "published" | "fetched"): TimePreset {
     const afterMode = selected[`${prefix}_after_mode`];
@@ -346,11 +350,11 @@ export function FacetSidebar({ facets, crawlMethods = [], isLoading, isMethodsLo
         <div style={{ fontWeight: 600, marginBottom: 9, color: "#101828", fontSize: 13 }}>查询链接筛选</div>
         {isMethodsLoading ? (
           <div style={{ color: "#667085", fontSize: 12 }}>正在加载来源…</div>
-        ) : crawlMethods.length === 0 ? (
+        ) : activeCrawlMethods.length === 0 ? (
           <div style={{ color: "#98a2b3", fontSize: 12 }}>暂无可筛选来源</div>
         ) : (
           <div style={{ maxHeight: SOURCE_SCROLL_HEIGHT, overflowY: "auto", paddingRight: 5 }}>
-            {crawlMethods.map((method) => {
+            {activeCrawlMethods.map((method) => {
               const sourceId = method.source_id != null ? String(method.source_id) : "";
               if (!sourceId) return null;
               const selectedValues = parseFacetValues(selected.source_id);
