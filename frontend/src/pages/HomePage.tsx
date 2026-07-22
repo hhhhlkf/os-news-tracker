@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchFacets, fetchItems } from "../api/client";
+import { fetchFacets, fetchItems, listDiscoveryMethods } from "../api/client";
 import { FacetSidebar } from "../components/FacetSidebar";
 import { ItemList } from "../components/ItemList";
 import { ItemDetail } from "../components/ItemDetail";
@@ -10,6 +10,7 @@ import { fetchMailSchedules, fetchMailTemplates } from "../mail/api";
 import { fetchMorningCrawlDashboard } from "../morningCrawl/api";
 import { demoItems } from "../demoData";
 import { buildDemoFacets, filterDemoItems, makeListResponse, resolveHomeDataMode } from "./homeData";
+import type { CrawlMethod } from "../types";
 
 const PAGE_SIZE = 10;
 const ENTRY_CARD_MIN_HEIGHT = 196;
@@ -62,7 +63,11 @@ function summarizeTimeFilter(filters: Record<string, string>, prefix: "published
   return `${label}：${from} ~ ${to}`;
 }
 
-function summarizeActiveFilters(filters: Record<string, string>): string[] {
+function methodDisplayName(method: CrawlMethod): string {
+  return method.source_name?.trim() || method.domain || method.entry_url || `来源#${method.source_id ?? method.id}`;
+}
+
+function summarizeActiveFilters(filters: Record<string, string>, methods: CrawlMethod[] = []): string[] {
   const chips: string[] = [];
   for (const { key, label } of FILTER_LABELS) {
     const value = filters[key];
@@ -77,6 +82,21 @@ function summarizeActiveFilters(filters: Record<string, string>): string[] {
   const fetchedSummary = summarizeTimeFilter(filters, "fetched", "查询时间");
   if (fetchedSummary) {
     chips.push(fetchedSummary);
+  }
+  if (filters.source_id) {
+    const nameBySourceId = new Map(
+      methods
+        .filter((method) => method.source_id != null)
+        .map((method) => [String(method.source_id), methodDisplayName(method)]),
+    );
+    const names = filters.source_id
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean)
+      .map((id) => nameBySourceId.get(id) ?? `来源#${id}`);
+    if (names.length > 0) {
+      chips.push(`查询链接：${names.join(" / ")}`);
+    }
   }
   return chips;
 }
@@ -103,6 +123,9 @@ function countActiveFilters(filters: Record<string, string>): number {
     count += 1;
   }
   if (hasTimeFilter(filters, "fetched")) {
+    count += 1;
+  }
+  if (filters.source_id) {
     count += 1;
   }
   return count;
@@ -136,6 +159,11 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
   const facetsQuery = useQuery({
     queryKey: ["facets"],
     queryFn: fetchFacets,
+    retry: false,
+  });
+  const crawlMethodsQuery = useQuery({
+    queryKey: ["discovery-methods", "home-filter"],
+    queryFn: listDiscoveryMethods,
     retry: false,
   });
   const mailTemplatesQuery = useQuery({
@@ -175,7 +203,8 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
 
   const hasLiveEmptyState = mode === "live" && listData?.total === 0;
   const activeFilterCount = countActiveFilters(filters);
-  const filterChips = summarizeActiveFilters(filters);
+  const crawlMethods = crawlMethodsQuery.data ?? [];
+  const filterChips = summarizeActiveFilters(filters, crawlMethods);
   const templateCount = mailTemplatesQuery.data?.length ?? 0;
   const scheduleCount = mailSchedulesQuery.data?.length ?? 0;
   const enabledScheduleCount = (mailSchedulesQuery.data ?? []).filter((s) => s.enabled).length;
@@ -459,7 +488,9 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
 
             <FacetSidebar
               facets={facets ?? { main_category: [], info_type: [], importance: [], sub_tags: [] }}
+              crawlMethods={crawlMethods}
               isLoading={mode === "live" && facetsQuery.isLoading}
+              isMethodsLoading={crawlMethodsQuery.isLoading}
               selected={filters}
               onSelect={setFilter}
             />

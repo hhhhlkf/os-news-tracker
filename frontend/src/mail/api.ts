@@ -110,6 +110,7 @@ export function buildMailFilterSnapshot(params: ItemQueryParams): MailTemplateCr
     info_type: params.info_type ?? null,
     importance: params.importance ?? null,
     sub_tag: params.sub_tag ?? null,
+    source_id: params.source_id ?? null,
     sort_by: params.sort_by ?? "published_at",
     sort_dir: params.sort_dir ?? "desc",
     ...publishedAfter,

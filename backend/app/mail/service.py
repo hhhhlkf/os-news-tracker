@@ -1,10 +1,10 @@
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import CrawlMethod, Item, ItemTag, MailDelivery, MailSchedule, MailTemplate, Source, Tag
+from app.models import CrawlMethod, Item, ItemSource, ItemTag, MailDelivery, MailSchedule, MailTemplate, Source, Tag
 from app.schemas import (
     MailFilterSnapshot,
     MailImmediatePreviewRequest,
@@ -316,6 +316,21 @@ class MailService:
                     select(ItemTag.item_id)
                     .join(Tag, Tag.id == ItemTag.tag_id)
                     .where(Tag.kind == "sub_tag", Tag.name.in_(sub_tags))
+                )
+            )
+        source_ids = [
+            int(value)
+            for value in self._split_filter_values(snapshot.source_id)
+            if value.isdigit()
+        ]
+        if source_ids:
+            stmt = stmt.where(
+                or_(
+                    Item.source_id.in_(source_ids),
+                    Item.id.in_(
+                        select(ItemSource.item_id)
+                        .where(ItemSource.source_id.in_(source_ids))
+                    ),
                 )
             )
         if snapshot.q:

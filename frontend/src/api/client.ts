@@ -52,6 +52,7 @@ export interface ItemQueryParams {
   info_type?: string;
   importance?: string;
   sub_tag?: string;
+  source_id?: string;
   q?: string;
   limit?: number | string;
   offset?: number | string;

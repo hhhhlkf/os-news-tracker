@@ -1,16 +1,19 @@
 import { useMemo, useState } from "react";
-import type { Facets } from "../types";
+import type { CrawlMethod, Facets } from "../types";
 
 interface Props {
   facets: Facets;
+  crawlMethods?: CrawlMethod[];
   isLoading?: boolean;
+  isMethodsLoading?: boolean;
   selected: Record<string, string>;
   onSelect: (key: string, value: string) => void;
 }
 
 type TimePreset = "all" | "24h" | "7d" | "30d" | "custom";
 
-const HOTSPOT_SCROLL_HEIGHT = 112;
+const HOTSPOT_SCROLL_HEIGHT = 92;
+const SOURCE_SCROLL_HEIGHT = 148;
 
 export function getFacetFilterKey(key: keyof Facets): string {
   return key === "sub_tags" ? "sub_tag" : key;
@@ -47,9 +50,14 @@ export function toggleFacetValue(raw: string | undefined | null, value: string):
   return [...current, value].join(",");
 }
 
-export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
+function methodDisplayName(method: CrawlMethod): string {
+  return method.source_name?.trim() || method.domain || method.entry_url || `来源#${method.source_id ?? method.id}`;
+}
+
+export function FacetSidebar({ facets, crawlMethods = [], isLoading, isMethodsLoading, selected, onSelect }: Props) {
   const [customExpanded, setCustomExpanded] = useState(false);
   const [queryCustomExpanded, setQueryCustomExpanded] = useState(false);
+  const [timeTab, setTimeTab] = useState<"published" | "fetched">("published");
 
   function resolveTimePreset(prefix: "published" | "fetched"): TimePreset {
     const afterMode = selected[`${prefix}_after_mode`];
@@ -126,12 +134,76 @@ export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
     }
   }
 
-  function handlePresetClick(preset: TimePreset) {
-    handleTimePresetClick("published", preset);
-  }
-
-  function handleQueryPresetClick(preset: TimePreset) {
-    handleTimePresetClick("fetched", preset);
+  function renderTimeControls(prefix: "published" | "fetched", active: TimePreset, expanded: boolean) {
+    return (
+      <>
+        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: expanded ? 10 : 0 }}>
+          {presets.map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => handleTimePresetClick(prefix, key)}
+              style={{
+                border: "1px solid #d0d5dd",
+                borderRadius: 6,
+                padding: "5px 8px",
+                fontSize: 12,
+                cursor: "pointer",
+                background: active === key ? "#eff8ff" : "transparent",
+                color: active === key ? "#175cd3" : "#344054",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {expanded && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+              <label style={{ color: "#475467", fontSize: 12 }}>开始日期</label>
+              <input
+                type="date"
+                value={selected[`${prefix}_after`] ?? ""}
+                onChange={(e) => {
+                  onSelect(`${prefix}_after_mode`, e.target.value ? "absolute" : "");
+                  onSelect(`${prefix}_after_value`, "");
+                  onSelect(`${prefix}_after`, e.target.value);
+                }}
+                style={{
+                  border: "1px solid #d0d5dd",
+                  borderRadius: 7,
+                  padding: "8px 10px",
+                  fontSize: 13,
+                  color: "#101828",
+                  background: "#fff",
+                  minWidth: 0,
+                }}
+              />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+              <label style={{ color: "#475467", fontSize: 12 }}>结束日期</label>
+              <input
+                type="date"
+                value={selected[`${prefix}_before`] ?? ""}
+                onChange={(e) => {
+                  onSelect(`${prefix}_before_mode`, e.target.value ? "absolute" : "");
+                  onSelect(`${prefix}_before_value`, "");
+                  onSelect(`${prefix}_before`, e.target.value);
+                }}
+                style={{
+                  border: "1px solid #d0d5dd",
+                  borderRadius: 7,
+                  padding: "8px 10px",
+                  fontSize: 13,
+                  color: "#101828",
+                  background: "#fff",
+                  minWidth: 0,
+                }}
+              />
+            </div>
+          </div>
+        )}
+      </>
+    );
   }
 
   if (isLoading) {
@@ -158,14 +230,14 @@ export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
         <section
           key={key}
           style={{
-            marginBottom: 16,
+            marginBottom: 10,
             border: "1px solid #d0d5dd",
             borderRadius: 8,
-            padding: 14,
+            padding: 10,
             background: "#fff",
           }}
         >
-          <div style={{ fontWeight: 600, marginBottom: 10, color: "#101828" }}>{label}</div>
+          <div style={{ fontWeight: 600, marginBottom: 7, color: "#101828", fontSize: 13 }}>{label}</div>
           <div
             style={key === "sub_tags" ? {
               maxHeight: HOTSPOT_SCROLL_HEIGHT,
@@ -182,11 +254,11 @@ export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
                      onClick={() => onSelect(filterKey, toggleFacetValue(selected[filterKey], f.value))}
                      style={{
                        cursor: "pointer",
-                       padding: "8px 10px",
+                       padding: "5px 8px",
                        borderRadius: 6,
                        background: active ? "#eff8ff" : "transparent",
                        color: active ? "#175cd3" : "#344054",
-                       fontSize: 13,
+                       fontSize: 12,
                        display: "flex",
                        justifyContent: "space-between",
                        alignItems: "center",
@@ -212,7 +284,7 @@ export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
                     >
                       {active ? "✓" : ""}
                     </span>
-                    <span>{f.value}</span>
+                    <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.value}</span>
                   </span>
                   <span style={{ color: "#98a2b3" }}>{f.count}</span>
                 </div>
@@ -222,158 +294,109 @@ export function FacetSidebar({ facets, isLoading, selected, onSelect }: Props) {
         </section>
       ))}
 
-      {/* ── Published time filter ── */}
+      {/* ── Time filter ── */}
       <section
         style={{
-          marginBottom: 16,
+          marginBottom: 10,
           border: "1px solid #d0d5dd",
           borderRadius: 8,
-          padding: 14,
+          padding: 10,
           background: "#fff",
         }}
       >
-        <div style={{ fontWeight: 600, marginBottom: 10, color: "#101828" }}>发布时间</div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: customExpanded ? 12 : 0 }}>
-          {presets.map(({ key, label }) => (
+        <div style={{ fontWeight: 600, marginBottom: 8, color: "#101828", fontSize: 13 }}>时间筛选</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, marginBottom: 8 }}>
+          {([
+            ["published", "发布时间"],
+            ["fetched", "查询时间"],
+          ] as const).map(([key, label]) => (
             <button
               key={key}
-              onClick={() => handlePresetClick(key)}
+              type="button"
+              onClick={() => setTimeTab(key)}
               style={{
                 border: "1px solid #d0d5dd",
                 borderRadius: 6,
-                padding: "6px 10px",
+                padding: "6px 8px",
                 fontSize: 12,
+                fontWeight: 700,
                 cursor: "pointer",
-                background: activePreset === key ? "#eff8ff" : "transparent",
-                color: activePreset === key ? "#175cd3" : "#344054",
+                background: timeTab === key ? "#175cd3" : "#fff",
+                color: timeTab === key ? "#fff" : "#344054",
               }}
             >
               {label}
             </button>
           ))}
         </div>
-        {customExpanded && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <label style={{ color: "#475467", fontSize: 13 }}>开始日期</label>
-              <input
-                type="date"
-                value={selected.published_after ?? ""}
-                onChange={(e) => {
-                  onSelect("published_after_mode", e.target.value ? "absolute" : "");
-                  onSelect("published_after_value", "");
-                  onSelect("published_after", e.target.value);
-                }}
-                style={{
-                  border: "1px solid #d0d5dd",
-                  borderRadius: 8,
-                  padding: "10px 12px",
-                  fontSize: 14,
-                  color: "#101828",
-                  background: "#fff",
-                  minWidth: 160,
-                }}
-              />
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <label style={{ color: "#475467", fontSize: 13 }}>结束日期</label>
-              <input
-                type="date"
-                value={selected.published_before ?? ""}
-                onChange={(e) => {
-                  onSelect("published_before_mode", e.target.value ? "absolute" : "");
-                  onSelect("published_before_value", "");
-                  onSelect("published_before", e.target.value);
-                }}
-                style={{
-                  border: "1px solid #d0d5dd",
-                  borderRadius: 8,
-                  padding: "10px 12px",
-                  fontSize: 14,
-                  color: "#101828",
-                  background: "#fff",
-                  minWidth: 160,
-                }}
-              />
-            </div>
-          </div>
-        )}
+        {timeTab === "published"
+          ? renderTimeControls("published", activePreset, customExpanded)
+          : renderTimeControls("fetched", activeQueryPreset, queryCustomExpanded)}
       </section>
 
-      {/* ── Query time filter ── */}
       <section
         style={{
-          marginBottom: 16,
+          marginBottom: 10,
           border: "1px solid #d0d5dd",
           borderRadius: 8,
-          padding: 14,
+          padding: 10,
           background: "#fff",
         }}
       >
-        <div style={{ fontWeight: 600, marginBottom: 10, color: "#101828" }}>查询时间</div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: queryCustomExpanded ? 12 : 0 }}>
-          {presets.map(({ key, label }) => (
-            <button
-              key={key}
-              onClick={() => handleQueryPresetClick(key)}
-              style={{
-                border: "1px solid #d0d5dd",
-                borderRadius: 6,
-                padding: "6px 10px",
-                fontSize: 12,
-                cursor: "pointer",
-                background: activeQueryPreset === key ? "#eff8ff" : "transparent",
-                color: activeQueryPreset === key ? "#175cd3" : "#344054",
-              }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        {queryCustomExpanded && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <label style={{ color: "#475467", fontSize: 13 }}>开始日期</label>
-              <input
-                type="date"
-                value={selected.fetched_after ?? ""}
-                onChange={(e) => {
-                  onSelect("fetched_after_mode", e.target.value ? "absolute" : "");
-                  onSelect("fetched_after_value", "");
-                  onSelect("fetched_after", e.target.value);
-                }}
-                style={{
-                  border: "1px solid #d0d5dd",
-                  borderRadius: 8,
-                  padding: "10px 12px",
-                  fontSize: 14,
-                  color: "#101828",
-                  background: "#fff",
-                  minWidth: 160,
-                }}
-              />
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <label style={{ color: "#475467", fontSize: 13 }}>结束日期</label>
-              <input
-                type="date"
-                value={selected.fetched_before ?? ""}
-                onChange={(e) => {
-                  onSelect("fetched_before_mode", e.target.value ? "absolute" : "");
-                  onSelect("fetched_before_value", "");
-                  onSelect("fetched_before", e.target.value);
-                }}
-                style={{
-                  border: "1px solid #d0d5dd",
-                  borderRadius: 8,
-                  padding: "10px 12px",
-                  fontSize: 14,
-                  color: "#101828",
-                  background: "#fff",
-                  minWidth: 160,
-                }}
-              />
-            </div>
+        <div style={{ fontWeight: 600, marginBottom: 7, color: "#101828", fontSize: 13 }}>查询链接筛选</div>
+        {isMethodsLoading ? (
+          <div style={{ color: "#667085", fontSize: 12 }}>正在加载来源…</div>
+        ) : crawlMethods.length === 0 ? (
+          <div style={{ color: "#98a2b3", fontSize: 12 }}>暂无可筛选来源</div>
+        ) : (
+          <div style={{ maxHeight: SOURCE_SCROLL_HEIGHT, overflowY: "auto", paddingRight: 4 }}>
+            {crawlMethods.map((method) => {
+              const sourceId = method.source_id != null ? String(method.source_id) : "";
+              if (!sourceId) return null;
+              const selectedValues = parseFacetValues(selected.source_id);
+              const active = selectedValues.includes(sourceId);
+              const name = methodDisplayName(method);
+              return (
+                <div
+                  key={`${method.id}:${sourceId}`}
+                  onClick={() => onSelect("source_id", toggleFacetValue(selected.source_id, sourceId))}
+                  title={name}
+                  style={{
+                    cursor: "pointer",
+                    padding: "5px 8px",
+                    borderRadius: 6,
+                    background: active ? "#eff8ff" : "transparent",
+                    color: active ? "#175cd3" : "#344054",
+                    fontSize: 11,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 7,
+                    minWidth: 0,
+                  }}
+                >
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 13,
+                      height: 13,
+                      borderRadius: 3,
+                      border: active ? "1px solid #175cd3" : "1px solid #d0d5dd",
+                      background: active ? "#175cd3" : "#fff",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      color: "#fff",
+                      fontSize: 9,
+                      lineHeight: 1,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {active ? "✓" : ""}
+                  </span>
+                  <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
+                </div>
+              );
+            })}
           </div>
         )}
       </section>

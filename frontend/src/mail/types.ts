@@ -10,6 +10,7 @@ export interface MailFilterSnapshot {
   info_type?: string | null;
   importance?: string | null;
   sub_tag?: string | null;
+  source_id?: string | null;
   sort_by?: MailSortBy;
   sort_dir?: MailSortDir;
   published_after_mode?: MailBoundaryMode;

@@ -119,6 +119,7 @@ class MailFilterSnapshot(BaseModel):
     info_type: str | None = None
     importance: str | None = None
     sub_tag: str | None = None
+    source_id: str | None = None
     sort_by: MailSortBy = "published_at"
     sort_dir: MailSortDir = "desc"
     published_after_mode: MailBoundaryMode = "none"

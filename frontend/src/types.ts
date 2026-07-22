@@ -281,6 +281,7 @@ export type CrawlMethodStatus = "active" | "disabled" | "failed";
 
 export interface CrawlMethod {
   id: number;
+  source_id?: number;
   source_name?: string | null;
   domain: string;
   entry_url: string;

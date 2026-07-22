@@ -268,6 +268,7 @@ def _method_quality_grade(overall_score: int | None) -> str | None:
 def _method_response(method: CrawlMethod, db: Session) -> dict[str, Any]:
     return {
         "id": method.id,
+        "source_id": method.source_id,
         "domain": method.domain,
         "entry_url": method.entry_url,
         "status": method.status,
@@ -383,7 +384,7 @@ def get_method(method_id: int, db: Session = Depends(get_db)):
     if not m:
         raise HTTPException(404, "method not found")
     source = db.get(Source, m.source_id)
-    return {"id": m.id, "domain": m.domain, "entry_url": m.entry_url, "status": m.status,
+    return {"id": m.id, "source_id": m.source_id, "domain": m.domain, "entry_url": m.entry_url, "status": m.status,
             "review_status": m.review_status,
             "reviewed_at": m.reviewed_at.isoformat() if m.reviewed_at else None,
             "reviewed_by": m.reviewed_by,

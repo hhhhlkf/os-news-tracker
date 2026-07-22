@@ -2,7 +2,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -137,6 +137,7 @@ def list_items(
     info_type: str | None = None,
     importance: str | None = None,
     sub_tag: str | None = None,
+    source_id: str | None = None,
     q: str | None = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
@@ -171,6 +172,21 @@ def list_items(
             Item.id.in_(
                 select(ItemTag.item_id)
                 .where(ItemTag.tag_id.in_(tag_ids))
+            )
+        )
+    source_ids = [
+        int(value)
+        for value in _split_filter_values(source_id)
+        if value.isdigit()
+    ]
+    if source_ids:
+        stmt = stmt.where(
+            or_(
+                Item.source_id.in_(source_ids),
+                Item.id.in_(
+                    select(ItemSource.item_id)
+                    .where(ItemSource.source_id.in_(source_ids))
+                ),
             )
         )
     if q:
