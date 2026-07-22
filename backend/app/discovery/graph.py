@@ -1748,25 +1748,29 @@ def _parse_json_or_fallback(content: str) -> dict:
     return {"source_type": "unknown", "success": False, "raw": content[:2000]}
 
 
-def _repair_loop_until(loop_action: dict) -> None:
+def _default_loop_until() -> dict:
+    return {
+        "count_of": "items",
+        "var": None,
+        "path": None,
+        "exists": None,
+        "not_exists": None,
+        "op": ">=",
+        "value": 50,
+    }
+
+
+def _repair_loop_until(loop_action: dict) -> str | None:
     until = loop_action.get("until")
     if not isinstance(until, dict):
-        return
+        loop_action["until"] = _default_loop_until()
+        return "loop.until was missing/null and sanitized to count_of(items) >= 50"
     has_target = any(until.get(key) is not None for key in ("count_of", "var", "path", "exists", "not_exists"))
     if has_target:
-        return
-    for sub in loop_action.get("body") or []:
-        if sub.get("op") == "extract" and sub.get("from"):
-            until.update({
-                "count_of": None,
-                "var": None,
-                "path": sub["from"],
-                "exists": None,
-                "not_exists": None,
-                "op": "==",
-                "value": [],
-            })
-            return
+        return None
+    until.clear()
+    until.update(_default_loop_until())
+    return "loop.until had no target and was sanitized to count_of(items) >= 50"
 
 
 def _sanitize_recipe_actions(actions: list[dict], *, path: str = "actions") -> tuple[list[dict], list[str]]:
@@ -1790,7 +1794,9 @@ def _sanitize_recipe_actions(actions: list[dict], *, path: str = "actions") -> t
             if isinstance(current.get("on_each"), list):
                 current["on_each"], each_warnings = _sanitize_recipe_actions(current["on_each"], path=f"{action_path}.loop.on_each")
                 warnings.extend(each_warnings)
-            _repair_loop_until(current)
+            warning = _repair_loop_until(current)
+            if warning:
+                warnings.append(f"{action_path}.{warning}")
         sanitized.append(current)
     return sanitized, warnings
 
@@ -2123,7 +2129,8 @@ extract.fields 字段值规则：
 value 和 expr 二选一（expr 用 {{var}} 算术，翻页用）。
 
 7. loop
-{"op": "loop", "until": {"kind": "count_of | var | path | exists | not_exists", "target": "items | data.hasMore | next", "op": "== | != | > | >= | < | <=", "value": 0}, "max_iters": 5, "body": [], "on_each": []}
+{"op": "loop", "until": {"count_of": "items", "op": ">=", "value": 50}, "max_iters": 5, "body": [], "on_each": []}
+until 必须是对象，不能是 null；且必须包含 count_of、var、path、exists、not_exists 之一。
 max_iters 必须 1~20。
 
 8. dedup_by
@@ -2169,7 +2176,7 @@ max_iters 必须 1~20。
    - 如果 HTML 链接来自 link_selector：url 用 attr:href，并确保 extract 的 from（item selector）能定位到含链接的元素。
 5. 如果 exploration.pagination.type 不是 none/null/unknown，必须写 set+loop 翻页：
    - loop.max_iters 1~20；每轮 fetch 下一页；extract 用 merge=true 追加 items；
-   - 有 has_more_path/next_path 时用它作 until 条件。
+   - 有 has_more_path/next_path 时用它作 until 条件；没有明确终止字段时用 {"count_of":"items","op":">=","value":50}。
 6. 如果需要补抓详情页正文，把 enrich_article_pages 放在 dedup_by url 之后，避免重复 URL 重复补抓；默认 max_items=8、timeout_seconds=6、content_char_limit=3000。
 7. 必须包含 dedup_by url；若使用 enrich_article_pages，则 dedup_by url 应在补抓前执行一次。
 8. source_type=html 且需浏览器交互时才允许 goto/wait_for/click；click/wait_for 必须在 goto 之后。
@@ -2180,6 +2187,7 @@ max_iters 必须 1~20。
 # 质量约束
 - extract.fields.url 必须可用：已有 URL 字段（mode=existing_url）或 template 拼接（mode=template）二选一。
 - extract.from 必须和 fetch.mode 匹配（json→json path；feed→feed.entries；html→selector: 前缀）。
+- loop.until 不能为 null，必须是合法条件对象。
 - loop.max_iters 必须 1~20。
 - fetch URL、字段名、selector、json path 必须来自 exploration。
 - transport/impersonate/stealthy_headers 必须来自 exploration.fetch；默认 httpx，但一旦探查证据为 scrapling，配方必须写 scrapling。
