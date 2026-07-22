@@ -122,6 +122,7 @@ class DslInterpreter:
             self._page = self._browser.new_page()
         if action.op == "goto":
             self._page.goto(render_vars(action.url, ctx), wait_until=action.wait_until)
+            self._exercise_dynamic_page(scroll_rounds=2, wait_ms=500)
         elif action.op == "wait_for":
             self._page.wait_for_selector(action.selector, timeout=action.timeout_ms)
         elif action.op == "click":
@@ -220,6 +221,43 @@ class DslInterpreter:
             sep = "&" if "?" in url else "?"
             target_url = f"{url}{sep}{query_text}"
         self._page.goto(target_url, wait_until="networkidle")
+        self._exercise_dynamic_page(scroll_rounds=2, wait_ms=500)
+
+    def _exercise_dynamic_page(self, *, scroll_rounds: int = 2, wait_ms: int = 500) -> None:
+        if self._page is None:
+            return
+        load_more_texts = (
+            "加载更多",
+            "更多",
+            "下一页",
+            "查看更多",
+            "Load more",
+            "More",
+            "Next",
+            "Show more",
+        )
+        try:
+            self._page.wait_for_timeout(wait_ms)
+        except Exception:
+            pass
+        for _ in range(max(scroll_rounds, 0)):
+            try:
+                self._page.mouse.wheel(0, 2400)
+                self._page.wait_for_timeout(wait_ms)
+            except Exception:
+                break
+        for text in load_more_texts:
+            try:
+                locator = self._page.get_by_text(text, exact=False)
+                count = min(locator.count(), 2)
+                for idx in range(count):
+                    try:
+                        locator.nth(idx).click(timeout=1500)
+                        self._page.wait_for_timeout(wait_ms)
+                    except Exception:
+                        continue
+            except Exception:
+                continue
 
     def _render_json_like(self, value: Any, ctx: dict[str, Any]) -> Any:
         """递归渲染 JSON 载荷中的字符串变量，保留 int/bool/null 等原始类型。"""
