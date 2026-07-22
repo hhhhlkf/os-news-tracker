@@ -4,6 +4,7 @@ from sqlalchemy import case, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.discovery.quality_audit import calculate_overall_score
 from app.models import CrawlMethod, Item, ItemSource, ItemTag, MailDelivery, MailSchedule, MailTemplate, Source, Tag
 from app.schemas import (
     MailFilterSnapshot,
@@ -394,12 +395,10 @@ class MailService:
     def _method_overall_score(method: CrawlMethod | None) -> int | None:
         if method is None:
             return None
-        if method.overall_score is not None:
-            return method.overall_score
         if method.quality_score is None:
-            return None
+            return method.overall_score
         density_score = method.density_score if method.density_score is not None else method.quality_score
-        return int(round(method.quality_score * 0.5 + density_score * 0.5))
+        return calculate_overall_score(method.quality_score, density_score)
 
     @staticmethod
     def _grade_for_score(score: int | None) -> str | None:

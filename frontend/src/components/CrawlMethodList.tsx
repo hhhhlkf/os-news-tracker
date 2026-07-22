@@ -626,10 +626,18 @@ function QualityBadge({ method }: { method: CrawlMethod }) {
 }
 
 function methodOverallScore(method: CrawlMethod) {
-  if (typeof method.overall_score === "number") return method.overall_score;
   if (typeof method.quality_score !== "number") return null;
   const densityScore = typeof method.density_score === "number" ? method.density_score : method.quality_score;
-  return Math.round(method.quality_score * 0.5 + densityScore * 0.5);
+  return calculateOverallScore(method.quality_score, densityScore);
+}
+
+function calculateOverallScore(qualityScore: number, densityScore: number) {
+  let score = qualityScore * 0.75 + densityScore * 0.25;
+  if (qualityScore >= 85 && densityScore < 55) score += 10;
+  if (qualityScore >= 80 && densityScore >= 80) score += 5;
+  if (qualityScore < 50 && densityScore >= 80) score -= 15;
+  if (qualityScore < 50 && densityScore < 35) score -= 10;
+  return Math.max(0, Math.min(100, Math.round(score)));
 }
 
 function gradeForScore(score: number) {

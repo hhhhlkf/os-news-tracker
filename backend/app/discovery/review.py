@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.discovery.quality_audit import calculate_overall_score
 from app.mail.service import build_default_mail_provider, resolve_sender
 from app.models import (
     CrawlMethod,
@@ -193,7 +194,12 @@ def render_review_reminder_html(methods: list[CrawlMethod]) -> str:
 
 
 def _render_method_row(method: CrawlMethod) -> str:
-    score = method.overall_score if method.overall_score is not None else ""
+    score = ""
+    if method.quality_score is not None:
+        density_score = method.density_score if method.density_score is not None else method.quality_score
+        score = calculate_overall_score(method.quality_score, density_score)
+    elif method.overall_score is not None:
+        score = method.overall_score
     quality = method.quality_score if method.quality_score is not None else ""
     density = method.density_score if method.density_score is not None else ""
     return f"""

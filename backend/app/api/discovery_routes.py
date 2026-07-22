@@ -42,6 +42,7 @@ from app.discovery.recipe_prepare import (
     _ensure_wechat_history_article_enrich,
     _prepare_fetch_recipe,
 )
+from app.discovery.quality_audit import calculate_overall_score
 from app.llm.client import LlmClient
 from app.enums import TagKind
 from app.models import (
@@ -245,12 +246,10 @@ def _method_quality_fields(method: CrawlMethod) -> dict[str, Any]:
 
 
 def _method_overall_score(method: CrawlMethod) -> int | None:
-    if method.overall_score is not None:
-        return method.overall_score
     if method.quality_score is None:
-        return None
+        return method.overall_score
     density_score = method.density_score if method.density_score is not None else method.quality_score
-    return int(round(method.quality_score * 0.5 + density_score * 0.5))
+    return calculate_overall_score(method.quality_score, density_score)
 
 
 def _method_quality_grade(overall_score: int | None) -> str | None:

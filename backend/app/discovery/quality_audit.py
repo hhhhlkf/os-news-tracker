@@ -87,7 +87,7 @@ class SourceQualityAudit:
 
     @property
     def overall_score(self) -> int:
-        return _overall_score(self.quality_score, self.density_score)
+        return calculate_overall_score(self.quality_score, self.density_score)
 
     def as_update_values(self) -> dict[str, Any]:
         return {
@@ -262,8 +262,21 @@ def _quality_reason(*, quality_score: int, density_score: int, sample_count: int
     return f"{quality_text}，{density_text}，{date_text}，样本 {sample_count} 条"
 
 
+def calculate_overall_score(quality_score: int, density_score: int) -> int:
+    score = quality_score * 0.75 + density_score * 0.25
+    if quality_score >= 85 and density_score < 55:
+        score += 10
+    if quality_score >= 80 and density_score >= 80:
+        score += 5
+    if quality_score < 50 and density_score >= 80:
+        score -= 15
+    if quality_score < 50 and density_score < 35:
+        score -= 10
+    return max(0, min(100, int(round(score))))
+
+
 def _overall_score(quality_score: int, density_score: int) -> int:
-    return int(round(quality_score * 0.5 + density_score * 0.5))
+    return calculate_overall_score(quality_score, density_score)
 
 
 def _grade(score: int) -> str:
