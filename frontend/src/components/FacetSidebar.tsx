@@ -13,7 +13,7 @@ interface Props {
 type TimePreset = "all" | "24h" | "7d" | "30d" | "custom";
 
 const HOTSPOT_SCROLL_HEIGHT = 92;
-const SOURCE_SCROLL_HEIGHT = 148;
+const SOURCE_SCROLL_HEIGHT = 184;
 
 export function getFacetFilterKey(key: keyof Facets): string {
   return key === "sub_tags" ? "sub_tag" : key;
@@ -300,7 +300,7 @@ export function FacetSidebar({ facets, crawlMethods = [], isLoading, isMethodsLo
           marginBottom: 10,
           border: "1px solid #d0d5dd",
           borderRadius: 8,
-          padding: 10,
+          padding: 12,
           background: "#fff",
         }}
       >
@@ -343,13 +343,13 @@ export function FacetSidebar({ facets, crawlMethods = [], isLoading, isMethodsLo
           background: "#fff",
         }}
       >
-        <div style={{ fontWeight: 600, marginBottom: 7, color: "#101828", fontSize: 13 }}>查询链接筛选</div>
+        <div style={{ fontWeight: 600, marginBottom: 9, color: "#101828", fontSize: 13 }}>查询链接筛选</div>
         {isMethodsLoading ? (
           <div style={{ color: "#667085", fontSize: 12 }}>正在加载来源…</div>
         ) : crawlMethods.length === 0 ? (
           <div style={{ color: "#98a2b3", fontSize: 12 }}>暂无可筛选来源</div>
         ) : (
-          <div style={{ maxHeight: SOURCE_SCROLL_HEIGHT, overflowY: "auto", paddingRight: 4 }}>
+          <div style={{ maxHeight: SOURCE_SCROLL_HEIGHT, overflowY: "auto", paddingRight: 5 }}>
             {crawlMethods.map((method) => {
               const sourceId = method.source_id != null ? String(method.source_id) : "";
               if (!sourceId) return null;
@@ -363,22 +363,23 @@ export function FacetSidebar({ facets, crawlMethods = [], isLoading, isMethodsLo
                   title={name}
                   style={{
                     cursor: "pointer",
-                    padding: "5px 8px",
-                    borderRadius: 6,
+                    padding: "7px 9px",
+                    borderRadius: 7,
                     background: active ? "#eff8ff" : "transparent",
                     color: active ? "#175cd3" : "#344054",
-                    fontSize: 11,
+                    fontSize: 12,
                     display: "flex",
                     alignItems: "center",
-                    gap: 7,
+                    gap: 8,
+                    lineHeight: 1.35,
                     minWidth: 0,
                   }}
                 >
                   <span
                     aria-hidden
                     style={{
-                      width: 13,
-                      height: 13,
+                      width: 14,
+                      height: 14,
                       borderRadius: 3,
                       border: active ? "1px solid #175cd3" : "1px solid #d0d5dd",
                       background: active ? "#175cd3" : "#fff",
