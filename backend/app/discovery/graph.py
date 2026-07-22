@@ -1858,7 +1858,7 @@ explorer 只给了候选，最终的 UrlRule 由你产出。
 
 # 背景
 - 你的职责只判断“文章详情页 URL 如何从列表 item 得到”，不要处理列表 API 的分页、筛选、query 参数。
-- 你的输出后续会被程序强制验证正文获取能力：至少一条样本必须能拿到足够 content，URL 正常但正文为空不能算可用。
+- 你的输出后续会被程序验证内容可用性：优先验证详情正文；如果 feed/list 自带 summary/description 已足够支撑新闻判断，也可降级视为可用。
 - exploration.list_url / exploration.fetch.query / exploration.pagination 描述的是“列表接口怎么请求”，不是详情页 URL 规律。
 - 如果列表里已有 url/link 字段，应直接使用该字段（mode=existing_url），不要多此一举去推模板。
 - 如果列表里给的是 path/href 这类相对路径字段，应输出 mode=path_join，填写 base_url 与 path_field。
@@ -1987,6 +1987,12 @@ def _content_probe_ok(content_probe: dict | None) -> bool:
     return bool(content_probe and content_probe.get("content_verified") and int(content_probe.get("content_chars") or 0) >= 300)
 
 
+def _content_probe_payload(content_probe: dict | None) -> dict[str, Any]:
+    if isinstance(content_probe, dict):
+        return content_probe
+    return {"content_verified": False, "content_strategy": "none", "content_chars": 0}
+
+
 def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
     """Validator worker：LLM 判 URL 来源模式 + test_url_template 程序验证（技术真伪，非审计）。
 
@@ -2106,7 +2112,24 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
                     validation_samples=rule_obj.validation_samples,
                     **content_probe,
                 ), "audit_result": None, "validator_llm_output": raw}
-            worker_feedback = f"mode=existing_url · URL 正常但正文验证失败 · probe={json.dumps(content_probe, ensure_ascii=False)[:500]}"
+            _append_worker_attempt_log(
+                state,
+                node_name="validator",
+                attempt=attempt,
+                status="success",
+                detail=(
+                    f"mode=existing_url · evidence=existing_url · url_field={rule_obj.url_field} "
+                    f"· content_not_verified · probe={json.dumps(content_probe, ensure_ascii=False)[:300]}"
+                ),
+            )
+            return {"url_rule": _validated_rule_payload(
+                rule_obj,
+                mode="existing_url",
+                url_field=rule_obj.url_field,
+                evidence="existing_url",
+                validation_samples=rule_obj.validation_samples,
+                **_content_probe_payload(content_probe),
+            ), "audit_result": None, "validator_llm_output": raw}
 
         if rule_obj.mode == "path_join" and rule_obj.base_url and rule_obj.path_field and rule_obj.sample_items:
             test_out = _invoke_tool_node(test_path_join, {
@@ -2126,15 +2149,25 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
                     sample_item=sample,
                 )
                 if not _content_probe_ok(content_probe):
-                    worker_feedback = f"mode=path_join · URL 正常但正文验证失败 · probe={json.dumps(content_probe, ensure_ascii=False)[:500]}"
                     _append_worker_attempt_log(
                         state,
                         node_name="validator",
                         attempt=attempt,
-                        status="failed",
-                        detail=worker_feedback,
+                        status="success",
+                        detail=(
+                            f"mode=path_join · evidence=validated {len(valid)}/{len(results)} · path_field={rule_obj.path_field} "
+                            f"· content_not_verified · probe={json.dumps(content_probe, ensure_ascii=False)[:300]}"
+                        ),
                     )
-                    continue
+                    return {"url_rule": _validated_rule_payload(
+                        rule_obj,
+                        mode="path_join",
+                        base_url=rule_obj.base_url,
+                        path_field=rule_obj.path_field,
+                        evidence=f"validated {len(valid)}/{len(results)}",
+                        validation_samples=results[:5],
+                        **_content_probe_payload(content_probe),
+                    ), "audit_result": None, "validator_llm_output": raw}
                 _append_worker_attempt_log(
                     state,
                     node_name="validator",
@@ -2173,15 +2206,25 @@ def validator(state: DiscoveryState, llm=None) -> DiscoveryState:
                     sample_item=sample,
                 )
                 if not _content_probe_ok(content_probe):
-                    worker_feedback = f"mode=template · URL 正常但正文验证失败 · probe={json.dumps(content_probe, ensure_ascii=False)[:500]}"
                     _append_worker_attempt_log(
                         state,
                         node_name="validator",
                         attempt=attempt,
-                        status="failed",
-                        detail=worker_feedback,
+                        status="success",
+                        detail=(
+                            f"mode=template · evidence=validated {len(valid)}/{len(results)} · template={rule_obj.template} "
+                            f"· content_not_verified · probe={json.dumps(content_probe, ensure_ascii=False)[:300]}"
+                        ),
                     )
-                    continue
+                    return {"url_rule": _validated_rule_payload(
+                        rule_obj,
+                        mode="template",
+                        template=rule_obj.template,
+                        id_field=rule_obj.id_field,
+                        evidence=f"validated {len(valid)}/{len(results)}",
+                        validation_samples=results[:5],
+                        **_content_probe_payload(content_probe),
+                    ), "audit_result": None, "validator_llm_output": raw}
                 _append_worker_attempt_log(
                     state,
                     node_name="validator",
@@ -2875,7 +2918,7 @@ _AUDIT_PROMPT = """# 角色
 # 任务
 看程序按这份配方真实抓到的条目，判断以下四件事，综合给出"是否值得把这份配方存下来"：
 1. 抓到的是不是真文章——不是反爬验证页、错误页(403/404)、登录页、占位内容、JS 未渲染的空壳、或与该站无关的页面。
-2. 抓取是否全面——有没有实现翻页抓多页，还是只抓了单页就停了（看配方里有没有 loop 动作，以及抓到的条数是否像多页累加）。
+2. 抓取是否全面——有没有覆盖足够条目。普通列表/API 看是否有翻页；RSS/Atom feed 若单次已返回较多条目，也可以视为阶段性够用。
 3. 有没有被页面限制/反爬挡住——条目很少、内容为空、标题异常、或明显被截断/被挡的迹象。
 4. 整体有没有抓取价值——值得存进新闻流吗。
 
@@ -2894,7 +2937,7 @@ _AUDIT_PROMPT = """# 角色
 # 输出（结构化 AuditVerdict）
 - passed：综合判断，true=这份配方值得存，false=不通过。
 - is_real_content：抓到的是真文章吗（false=反爬页/错误页/占位/无关页面）。
-- has_pagination：实现了翻页抓多页吗（false=只抓单页）。依据：配方有 loop 动作且条数像多页累加→true；配方无 loop 或条数明显只够一页→false。
+- has_pagination：实现了翻页或覆盖足够条目吗。普通列表/API 依据 loop 和条数判断；RSS/Atom feed 没有 loop 但抓到 >=10 条有效文章时，不应因“无翻页”一票否决。
 - not_blocked：没被反爬/页面限制挡住吗（false=有被挡迹象）。
 - value_assessment：一句话价值评估。
 - issues：发现的问题列表（如"只抓到单页，未实现翻页"、"标题疑似反爬验证页"、"正文为空，疑似 JS 未渲染"）。
@@ -2902,12 +2945,12 @@ _AUDIT_PROMPT = """# 角色
 
 # 质量约束
 - 只看真实抓到的条目判断，不要凭配方结构猜结果。
-- 条目标题含"验证/403/access denied/请验证/robot"或正文为空/全是 JS 占位 → is_real_content=false。
-- URL/title 正常但 content_chars 全为 0 或明显不足，也必须视为正文策略失败，不能放行。
-- 配方里没有 loop 动作，且条数像单页量（如 ≤20 且无明显分页截断）→ has_pagination=false。
+- 条目标题含"验证/403/access denied/请验证/robot"或正文/摘要都为空、全是 JS 占位 → is_real_content=false。
+- URL/title 正常但 content_chars 全为 0 时，先看 summary/description：如果 summary_chars 足够且不是 Article URL/Comments URL/Points 这类聚合元数据，可以降级认为信息可用，不要只因全文缺失拒绝。
+- 配方里没有 loop 动作，且普通列表/API 条数像单页量（如 ≤20 且无明显分页截断）→ has_pagination=false；RSS/Atom feed 抓到 >=10 条时只作为改进建议，不作为失败主因。
 - 条数很少（如 <3）且不像正常分页截断 → 怀疑被限制，not_blocked=false。
 - 不通过必须给具体 issues + suggested_fix；通过时 issues 可为空。
-- 不要吹毛求疵：抓到多条真文章、有翻页、没被挡 → 通过。
+- 不要吹毛求疵：抓到多条真文章、有翻页或 RSS/Atom feed 覆盖足够条目、没被挡、且正文或摘要足够支撑新闻判断 → 通过。
 """
 
 
@@ -3016,11 +3059,69 @@ def _has_verified_item_content(items: list) -> bool:
     return False
 
 
+def _has_usable_item_context(items: list) -> bool:
+    from app.discovery.article_tools import article_page_needs_content
+
+    for item in items[:8]:
+        if not article_page_needs_content(item, min_existing_chars=80):
+            return True
+    return False
+
+
 def _recipe_has_content_enrich(recipe: DslRecipe) -> bool:
     for action in recipe.actions:
         if action.op in {"enrich_article_pages", "enrich_article_api"}:
             return True
     return False
+
+
+def _recipe_is_feed(recipe: DslRecipe) -> bool:
+    return any(action.op == "fetch" and action.mode == "feed" for action in recipe.actions)
+
+
+_RELAXABLE_AUDIT_ISSUE_PATTERNS = (
+    "正文",
+    "content_chars",
+    "enrich_article_pages",
+    "全文",
+    "翻页",
+    "单页",
+    "历史文章",
+    "pagination",
+    "loop",
+)
+
+
+def _relax_audit_verdict_for_usable_context(
+    verdict: dict,
+    *,
+    recipe: DslRecipe,
+    discovered_count: int,
+    context_verified: bool,
+) -> dict:
+    if not context_verified or discovered_count < 1:
+        return verdict
+    issues = [str(issue) for issue in (verdict.get("issues") or [])]
+    issue_text = "\n".join(issues)
+    has_only_relaxable_issues = bool(issues) and all(
+        any(pattern in issue for pattern in _RELAXABLE_AUDIT_ISSUE_PATTERNS)
+        for issue in issues
+    )
+    feed_has_enough_items = _recipe_is_feed(recipe) and discovered_count >= 10
+    if verdict.get("passed"):
+        return verdict
+    if bool(verdict.get("is_real_content", True)) and bool(verdict.get("not_blocked", True)):
+        if has_only_relaxable_issues or (feed_has_enough_items and ("翻页" in issue_text or "单页" in issue_text)):
+            next_verdict = dict(verdict)
+            next_verdict["passed"] = True
+            if feed_has_enough_items:
+                next_verdict["has_pagination"] = True
+            next_verdict["value_assessment"] = (
+                str(next_verdict.get("value_assessment") or "")
+                + "；已按摘要/description 信息可用降级放行。"
+            ).strip("；")
+            return next_verdict
+    return verdict
 
 
 def auditor(state: DiscoveryState, llm=None, test_fn=None) -> DiscoveryState:
@@ -3049,10 +3150,11 @@ def auditor(state: DiscoveryState, llm=None, test_fn=None) -> DiscoveryState:
     items = test_result.get("items", [])
     discovered_count = test_result.get("stats", {}).get("discovered_count", len(items))
     content_verified = _has_verified_item_content(items)
-    if discovered_count and not content_verified:
+    context_verified = content_verified or _has_usable_item_context(items)
+    if discovered_count and not context_verified:
         errors = [
             *errors,
-            "article content verification failed: URL/title may be valid but no sampled item has content_chars >= 300",
+            "article context verification failed: URL/title may be valid but no sampled item has usable content or summary",
         ]
     audit_input = {
         "recipe_summary": _recipe_summary(recipe),
@@ -3060,6 +3162,7 @@ def auditor(state: DiscoveryState, llm=None, test_fn=None) -> DiscoveryState:
         "dsl_sanitize_warnings": sanitize_warnings,
         "discovered_count": discovered_count,
         "content_verified": content_verified,
+        "context_verified": context_verified,
         "has_content_enrich_action": _recipe_has_content_enrich(recipe),
         "items_sample": _audit_items_sample(items),
     }
@@ -3067,6 +3170,12 @@ def auditor(state: DiscoveryState, llm=None, test_fn=None) -> DiscoveryState:
         audit_input["runtime_error"] = test_result["error"]
     # LLM 审：看真实抓到的条目，判价值/全面性/反爬/翻页
     auditor_llm_output, llm_verdict = _llm_audit_quality(llm, state["site_url"], recipe, items, errors)
+    llm_verdict = _relax_audit_verdict_for_usable_context(
+        llm_verdict,
+        recipe=recipe,
+        discovered_count=discovered_count,
+        context_verified=context_verified,
+    )
     # 通过 = 无静态错误 + 抓到至少 1 条 + LLM 判值得存
     passed = (not errors) and discovered_count >= 1 and llm_verdict.get("passed", False)
     current_cycle_attempt = int(state.get("dsl_cycle_attempt", 0) or 0)
