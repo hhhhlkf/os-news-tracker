@@ -132,6 +132,7 @@ class MailTemplate(Base):
     subject: Mapped[str] = mapped_column(String(500))
     recipients_json: Mapped[list] = mapped_column(JSON, default=list)
     filter_snapshot_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    notice_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     is_active: Mapped[bool] = mapped_column(default=True)
     last_send_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_send_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -149,6 +150,7 @@ class MailSchedule(Base):
     subject: Mapped[str] = mapped_column(String(500))
     recipients_json: Mapped[list] = mapped_column(JSON, default=list)
     filter_snapshot_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    notice_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     frequency: Mapped[str] = mapped_column(String(50), default="daily")
     send_time: Mapped[str] = mapped_column(String(10), default="09:00")
     enabled: Mapped[bool] = mapped_column(default=True)
@@ -158,6 +160,18 @@ class MailSchedule(Base):
     last_sent_marker_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     patrol_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class MailNoticeConfig(Base):
+    """Singleton settings for the mail header notice box (docs + website link)."""
+    __tablename__ = "mail_notice_config"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    doc_text: Mapped[str] = mapped_column(Text, default="")
+    website_url: Mapped[str] = mapped_column(String(2048), default="")
+    include_on_send: Mapped[bool] = mapped_column(default=False)
+    include_on_template: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

@@ -11,6 +11,7 @@ import {
 } from "../api/client";
 import type { CrawlMethod } from "../types";
 import { clampInput, INPUT_LIMITS } from "../inputLimits";
+import { emailListError, parseEmailList } from "../mail/emailValidation";
 
 export function CrawlMethodReviewList({ highlightId, onOpenMethod }: { highlightId?: number | null; onOpenMethod?: (id: number) => void }) {
   const qc = useQueryClient();
@@ -26,6 +27,10 @@ export function CrawlMethodReviewList({ highlightId, onOpenMethod }: { highlight
   const methods = useMemo(() => pending.data ?? [], [pending.data]);
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
   const allSelected = methods.length > 0 && methods.every((method) => selected.has(method.id));
+  const reminderRecipientsError = useMemo(
+    () => emailListError(parseEmailList(recipientsText)),
+    [recipientsText],
+  );
 
   const approveMut = useMutation({ mutationFn: approveDiscoveryMethods });
   const deleteMut = useMutation({ mutationFn: deletePendingDiscoveryMethods });
@@ -90,15 +95,16 @@ export function CrawlMethodReviewList({ highlightId, onOpenMethod }: { highlight
 
   async function saveReminderConfig(enabled?: boolean) {
     const current = reminder.data;
-    const recipients = recipientsText
-      .split(/[,;\n]/)
-      .map((item) => item.trim())
-      .filter(Boolean);
+    const parsed = parseEmailList(recipientsText);
+    if (reminderRecipientsError) {
+      setSummary({ text: reminderRecipientsError, tone: "danger" });
+      return;
+    }
     try {
       const next = await reminderMut.mutateAsync({
         enabled: enabled ?? current?.enabled ?? false,
         interval_minutes: current?.interval_minutes ?? 1440,
-        recipients,
+        recipients: parsed.valid,
       });
       setRecipientsText(next.recipients.join(", "));
       setSummary({ text: "审核提醒设置已保存", tone: "success" });
@@ -193,14 +199,24 @@ export function CrawlMethodReviewList({ highlightId, onOpenMethod }: { highlight
                 <option value={1440}>24 小时</option>
               </select>
             </label>
-            <input
-              style={recipientInput}
-              placeholder="管理员邮箱，多个用逗号分隔"
-              value={recipientsText}
-              maxLength={INPUT_LIMITS.emailList}
-              onChange={(event) => setRecipientsText(clampInput(event.target.value, INPUT_LIMITS.emailList))}
-            />
-            <button type="button" style={btnGhost} disabled={reminderMut.isPending} onClick={() => saveReminderConfig()}>
+            <div style={{ display: "grid", gap: 4, flex: 1, minWidth: 220 }}>
+              <input
+                style={{ ...recipientInput, width: "100%" }}
+                placeholder="管理员邮箱，多个用逗号分隔"
+                value={recipientsText}
+                maxLength={INPUT_LIMITS.emailList}
+                onChange={(event) => setRecipientsText(clampInput(event.target.value, INPUT_LIMITS.emailList))}
+              />
+              {reminderRecipientsError && (
+                <span style={{ fontSize: 12, color: "#b42318" }}>{reminderRecipientsError}</span>
+              )}
+            </div>
+            <button
+              type="button"
+              style={btnGhost}
+              disabled={reminderMut.isPending || Boolean(reminderRecipientsError)}
+              onClick={() => saveReminderConfig()}
+            >
               保存提醒
             </button>
             <button type="button" style={btnGhost} disabled={sendReminderMut.isPending || methods.length === 0} onClick={sendNow}>

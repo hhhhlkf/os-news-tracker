@@ -1,31 +1,89 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchItems, type ItemQueryParams } from "../api/client";
 import {
   buildMailFilterSnapshot,
   createMailTemplate,
+  fetchMailNoticeConfig,
   previewImmediateMail,
   sendImmediateMail,
+  updateMailNoticeConfig,
 } from "../mail/api";
 import type { MailImmediateSendRequest, MailPreviewResponse, MailProviderKind, MailTemplate } from "../mail/types";
 import { ImportanceBadge } from "./ImportanceBadge";
+import { MailNoticeBox } from "./MailNoticeBox";
 import { formatDateYmd, HotspotTags, SourceCta, SourceQualityMeta, TechHighlightsList } from "./ItemMetaBlocks";
 import { clampInput, INPUT_LIMITS } from "../inputLimits";
+import { emailListError, parseEmailList } from "../mail/emailValidation";
 
 export function MailImmediateSendPanel(props: {
   homeFilters: ItemQueryParams;
   onTemplateSaved?: (template: MailTemplate) => void;
 }) {
   const { homeFilters, onTemplateSaved } = props;
+  const queryClient = useQueryClient();
   const [subject, setSubject] = useState("技术新闻筛选简报");
   const [recipientsText, setRecipientsText] = useState("");
   const [mailProvider, setMailProvider] = useState<MailProviderKind>("tof4");
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [previewData, setPreviewData] = useState<MailPreviewResponse | null>(null);
   const [previewHeight, setPreviewHeight] = useState<number>(620);
+  const [docText, setDocText] = useState("");
+  const [websiteUrl, setWebsiteUrl] = useState("");
+  const [includeNotice, setIncludeNotice] = useState(false);
   const leftColumnRef = useRef<HTMLDivElement | null>(null);
+  const noticeHydratedRef = useRef(false);
 
   const filterSnapshot = useMemo(() => buildMailFilterSnapshot(homeFilters), [homeFilters]);
+
+  const noticeQuery = useQuery({
+    queryKey: ["mail-notice-config"],
+    queryFn: fetchMailNoticeConfig,
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (!noticeQuery.data || noticeHydratedRef.current) return;
+    noticeHydratedRef.current = true;
+    setDocText(noticeQuery.data.doc_text ?? "");
+    setWebsiteUrl(noticeQuery.data.website_url ?? "");
+    setIncludeNotice(
+      Boolean(noticeQuery.data.include_on_send || noticeQuery.data.include_on_template),
+    );
+  }, [noticeQuery.data]);
+
+  const noticeSaveMutation = useMutation({
+    mutationFn: updateMailNoticeConfig,
+    onSuccess: (data) => {
+      queryClient.setQueryData(["mail-notice-config"], data);
+    },
+    onError: (error) => {
+      setStatusMessage(error instanceof Error ? error.message : "说明配置保存失败");
+    },
+  });
+
+  function persistNotice(patch: {
+    doc_text?: string;
+    website_url?: string;
+    include_notice?: boolean;
+  }) {
+    const include = patch.include_notice ?? includeNotice;
+    noticeSaveMutation.mutate({
+      doc_text: patch.doc_text ?? docText,
+      website_url: patch.website_url ?? websiteUrl,
+      include_on_send: include,
+      include_on_template: include,
+    });
+  }
+
+  const liveNotice = useMemo(() => {
+    const text = docText.trim();
+    const url = websiteUrl.trim();
+    if (!includeNotice || (!text && !url)) return null;
+    return { doc_text: text, website_url: url };
+  }, [docText, websiteUrl, includeNotice]);
+
+  const previewNotice = previewData?.notice ?? liveNotice;
 
   const estimateParams = useMemo(
     () => ({
@@ -42,18 +100,16 @@ export function MailImmediateSendPanel(props: {
     retry: false,
   });
 
-  const recipients = useMemo(
-    () =>
-      recipientsText
-        .split(/[\n,;，；\s]+/)
-        .map((value) => value.trim())
-        .filter(Boolean),
-    [recipientsText],
+  const parsedRecipients = useMemo(() => parseEmailList(recipientsText), [recipientsText]);
+  const recipients = parsedRecipients.valid;
+  const recipientsError = useMemo(
+    () => emailListError(parsedRecipients),
+    [parsedRecipients],
   );
 
   useEffect(() => {
     setPreviewData(null);
-  }, [homeFilters, subject, recipientsText, mailProvider]);
+  }, [homeFilters, subject, recipientsText, mailProvider, docText, websiteUrl, includeNotice]);
 
   useEffect(() => {
     const element = leftColumnRef.current;
@@ -77,10 +133,33 @@ export function MailImmediateSendPanel(props: {
       observer.disconnect();
       window.removeEventListener("resize", updateHeight);
     };
-  }, [estimateQuery.data?.total, recipientsText, subject, statusMessage, previewData?.item_count, homeFilters, mailProvider]);
+  }, [
+    estimateQuery.data?.total,
+    recipientsText,
+    subject,
+    statusMessage,
+    previewData?.item_count,
+    homeFilters,
+    mailProvider,
+    docText,
+    websiteUrl,
+    includeNotice,
+  ]);
+
+  async function flushNoticeConfig() {
+    await updateMailNoticeConfig({
+      doc_text: docText,
+      website_url: websiteUrl,
+      include_on_send: includeNotice,
+      include_on_template: includeNotice,
+    });
+  }
 
   const previewMutation = useMutation({
-    mutationFn: async (request: MailImmediateSendRequest) => previewImmediateMail(request),
+    mutationFn: async (request: MailImmediateSendRequest) => {
+      await flushNoticeConfig();
+      return previewImmediateMail(request);
+    },
     onSuccess: (data) => {
       setStatusMessage(`预览已生成，共 ${data.item_count} 条，通道：${data.provider.toUpperCase()}。`);
       setPreviewData(data);
@@ -91,7 +170,10 @@ export function MailImmediateSendPanel(props: {
   });
 
   const sendMutation = useMutation({
-    mutationFn: async (request: MailImmediateSendRequest) => sendImmediateMail(request),
+    mutationFn: async (request: MailImmediateSendRequest) => {
+      await flushNoticeConfig();
+      return sendImmediateMail(request);
+    },
     onSuccess: (data) => {
       setStatusMessage(
         data.status === "sent"
@@ -107,16 +189,22 @@ export function MailImmediateSendPanel(props: {
   });
 
   const saveTemplateMutation = useMutation({
-    mutationFn: async () =>
-      createMailTemplate({
+    mutationFn: async () => {
+      await flushNoticeConfig();
+      return createMailTemplate({
         name: subject.trim() || "未命名模板",
         subject: subject.trim() || "未命名模板",
         recipients,
         filter_snapshot: filterSnapshot,
         is_active: true,
-      }),
+      });
+    },
     onSuccess: (template) => {
-      setStatusMessage(`模板已保存：${template.name}`);
+      setStatusMessage(
+        includeNotice
+          ? `模板已保存：${template.name}（已附带说明框）`
+          : `模板已保存：${template.name}`,
+      );
       onTemplateSaved?.(template);
     },
     onError: (error) => {
@@ -130,8 +218,8 @@ export function MailImmediateSendPanel(props: {
     filter_snapshot: filterSnapshot,
     provider: mailProvider,
   };
-  const canSend = recipients.length > 0 && subject.trim().length > 0;
-  const canSaveTemplate = subject.trim().length > 0;
+  const canSend = recipients.length > 0 && !recipientsError && subject.trim().length > 0;
+  const canSaveTemplate = subject.trim().length > 0 && !recipientsError;
   const relativeWindow = useMemo(() => {
     if (filterSnapshot.published_after_mode !== "relative") return null;
     if (filterSnapshot.published_after_value === "24h") return "最近 24h";
@@ -287,27 +375,27 @@ export function MailImmediateSendPanel(props: {
           </div>
         </section>
 
-        <section style={{ border: "1px solid #eaecf0", borderRadius: 12, padding: 14, background: "#fff" }}>
-          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: "#667085", fontWeight: 700, marginBottom: 10 }}>
+        <section style={{ border: "1px solid #eaecf0", borderRadius: 12, padding: "10px 12px", background: "#fff" }}>
+          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: "#667085", fontWeight: 700, marginBottom: 8 }}>
             发送设置
           </div>
-          <div style={{ display: "grid", gap: 10 }}>
+          <div style={{ display: "grid", gap: 8 }}>
             <input
               value={subject}
               maxLength={INPUT_LIMITS.subject}
               onChange={(e) => setSubject(clampInput(e.target.value, INPUT_LIMITS.subject))}
               placeholder="邮件标题"
-              style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "10px 12px", fontSize: 13, color: "#344054" }}
+              style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "8px 10px", fontSize: 13, color: "#344054" }}
             />
             <textarea
               value={recipientsText}
               maxLength={INPUT_LIMITS.emailListMultiline}
               onChange={(e) => setRecipientsText(clampInput(e.target.value, INPUT_LIMITS.emailListMultiline))}
               placeholder="收件人邮箱，支持换行、逗号或空格分隔"
-              rows={4}
-              style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "10px 12px", fontSize: 13, color: "#344054", resize: "vertical" }}
+              rows={3}
+              style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "8px 10px", fontSize: 13, color: "#344054", resize: "vertical" }}
             />
-            <div style={{ display: "grid", gap: 6 }}>
+            <div style={{ display: "grid", gap: 5 }}>
               <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>发送通道</span>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {([
@@ -323,7 +411,7 @@ export function MailImmediateSendPanel(props: {
                       style={{
                         border: active ? "1px solid #175cd3" : "1px solid #d0d5dd",
                         borderRadius: 999,
-                        padding: "8px 12px",
+                        padding: "6px 11px",
                         fontSize: 12,
                         fontWeight: 700,
                         color: active ? "#175cd3" : "#475467",
@@ -337,10 +425,55 @@ export function MailImmediateSendPanel(props: {
                 })}
               </div>
             </div>
+            <div
+              style={{
+                borderTop: "1px solid #eaecf0",
+                paddingTop: 8,
+                display: "grid",
+                gap: 7,
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>
+                说明文档与网站链接
+                <span style={{ marginLeft: 8, fontWeight: 400, color: "#98a2b3" }}>题头下、新闻前</span>
+              </div>
+              <textarea
+                value={docText}
+                maxLength={INPUT_LIMITS.mailDocText}
+                onChange={(e) => setDocText(clampInput(e.target.value, INPUT_LIMITS.mailDocText))}
+                onBlur={() => persistNotice({ doc_text: docText })}
+                placeholder="说明文档内容，例如使用说明、订阅须知"
+                rows={2}
+                style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "8px 10px", fontSize: 13, color: "#344054", resize: "vertical" }}
+              />
+              <input
+                value={websiteUrl}
+                maxLength={INPUT_LIMITS.mailWebsiteUrl}
+                onChange={(e) => setWebsiteUrl(clampInput(e.target.value, INPUT_LIMITS.mailWebsiteUrl))}
+                onBlur={() => persistNotice({ website_url: websiteUrl })}
+                placeholder="网站链接，例如 https://example.com/docs"
+                style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "8px 10px", fontSize: 13, color: "#344054" }}
+              />
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#344054", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={includeNotice}
+                  onChange={(e) => {
+                    const next = e.target.checked;
+                    setIncludeNotice(next);
+                    persistNotice({ include_notice: next });
+                  }}
+                />
+                附加此说明框
+              </label>
+              {noticeSaveMutation.isPending && (
+                <div style={{ fontSize: 12, color: "#98a2b3" }}>说明配置保存中…</div>
+              )}
+            </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               <button
                 onClick={() => previewMutation.mutate(requestPayload)}
-                disabled={previewMutation.isPending}
+                disabled={previewMutation.isPending || Boolean(recipientsError)}
                 style={{
                   border: "1px solid #b2ddff",
                   borderRadius: 10,
@@ -349,8 +482,8 @@ export function MailImmediateSendPanel(props: {
                   fontWeight: 700,
                   color: "#175cd3",
                   background: "linear-gradient(180deg, #f5faff 0%, #eff8ff 100%)",
-                  cursor: previewMutation.isPending ? "wait" : "pointer",
-                  opacity: previewMutation.isPending ? 0.7 : 1,
+                  cursor: previewMutation.isPending || recipientsError ? "not-allowed" : "pointer",
+                  opacity: previewMutation.isPending || recipientsError ? 0.55 : 1,
                   boxShadow: "inset 0 1px 0 rgba(255,255,255,0.9)",
                 }}
               >
@@ -393,11 +526,13 @@ export function MailImmediateSendPanel(props: {
                 {saveTemplateMutation.isPending ? "保存中..." : "保存为模板"}
               </button>
             </div>
-            {!canSend && (
+            {recipientsError ? (
+              <div style={{ fontSize: 12, color: "#b42318" }}>{recipientsError}</div>
+            ) : !canSend ? (
               <div style={{ fontSize: 12, color: "#667085" }}>
-                立即发送前请至少填写一个收件人邮箱。
+                立即发送前请至少填写一个有效收件人邮箱。
               </div>
-            )}
+            ) : null}
             {statusMessage && (
               <div style={{ display: "flex", alignItems: "flex-start", gap: 6, fontSize: 12, color: statusMessage.includes("失败") ? "#b42318" : "#027a48" }}>
                 <span style={{ flex: 1 }}>{statusMessage}</span>
@@ -440,7 +575,8 @@ export function MailImmediateSendPanel(props: {
             {previewData ? `共 ${previewData.item_count} 条，准备发送给 ${previewData.recipients.length || 0} 个收件人。` : "点击“生成预览”后展示邮件内容。"}
           </div>
         </div>
-        <div style={{ padding: 14, display: "grid", gap: 12, minHeight: 0, overflowY: "auto" }}>
+        <div style={{ padding: 14, display: "grid", gap: 12, minHeight: 0, overflowY: "auto", alignContent: "start" }}>
+          <MailNoticeBox notice={previewNotice} />
           {previewData?.items.length ? (
             previewData.items.map((item, index) => (
               <div key={`${item.source_url}-${index}`} style={{ background: "#fff", border: "1px solid #eaecf0", borderRadius: 12, padding: "14px 16px" }}>

@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from app.enums import InfoType, Importance
+from app.mail.validation import normalize_recipients
 
 
 class RawItem(BaseModel):
@@ -140,12 +141,36 @@ class MailFilterSnapshot(BaseModel):
     fetched_before: str | None = None
 
 
+class MailNoticeBlock(BaseModel):
+    doc_text: str = ""
+    website_url: str = ""
+
+
+class MailNoticeConfigResponse(BaseModel):
+    doc_text: str = ""
+    website_url: str = ""
+    include_on_send: bool = False
+    include_on_template: bool = False
+
+
+class MailNoticeConfigUpdateRequest(BaseModel):
+    doc_text: str | None = None
+    website_url: str | None = None
+    include_on_send: bool | None = None
+    include_on_template: bool | None = None
+
+
 class MailTemplateCreateRequest(BaseModel):
     name: str
     subject: str
     recipients: list[str] = Field(default_factory=list)
     filter_snapshot: MailFilterSnapshot = Field(default_factory=MailFilterSnapshot)
     is_active: bool = True
+
+    @field_validator("recipients", mode="before")
+    @classmethod
+    def _validate_recipients(cls, value: object) -> list[str]:
+        return normalize_recipients(value if isinstance(value, list) else [])
 
 
 class MailTemplateResponse(BaseModel):
@@ -154,6 +179,7 @@ class MailTemplateResponse(BaseModel):
     subject: str
     recipients: list[str] = Field(default_factory=list)
     filter_snapshot: MailFilterSnapshot
+    notice: MailNoticeBlock | None = None
     is_active: bool
     last_send_at: datetime | None = None
     last_send_status: str | None = None
@@ -169,6 +195,13 @@ class MailTemplateUpdateRequest(BaseModel):
     filter_snapshot: MailFilterSnapshot | None = None
     is_active: bool | None = None
 
+    @field_validator("recipients", mode="before")
+    @classmethod
+    def _validate_recipients(cls, value: object) -> list[str] | None:
+        if value is None:
+            return None
+        return normalize_recipients(value if isinstance(value, list) else [])
+
 
 class MailTemplateActionRequest(BaseModel):
     provider: MailProviderKind | None = None
@@ -179,6 +212,11 @@ class MailImmediatePreviewRequest(BaseModel):
     recipients: list[str] = Field(default_factory=list)
     filter_snapshot: MailFilterSnapshot = Field(default_factory=MailFilterSnapshot)
     provider: MailProviderKind | None = None
+
+    @field_validator("recipients", mode="before")
+    @classmethod
+    def _validate_recipients(cls, value: object) -> list[str]:
+        return normalize_recipients(value if isinstance(value, list) else [])
 
 
 class MailPreviewItem(BaseModel):
@@ -204,6 +242,7 @@ class MailPreviewResponse(BaseModel):
     item_count: int
     items: list[MailPreviewItem] = Field(default_factory=list)
     rendered_html: str
+    notice: MailNoticeBlock | None = None
 
 
 class MailImmediateSendResponse(BaseModel):
@@ -227,6 +266,11 @@ class MailScheduleCreateRequest(BaseModel):
     enabled: bool = True
     template_id: int | None = None
 
+    @field_validator("recipients", mode="before")
+    @classmethod
+    def _validate_recipients(cls, value: object) -> list[str]:
+        return normalize_recipients(value if isinstance(value, list) else [])
+
 
 class MailScheduleUpdateRequest(BaseModel):
     name: str | None = None
@@ -236,6 +280,13 @@ class MailScheduleUpdateRequest(BaseModel):
     frequency: MailFrequency | None = None
     send_time: str | None = None
     enabled: bool | None = None
+
+    @field_validator("recipients", mode="before")
+    @classmethod
+    def _validate_recipients(cls, value: object) -> list[str] | None:
+        if value is None:
+            return None
+        return normalize_recipients(value if isinstance(value, list) else [])
 
 
 class MailScheduleResponse(BaseModel):

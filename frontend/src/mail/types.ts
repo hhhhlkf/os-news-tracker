@@ -27,12 +27,32 @@ export interface MailFilterSnapshot {
   fetched_before?: string | null;
 }
 
+export interface MailNoticeBlock {
+  doc_text: string;
+  website_url: string;
+}
+
+export interface MailNoticeConfig {
+  doc_text: string;
+  website_url: string;
+  include_on_send: boolean;
+  include_on_template: boolean;
+}
+
+export interface MailNoticeConfigUpdateRequest {
+  doc_text?: string;
+  website_url?: string;
+  include_on_send?: boolean;
+  include_on_template?: boolean;
+}
+
 export interface MailTemplate {
   id: number;
   name: string;
   subject: string;
   recipients: string[];
   filter_snapshot: MailFilterSnapshot;
+  notice?: MailNoticeBlock | null;
   is_active: boolean;
   last_send_at: string | null;
   last_send_status: string | null;
@@ -84,6 +104,7 @@ export interface MailPreviewResponse {
   item_count: number;
   items: MailPreviewItem[];
   rendered_html: string;
+  notice?: MailNoticeBlock | null;
 }
 
 export interface MailImmediateSendRequest {

@@ -11,6 +11,9 @@ import {
 import type { MailFilterSnapshot, MailPreviewResponse, MailProviderKind, MailTemplate } from "../mail/types";
 import { formatDateYmd, HotspotTags, SourceCta, SourceQualityMeta, TechHighlightsList } from "./ItemMetaBlocks";
 import { clampInput, INPUT_LIMITS } from "../inputLimits";
+import { emailListError, parseEmailList } from "../mail/emailValidation";
+import { DeleteIconButton } from "./DeleteIconButton";
+import { MailNoticeBox } from "./MailNoticeBox";
 
 function formatMultiFilter(raw: string | null | undefined): string {
   if (!raw) return "";
@@ -133,13 +136,11 @@ export function MailTemplateListPanel(props: {
     setStatusMessage(null);
   }, [selectedId]);
 
-  const editRecipientList = useMemo(
-    () =>
-      editRecipients
-        .split(/[\n,;，；\s]+/)
-        .map((value) => value.trim())
-        .filter(Boolean),
-    [editRecipients],
+  const parsedEditRecipients = useMemo(() => parseEmailList(editRecipients), [editRecipients]);
+  const editRecipientList = parsedEditRecipients.valid;
+  const editRecipientsError = useMemo(
+    () => emailListError(parsedEditRecipients),
+    [parsedEditRecipients],
   );
 
   const startEditing = () => {
@@ -178,13 +179,17 @@ export function MailTemplateListPanel(props: {
   });
 
   const updateMutation = useMutation({
-    mutationFn: async (templateId: number) =>
-      updateMailTemplate(templateId, {
+    mutationFn: async (templateId: number) => {
+      if (editRecipientsError) {
+        throw new Error(editRecipientsError);
+      }
+      return updateMailTemplate(templateId, {
         name: editName.trim() || "未命名模板",
         subject: editSubject.trim() || "未命名模板",
         recipients: editRecipientList,
         is_active: editActive,
-      }),
+      });
+    },
     onSuccess: (template) => {
       setStatusMessage(`模板已更新：${template.name}`);
       setEditing(false);
@@ -260,6 +265,7 @@ export function MailTemplateListPanel(props: {
               </div>
             </div>
             <div style={{ overflowY: "auto", minHeight: 0, display: "grid", gap: 10, alignContent: "start" }}>
+              <MailNoticeBox notice={previewData.notice} />
               {previewData.items.length === 0 ? (
                 <div style={{ border: "1px dashed #d0d5dd", color: "#667085", borderRadius: 12, padding: 14, fontSize: 13 }}>
                   当前筛选没有匹配到新闻。
@@ -318,28 +324,14 @@ export function MailTemplateListPanel(props: {
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
                       <div style={{ fontWeight: 800, color: "#101828", fontSize: 14, wordBreak: "break-word" }}>{template.name}</div>
-                      <button
+                      <DeleteIconButton
                         onClick={(e) => {
                           e.stopPropagation();
                           handleDelete(template);
                         }}
                         disabled={deleteMutation.isPending}
                         title="删除模板"
-                        aria-label="删除模板"
-                        style={{
-                          border: "1px solid #f0c6c2",
-                          background: "#fff",
-                          color: "#b42318",
-                          borderRadius: 8,
-                          cursor: deleteMutation.isPending ? "wait" : "pointer",
-                          fontSize: 13,
-                          lineHeight: 1,
-                          padding: "4px 7px",
-                          flexShrink: 0,
-                        }}
-                      >
-                        🗑
-                      </button>
+                      />
                     </div>
                     <div style={{ fontSize: 12, color: "#667085", lineHeight: 1.45 }}>{summarizeFilter(template.filter_snapshot)}</div>
                     <div style={{ fontSize: 12, color: "#667085" }}>
@@ -412,6 +404,9 @@ export function MailTemplateListPanel(props: {
                       placeholder="收件人邮箱，支持换行、逗号或空格分隔"
                       style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "8px 10px", fontSize: 13, color: "#344054", resize: "vertical" }}
                     />
+                    {editRecipientsError && (
+                      <span style={{ fontSize: 12, color: "#b42318" }}>{editRecipientsError}</span>
+                    )}
                   </label>
                   <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, color: "#475467", fontWeight: 700 }}>
                     <input type="checkbox" checked={editActive} onChange={(e) => setEditActive(e.target.checked)} />
@@ -419,7 +414,11 @@ export function MailTemplateListPanel(props: {
                   </label>
                   <div style={{ fontSize: 11, color: "#98a2b3" }}>筛选条件沿用保存时的快照，如需修改请在「立即发送」页重新保存。</div>
                   <div style={{ display: "flex", gap: 8 }}>
-                    <button onClick={() => updateMutation.mutate(selected.id)} disabled={updateMutation.isPending} style={btn("#175cd3", updateMutation.isPending)}>
+                    <button
+                      onClick={() => updateMutation.mutate(selected.id)}
+                      disabled={updateMutation.isPending || Boolean(editRecipientsError)}
+                      style={btn("#175cd3", updateMutation.isPending || Boolean(editRecipientsError))}
+                    >
                       {updateMutation.isPending ? "保存中..." : "保存修改"}
                     </button>
                     <button
