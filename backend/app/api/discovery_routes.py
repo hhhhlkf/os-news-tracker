@@ -9,7 +9,7 @@ from enum import Enum
 import logging
 
 from fastapi import APIRouter, Body, Depends, HTTPException
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, field_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
@@ -228,6 +228,15 @@ class ReviewReminderUpdateRequest(BaseModel):
     interval_minutes: int | None = None
     recipients: list[str] | None = None
 
+    @field_validator("recipients", mode="before")
+    @classmethod
+    def _validate_recipients(cls, value: object) -> list[str] | None:
+        if value is None:
+            return None
+        from app.mail.validation import normalize_recipients
+
+        return normalize_recipients(value if isinstance(value, list) else [])
+
 
 def _method_quality_fields(method: CrawlMethod) -> dict[str, Any]:
     overall_score = _method_overall_score(method)
@@ -360,7 +369,7 @@ def update_review_reminder_config(
     if body.interval_minutes is not None:
         config.interval_minutes = max(5, min(body.interval_minutes, 10080))
     if body.recipients is not None:
-        config.recipients_json = [recipient.strip() for recipient in body.recipients if recipient.strip()]
+        config.recipients_json = list(body.recipients)
     config.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(config)

@@ -17,6 +17,10 @@ export const INPUT_LIMITS = {
   emailListMultiline: 1000,
   /** 邮件标题 */
   subject: 200,
+  /** 邮件说明文档 */
+  mailDocText: 2000,
+  /** 邮件网站链接 */
+  mailWebsiteUrl: 2048,
   /** JSON path / 字段名等短表达式 */
   pathExpr: 300,
   /** 管理密码 */

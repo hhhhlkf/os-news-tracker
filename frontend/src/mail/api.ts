@@ -5,6 +5,8 @@ import type {
   MailDeliveryLog,
   MailImmediateSendRequest,
   MailImmediateSendResponse,
+  MailNoticeConfig,
+  MailNoticeConfigUpdateRequest,
   MailPreviewResponse,
   MailProviderKind,
   MailSchedule,
@@ -148,6 +150,24 @@ export function buildMailFilterSnapshot(params: ItemQueryParams): MailTemplateCr
         : null,
     fetched_before: params.fetched_before ?? null,
   };
+}
+
+export async function fetchMailNoticeConfig(): Promise<MailNoticeConfig> {
+  const r = await fetch(`${BASE}/mail/notice-config`, {
+    headers: { ...authHeaders() },
+  });
+  return expectOk<MailNoticeConfig>(r, "failed to load mail notice config");
+}
+
+export async function updateMailNoticeConfig(
+  request: MailNoticeConfigUpdateRequest,
+): Promise<MailNoticeConfig> {
+  const r = await fetch(`${BASE}/mail/notice-config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(request),
+  });
+  return expectOk<MailNoticeConfig>(r, "failed to update mail notice config");
 }
 
 export async function fetchMailTemplates(): Promise<MailTemplate[]> {

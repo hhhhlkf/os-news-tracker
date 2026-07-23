@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { ItemSummary } from "../types";
 import { ItemCard } from "./ItemCard";
 
@@ -34,18 +35,56 @@ interface Props {
   page: number;
   pageSize: number;
   isLoading?: boolean;
+  /** True while the next page is loading but previous items may still be shown. */
+  isFetching?: boolean;
   emptyMessage?: string;
   sortBy?: "published_at" | "fetched_at";
   onOpen: (id: number) => void;
   onPageChange: (page: number) => void;
 }
 
-export function ItemList({ items, total, page, pageSize, isLoading, emptyMessage, sortBy, onOpen, onPageChange }: Props) {
-  if (isLoading) {
+export function ItemList({
+  items,
+  total,
+  page,
+  pageSize,
+  isLoading,
+  isFetching,
+  emptyMessage,
+  sortBy,
+  onOpen,
+  onPageChange,
+}: Props) {
+  const directionRef = useRef<1 | -1>(1);
+  const [enterDir, setEnterDir] = useState<1 | -1>(1);
+  const [enterKey, setEnterKey] = useState(`${page}:init`);
+  const prevSettledRef = useRef({ page, headId: items[0]?.id ?? null, len: items.length });
+
+  const contentKey = `${page}:${items[0]?.id ?? "empty"}:${items.length}`;
+  const busy = Boolean(isFetching);
+
+  useLayoutEffect(() => {
+    if (busy) return;
+    const prev = prevSettledRef.current;
+    const headId = items[0]?.id ?? null;
+    const changed = prev.page !== page || prev.headId !== headId || prev.len !== items.length;
+    if (!changed) return;
+    setEnterDir(directionRef.current);
+    setEnterKey(contentKey);
+    prevSettledRef.current = { page, headId, len: items.length };
+  }, [busy, contentKey, items, page]);
+
+  function changePage(next: number) {
+    if (next === page) return;
+    directionRef.current = next > page ? 1 : -1;
+    onPageChange(next);
+  }
+
+  if (isLoading && items.length === 0) {
     return <div style={{ color: "#667085", padding: 20 }}>正在加载条目…</div>;
   }
 
-  if (total === 0) {
+  if (total === 0 && !busy) {
     return (
       <div
         style={{
@@ -62,79 +101,137 @@ export function ItemList({ items, total, page, pageSize, isLoading, emptyMessage
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-
   const pageNumbers = buildPageNumbers(page, totalPages);
+  const enterClass = enterDir >= 0 ? "news-page-enter-next" : "news-page-enter-prev";
 
   return (
     <div style={{ flex: 1 }}>
-      <div style={{ color: "#667085", marginBottom: 10 }}>共 {total} 条</div>
-      {items.map((item) => (
-        <ItemCard key={item.id} item={item} onClick={() => onOpen(item.id)} sortBy={sortBy} />
-      ))}
-      <div style={{
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
-        gap: 8,
-        marginTop: 16,
-        padding: "12px 0",
-        borderTop: "1px solid #eaecf0",
-        flexWrap: "wrap",
-      }}>
-        <button
-          onClick={() => onPageChange(page - 1)}
-          disabled={page <= 1}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+          marginBottom: 10,
+          color: "#667085",
+          minHeight: 20,
+        }}
+      >
+        <div>共 {total} 条</div>
+        <div
           style={{
-            border: "1px solid #d0d5dd",
-            borderRadius: 8,
-            padding: "8px 14px",
-            background: "#fff",
-            color: page <= 1 ? "#98a2b3" : "#344054",
-            fontSize: 13,
-            cursor: page <= 1 ? "default" : "pointer",
+            fontSize: 12,
+            color: "#98a2b3",
+            opacity: busy ? 1 : 0,
+            transition: "opacity 160ms ease",
           }}
+        >
+          加载中…
+        </div>
+      </div>
+
+      <div
+        className="news-page-list"
+        style={{
+          opacity: busy ? 0.42 : 1,
+          transform: busy ? `translate3d(${directionRef.current * -10}px, 0, 0)` : "translate3d(0, 0, 0)",
+          filter: busy ? "saturate(0.9)" : "none",
+          transition: "opacity 200ms ease, transform 240ms cubic-bezier(0.22, 1, 0.36, 1), filter 200ms ease",
+          pointerEvents: busy ? "none" : "auto",
+          willChange: "opacity, transform",
+        }}
+      >
+        <div
+          key={enterKey}
+          className={enterClass}
+          style={{
+            animation: busy
+              ? "none"
+              : `${enterDir >= 0 ? "news-page-enter-next" : "news-page-enter-prev"} 320ms cubic-bezier(0.22, 1, 0.36, 1)`,
+          }}
+        >
+          {items.map((item) => (
+            <ItemCard key={item.id} item={item} onClick={() => onOpen(item.id)} sortBy={sortBy} />
+          ))}
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          gap: 8,
+          marginTop: 16,
+          padding: "12px 0",
+          borderTop: "1px solid #eaecf0",
+          flexWrap: "wrap",
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => changePage(page - 1)}
+          disabled={page <= 1}
+          style={navButtonStyle(page <= 1)}
         >
           上一页
         </button>
         {pageNumbers.map((item, idx) =>
           item === "ellipsis" ? (
-            <span key={`ellipsis-${idx}`} style={{ padding: "0 2px", color: "#98a2b3", fontSize: 13 }}>…</span>
+            <span key={`ellipsis-${idx}`} style={{ padding: "0 2px", color: "#98a2b3", fontSize: 13 }}>
+              …
+            </span>
           ) : (
             <button
+              type="button"
               key={item}
-              onClick={() => onPageChange(item)}
-              style={{
-                minWidth: 36,
-                height: 36,
-                border: item === page ? "1px solid #175cd3" : "1px solid #d0d5dd",
-                borderRadius: 8,
-                background: item === page ? "#175cd3" : "#fff",
-                color: item === page ? "#fff" : "#344054",
-                fontSize: 13,
-                fontWeight: item === page ? 700 : 400,
-                cursor: "pointer",
-              }}
+              onClick={() => changePage(item)}
+              style={pageButtonStyle(item === page)}
             >
               {item}
             </button>
           ),
         )}
         <button
-          onClick={() => onPageChange(page + 1)}
+          type="button"
+          onClick={() => changePage(page + 1)}
           disabled={page >= totalPages}
-          style={{
-            border: "1px solid #d0d5dd",
-            borderRadius: 8,
-            padding: "8px 14px",
-            background: "#fff",
-            color: page >= totalPages ? "#98a2b3" : "#344054",
-            fontSize: 13,
-            cursor: page >= totalPages ? "default" : "pointer",
-          }}
+          style={navButtonStyle(page >= totalPages)}
         >
           下一页
         </button>
       </div>
     </div>
   );
+}
+
+function navButtonStyle(disabled: boolean): CSSProperties {
+  return {
+    border: "1px solid #d0d5dd",
+    borderRadius: 8,
+    padding: "8px 14px",
+    background: "#fff",
+    color: disabled ? "#98a2b3" : "#344054",
+    fontSize: 13,
+    cursor: disabled ? "default" : "pointer",
+    transition: "background 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease",
+    opacity: disabled ? 0.75 : 1,
+  };
+}
+
+function pageButtonStyle(active: boolean): CSSProperties {
+  return {
+    minWidth: 36,
+    height: 36,
+    border: active ? "1px solid #175cd3" : "1px solid #d0d5dd",
+    borderRadius: 8,
+    background: active ? "#175cd3" : "#fff",
+    color: active ? "#fff" : "#344054",
+    fontSize: 13,
+    fontWeight: active ? 700 : 400,
+    cursor: "pointer",
+    transition: "background 180ms ease, border-color 180ms ease, color 180ms ease, transform 160ms ease",
+    transform: active ? "translateY(-1px)" : "none",
+    boxShadow: active ? "0 4px 10px rgba(23, 92, 211, 0.18)" : "none",
+  };
 }

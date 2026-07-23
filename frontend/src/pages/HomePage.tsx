@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { fetchFacets, fetchItems, listDiscoveryMethods } from "../api/client";
 import { FacetSidebar } from "../components/FacetSidebar";
 import { ItemList } from "../components/ItemList";
@@ -155,6 +155,7 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
   const itemsQuery = useQuery({
     queryKey: ["items", params],
     queryFn: () => fetchItems(params),
+    placeholderData: keepPreviousData,
     retry: false,
   });
   const facetsQuery = useQuery({
@@ -540,6 +541,11 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
               page={page}
               pageSize={PAGE_SIZE}
               isLoading={mode === "live" && itemsQuery.isLoading}
+              isFetching={
+                mode === "live" &&
+                (itemsQuery.isFetching || itemsQuery.isPlaceholderData) &&
+                !itemsQuery.isLoading
+              }
               emptyMessage="没有匹配的条目，试试放宽搜索词或取消筛选条件。"
               sortBy={(filters.sort_by as "published_at" | "fetched_at") ?? "published_at"}
               onOpen={setOpenId}

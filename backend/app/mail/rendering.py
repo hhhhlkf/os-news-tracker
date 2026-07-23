@@ -1,12 +1,19 @@
 from html import escape
 
 
-def build_mail_preview_context(*, filters: dict, items: list[dict], subject: str) -> dict:
+def build_mail_preview_context(
+    *,
+    filters: dict,
+    items: list[dict],
+    subject: str,
+    notice: dict | None = None,
+) -> dict:
     return {
         "subject": subject,
         "filters": filters,
         "total_items": len(items),
         "items": items,
+        "notice": notice,
     }
 
 
@@ -186,11 +193,51 @@ def _render_tech_highlights(points: list[str]) -> str:
     return "".join(cards)
 
 
+def _render_notice_box(notice: dict | None) -> str:
+    if not notice:
+        return ""
+    doc_text = str(notice.get("doc_text") or "").strip()
+    website_url = str(notice.get("website_url") or "").strip()
+    if not doc_text and not website_url:
+        return ""
+
+    doc_html = (
+        f'<div style="font-size:13px;line-height:1.7;color:#344054;white-space:pre-wrap;">{escape(doc_text)}</div>'
+        if doc_text
+        else '<div style="font-size:13px;color:#98a2b3;">暂无说明文档</div>'
+    )
+    if website_url:
+        safe_url = escape(website_url, quote=True)
+        link_html = (
+            f'<a href="{safe_url}" style="color:#175cd3;font-size:13px;font-weight:700;text-decoration:none;word-break:break-all;">'
+            f"{escape(website_url)}</a>"
+        )
+    else:
+        link_html = '<span style="font-size:13px;color:#98a2b3;">暂无网站链接</span>'
+
+    return f"""
+    <section style="background:#fff;border:1px solid #d0d5dd;border-radius:14px;padding:16px 18px;margin-bottom:14px;">
+      <div style="font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#667085;margin-bottom:10px;">说明与链接</div>
+      <div style="display:grid;gap:12px;">
+        <div>
+          <div style="font-size:12px;font-weight:700;color:#475467;margin-bottom:4px;">说明文档</div>
+          {doc_html}
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:700;color:#475467;margin-bottom:4px;">网站链接</div>
+          {link_html}
+        </div>
+      </div>
+    </section>
+    """
+
+
 def render_mail_html(context: dict) -> str:
     subject = escape(str(context.get("subject") or "新闻简报"))
     filters = context.get("filters") or {}
     items = context.get("items") or []
     summary_text = _build_header_summary(filters)
+    notice_html = _render_notice_box(context.get("notice") if isinstance(context.get("notice"), dict) else None)
 
     cards = []
     for item in items:
@@ -250,6 +297,7 @@ def render_mail_html(context: dict) -> str:
           <h1 style="margin:0 0 8px;font-size:28px;line-height:1.2;">{subject}</h1>
           <p style="margin:0;color:#d0d5dd;font-size:14px;line-height:1.7;">筛选条件：{escape(summary_text)}<br/>共 {len(items)} 条，按当前筛选生成。</p>
         </header>
+        {notice_html}
         {''.join(cards) if cards else '<section style="background:#fff;border:1px dashed #d0d5dd;border-radius:14px;padding:24px;color:#667085;">当前筛选下暂无可发送新闻。</section>'}
       </main>
     </body>

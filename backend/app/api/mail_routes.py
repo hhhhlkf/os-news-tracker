@@ -7,6 +7,7 @@ from app.mail.service import (
     MailService,
     MailTemplateNotFoundError,
     delivery_to_log,
+    notice_config_to_response,
     schedule_to_response,
     template_to_response,
 )
@@ -14,6 +15,8 @@ from app.schemas import (
     MailDeliveryLog,
     MailImmediatePreviewRequest,
     MailImmediateSendResponse,
+    MailNoticeConfigResponse,
+    MailNoticeConfigUpdateRequest,
     MailPreviewResponse,
     MailScheduleCreateRequest,
     MailScheduleResponse,
@@ -25,6 +28,21 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/mail", tags=["mail"])
+
+
+@router.get("/notice-config")
+def get_mail_notice_config(db: Session = Depends(get_db)) -> MailNoticeConfigResponse:
+    service = MailService(db)
+    return notice_config_to_response(service.get_notice_config())
+
+
+@router.put("/notice-config")
+def update_mail_notice_config(
+    request: MailNoticeConfigUpdateRequest,
+    db: Session = Depends(get_db),
+) -> MailNoticeConfigResponse:
+    service = MailService(db)
+    return notice_config_to_response(service.update_notice_config(request))
 
 
 @router.get("/templates")

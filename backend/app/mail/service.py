@@ -5,10 +5,24 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.discovery.quality_audit import calculate_overall_score
-from app.models import CrawlMethod, Item, ItemSource, ItemTag, MailDelivery, MailSchedule, MailTemplate, Source, Tag
+from app.models import (
+    CrawlMethod,
+    Item,
+    ItemSource,
+    ItemTag,
+    MailDelivery,
+    MailNoticeConfig,
+    MailSchedule,
+    MailTemplate,
+    Source,
+    Tag,
+)
 from app.schemas import (
     MailFilterSnapshot,
     MailImmediatePreviewRequest,
+    MailNoticeBlock,
+    MailNoticeConfigResponse,
+    MailNoticeConfigUpdateRequest,
     MailProviderKind,
     MailImmediateSendResponse,
     MailPreviewItem,
@@ -140,6 +154,56 @@ def resolve_sender(provider_name: MailProviderKind) -> tuple[str, str | None]:
     return settings.smtp_from_email, settings.smtp_from_name
 
 
+def get_or_create_notice_config(db: Session) -> MailNoticeConfig:
+    config = db.scalar(select(MailNoticeConfig).order_by(MailNoticeConfig.id).limit(1))
+    if config is not None:
+        return config
+    now = beijing_now()
+    config = MailNoticeConfig(
+        doc_text="",
+        website_url="",
+        include_on_send=False,
+        include_on_template=False,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(config)
+    db.commit()
+    db.refresh(config)
+    return config
+
+
+def notice_config_to_response(config: MailNoticeConfig) -> MailNoticeConfigResponse:
+    return MailNoticeConfigResponse(
+        doc_text=config.doc_text or "",
+        website_url=config.website_url or "",
+        include_on_send=bool(config.include_on_send),
+        include_on_template=bool(config.include_on_template),
+    )
+
+
+def _notice_payload(doc_text: str, website_url: str, *, include: bool) -> dict:
+    return {
+        "include": include,
+        "doc_text": (doc_text or "").strip(),
+        "website_url": (website_url or "").strip(),
+    }
+
+
+def _active_notice_block(raw: dict | None) -> MailNoticeBlock | None:
+    if not isinstance(raw, dict) or not raw.get("include"):
+        return None
+    doc_text = str(raw.get("doc_text") or "").strip()
+    website_url = str(raw.get("website_url") or "").strip()
+    if not doc_text and not website_url:
+        return None
+    return MailNoticeBlock(doc_text=doc_text, website_url=website_url)
+
+
+def _snapshot_notice_from_config(config: MailNoticeConfig, *, include: bool) -> dict:
+    return _notice_payload(config.doc_text or "", config.website_url or "", include=include)
+
+
 class MailService:
     def __init__(self, db: Session, provider: MailProvider | None = None) -> None:
         self._db = db
@@ -149,16 +213,51 @@ class MailService:
         snapshot = MailFilterSnapshot.model_validate(raw or {})
         return snapshot.model_dump(mode="json")
 
+    def get_notice_config(self) -> MailNoticeConfig:
+        return get_or_create_notice_config(self._db)
+
+    def update_notice_config(self, payload: MailNoticeConfigUpdateRequest) -> MailNoticeConfig:
+        config = get_or_create_notice_config(self._db)
+        if payload.doc_text is not None:
+            config.doc_text = payload.doc_text.strip()[:4000]
+        if payload.website_url is not None:
+            config.website_url = payload.website_url.strip()[:2048]
+        if payload.include_on_send is not None:
+            config.include_on_send = payload.include_on_send
+        if payload.include_on_template is not None:
+            config.include_on_template = payload.include_on_template
+        config.updated_at = beijing_now()
+        self._db.commit()
+        self._db.refresh(config)
+        return config
+
+    def _resolve_notice(
+        self,
+        *,
+        stored: dict | None,
+        apply_send_config: bool,
+    ) -> MailNoticeBlock | None:
+        if stored is not None:
+            return _active_notice_block(stored)
+        if not apply_send_config:
+            return None
+        config = get_or_create_notice_config(self._db)
+        if not config.include_on_send:
+            return None
+        return _active_notice_block(_snapshot_notice_from_config(config, include=True))
+
     def list_templates(self) -> list[MailTemplate]:
         return list(self._db.scalars(select(MailTemplate).order_by(MailTemplate.updated_at.desc(), MailTemplate.id.desc())))
 
     def create_template(self, payload: MailTemplateCreateRequest) -> MailTemplate:
         now = beijing_now()
+        config = get_or_create_notice_config(self._db)
         template = MailTemplate(
             name=payload.name.strip(),
             subject=payload.subject.strip(),
             recipients_json=list(payload.recipients),
             filter_snapshot_json=self.normalize_filter_snapshot(payload.filter_snapshot.model_dump()),
+            notice_json=_snapshot_notice_from_config(config, include=bool(config.include_on_template)),
             is_active=payload.is_active,
             created_at=now,
             updated_at=now,
@@ -212,6 +311,8 @@ class MailService:
             subject=template.subject,
             recipients=list(template.recipients_json or []),
             provider=provider,
+            stored_notice=template.notice_json if isinstance(template.notice_json, dict) else None,
+            apply_send_config=False,
         )
 
     def send_template_once(
@@ -224,6 +325,8 @@ class MailService:
             subject=template.subject,
             recipients=list(template.recipients_json or []),
             provider=provider,
+            stored_notice=template.notice_json if isinstance(template.notice_json, dict) else None,
+            apply_send_config=False,
         )
         delivery = self._dispatch_delivery(
             preview=preview,
@@ -455,15 +558,20 @@ class MailService:
         subject: str,
         recipients: list[str],
         provider: MailProviderKind | None = None,
+        stored_notice: dict | None = None,
+        apply_send_config: bool = True,
     ) -> MailPreviewResponse:
         normalized = MailFilterSnapshot.model_validate(filter_snapshot or {})
         items = self._fetch_items_for_snapshot(normalized)
         preview_items = self._build_preview_items(items)
         dated_subject = with_send_date_suffix(subject)
+        notice = self._resolve_notice(stored=stored_notice, apply_send_config=apply_send_config)
+        notice_dict = notice.model_dump() if notice is not None else None
         context = build_mail_preview_context(
             filters=normalized.model_dump(mode="json"),
             items=[item.model_dump(mode="json") for item in preview_items],
             subject=dated_subject,
+            notice=notice_dict,
         )
         rendered_html = render_mail_html(context)
         return MailPreviewResponse(
@@ -474,6 +582,7 @@ class MailService:
             item_count=len(preview_items),
             items=preview_items,
             rendered_html=rendered_html,
+            notice=notice,
         )
 
     def _dispatch_delivery(
@@ -573,12 +682,20 @@ class MailService:
 
     def create_schedule(self, payload: MailScheduleCreateRequest) -> MailSchedule:
         now = beijing_now()
+        notice_json: dict | None = None
+        if payload.template_id is not None:
+            template = self.get_template(payload.template_id)
+            notice_json = template.notice_json if isinstance(template.notice_json, dict) else None
+        else:
+            config = get_or_create_notice_config(self._db)
+            notice_json = _snapshot_notice_from_config(config, include=bool(config.include_on_send))
         schedule = MailSchedule(
             template_id=payload.template_id,
             name=payload.name.strip() or "未命名预定",
             subject=payload.subject.strip() or "未命名预定",
             recipients_json=list(payload.recipients),
             filter_snapshot_json=self.normalize_filter_snapshot(payload.filter_snapshot.model_dump()),
+            notice_json=notice_json,
             frequency=payload.frequency,
             send_time=payload.send_time,
             enabled=payload.enabled,
@@ -642,11 +759,14 @@ class MailService:
 
     def run_schedule(self, schedule: MailSchedule, *, trigger_type: str, mark_today: bool) -> MailDelivery:
         snapshot = MailFilterSnapshot.model_validate(schedule.filter_snapshot_json or {})
+        stored_notice = schedule.notice_json if isinstance(schedule.notice_json, dict) else None
         preview = self.preview_immediate_send(
             filter_snapshot=snapshot.model_dump(mode="json"),
             subject=schedule.subject,
             recipients=list(schedule.recipients_json or []),
             provider=None,
+            stored_notice=stored_notice,
+            apply_send_config=stored_notice is None,
         )
         delivery = self._dispatch_delivery(
             preview=preview,
@@ -703,6 +823,7 @@ def template_to_response(template: MailTemplate) -> MailTemplateResponse:
         subject=template.subject,
         recipients=list(template.recipients_json or []),
         filter_snapshot=MailFilterSnapshot.model_validate(template.filter_snapshot_json or {}),
+        notice=_active_notice_block(template.notice_json if isinstance(template.notice_json, dict) else None),
         is_active=template.is_active,
         last_send_at=template.last_send_at,
         last_send_status=template.last_send_status,

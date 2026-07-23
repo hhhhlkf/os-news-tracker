@@ -12,6 +12,8 @@ import {
 } from "../mail/api";
 import type { MailDeliveryLog, MailFilterSnapshot, MailFrequency, MailSchedule } from "../mail/types";
 import { clampInput, INPUT_LIMITS } from "../inputLimits";
+import { emailListError, parseEmailList } from "../mail/emailValidation";
+import { DeleteIconButton } from "./DeleteIconButton";
 
 export interface ScheduleDraft {
   templateId: number | null;
@@ -193,9 +195,11 @@ export function MailScheduleListPanel(props: {
     retry: false,
   });
 
-  const cRecipientList = useMemo(
-    () => cRecipients.split(/[\n,;，；\s]+/).map((v) => v.trim()).filter(Boolean),
-    [cRecipients],
+  const parsedCreateRecipients = useMemo(() => parseEmailList(cRecipients), [cRecipients]);
+  const cRecipientList = parsedCreateRecipients.valid;
+  const createRecipientsError = useMemo(
+    () => emailListError(parsedCreateRecipients, { requireAtLeastOne: true }),
+    [parsedCreateRecipients],
   );
 
   const invalidate = () => {
@@ -204,8 +208,11 @@ export function MailScheduleListPanel(props: {
   };
 
   const createMutation = useMutation({
-    mutationFn: async () =>
-      createMailSchedule({
+    mutationFn: async () => {
+      if (createRecipientsError) {
+        throw new Error(createRecipientsError);
+      }
+      return createMailSchedule({
         name: cName.trim() || "未命名预定",
         subject: cSubject.trim() || "未命名预定",
         recipients: cRecipientList,
@@ -214,7 +221,8 @@ export function MailScheduleListPanel(props: {
         send_time: cSendTime,
         enabled: true,
         template_id: draftTemplateId,
-      }),
+      });
+    },
     onSuccess: (schedule) => {
       setCreating(false);
       setStatusMessage(`预定已创建：${schedule.name}`);
@@ -378,28 +386,14 @@ export function MailScheduleListPanel(props: {
                   <div style={{ fontWeight: 800, color: "#101828", fontSize: 14, wordBreak: "break-word" }}>
                     {schedule.name} · {freqLabel(schedule.frequency)} {displaySendTime(schedule.send_time)}
                   </div>
-                  <button
+                  <DeleteIconButton
                     onClick={(e) => {
                       e.stopPropagation();
                       handleDelete(schedule);
                     }}
                     disabled={deleteMutation.isPending}
                     title="删除预定"
-                    aria-label="删除预定"
-                    style={{
-                      border: "1px solid #f0c6c2",
-                      background: "#fff",
-                      color: "#b42318",
-                      borderRadius: 8,
-                      cursor: deleteMutation.isPending ? "wait" : "pointer",
-                      fontSize: 13,
-                      lineHeight: 1,
-                      padding: "4px 7px",
-                      flexShrink: 0,
-                    }}
-                  >
-                    🗑
-                  </button>
+                  />
                 </div>
                 <div style={{ fontSize: 12, color: "#667085" }}>
                   {schedule.template_id
@@ -436,6 +430,9 @@ export function MailScheduleListPanel(props: {
                   placeholder="收件人邮箱，支持换行、逗号或空格分隔"
                   style={{ ...FIELD, resize: "vertical" }}
                 />
+                {createRecipientsError && (
+                  <span style={{ fontSize: 12, color: "#b42318" }}>{createRecipientsError}</span>
+                )}
               </label>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <label style={{ display: "grid", gap: 4 }}>
@@ -452,7 +449,11 @@ export function MailScheduleListPanel(props: {
               </div>
               <div style={{ fontSize: 12, color: "#667085" }}>筛选条件：{summarizeFilter(draftFilter)}</div>
               <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => createMutation.mutate()} disabled={createMutation.isPending} style={solidBtn("#2563eb", createMutation.isPending)}>
+                <button
+                  onClick={() => createMutation.mutate()}
+                  disabled={createMutation.isPending || Boolean(createRecipientsError)}
+                  style={solidBtn("#2563eb", createMutation.isPending || Boolean(createRecipientsError))}
+                >
                   {createMutation.isPending ? "创建中..." : "创建预定"}
                 </button>
                 <button
