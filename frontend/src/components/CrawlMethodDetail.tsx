@@ -50,7 +50,10 @@ export function CrawlMethodDetail({ methodId, onClose, allowManage = false }: { 
               </div>
             )}
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>DSL Recipe</div>
-            <pre style={{ background: "#0b1220", color: "#d0d5dd", borderRadius: 8, padding: 12, fontSize: 12, overflow: "auto", fontFamily: "JetBrains Mono, monospace" }}>
+            <pre
+              className="scrollbar-on-dark"
+              style={{ background: "#0b1220", color: "#d0d5dd", borderRadius: 8, padding: 12, fontSize: 12, overflow: "auto", fontFamily: "JetBrains Mono, monospace" }}
+            >
 {JSON.stringify(q.data.dsl_recipe, null, 2)}
             </pre>
           </>

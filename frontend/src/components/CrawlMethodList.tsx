@@ -255,6 +255,12 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState, allo
     cancelledRef.current = false;
     let totalDisc = 0;
     let totalStored = 0;
+    const isBatch = ids.length > 1;
+    const batchId = isBatch
+      ? (typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `batch-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`)
+      : null;
     try {
       for (const id of ids) {
         if (cancelledRef.current) break;
@@ -269,7 +275,16 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState, allo
           },
         }));
         try {
-          const r = await fetchMut.mutateAsync({ id, request, signal: controller.signal });
+          const r = await fetchMut.mutateAsync({
+            id,
+            request: {
+              ...request,
+              // 多选批量记为 manual（一键手动批量）；只选一个仍记单方式手动
+              trigger_type: isBatch ? "manual" : "manual_method",
+              batch_id: batchId,
+            },
+            signal: controller.signal,
+          });
           if (cancelledRef.current || controller.signal.aborted) {
             updateViewState((prev) => ({
               ...prev,

@@ -76,7 +76,12 @@ def _startup(app: FastAPI) -> None:
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     _startup(app)
-    yield
+    try:
+        yield
+    finally:
+        from app.wechat_auth import wechat_qr_login_manager
+
+        wechat_qr_login_manager.shutdown_all()
 
 
 app = create_app(lifespan=_lifespan)

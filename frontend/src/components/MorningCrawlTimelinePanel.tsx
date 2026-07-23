@@ -104,7 +104,7 @@ export function MorningCrawlTimelinePanel() {
         {/* 今日时间线 */}
         <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           <div style={PANE_TITLE}>今日时间线 {runIsActive && <span style={{ color: "#175cd3" }}>· 实时</span>}</div>
-          <div style={LOG_PANE}>
+          <div className="scrollbar-on-dark" style={LOG_PANE}>
             {/* 每条方式执行明细 */}
             {(detail?.methods ?? []).map((m) => {
               const meta = METHOD_STATUS_META[m.status] ?? METHOD_STATUS_META.empty;
@@ -145,7 +145,7 @@ export function MorningCrawlTimelinePanel() {
         {/* 失败方式 */}
         <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           <div style={PANE_TITLE}>失败方式 {failures.length > 0 && <span style={{ color: "#b42318" }}>· {failures.length}</span>}</div>
-          <div style={LOG_PANE}>
+          <div className="scrollbar-on-dark" style={LOG_PANE}>
             {failures.length === 0 ? (
               <div style={{ color: "#6e7681" }}>本次运行没有失败的爬取方式。</div>
             ) : (

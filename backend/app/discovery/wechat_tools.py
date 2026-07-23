@@ -512,21 +512,51 @@ MP_APPMSG_URL = "https://mp.weixin.qq.com/cgi-bin/appmsg"
 
 
 def resolve_wechat_auth_profile(auth_ref: str | None) -> dict:
-    """Resolve a named WeChat MP auth profile from env/config."""
+    """Resolve the latest runtime WeChat credential (DB first, env fallback)."""
     from app.config import get_settings
+    from app.wechat_auth import resolve_profile
 
     settings = get_settings()
     expected = settings.wechat_mp_profile_name or "wechat_mp_default"
-    if auth_ref not in {None, expected}:
-        return {"status": "auth_invalid", "reason": "unknown auth_ref"}
-    if not settings.wechat_mp_cookie or not settings.wechat_mp_token:
-        return {"status": "pending_auth", "reason": "WECHAT_MP_COOKIE or WECHAT_MP_TOKEN is not configured"}
-    return {
-        "status": "ok",
-        "auth_ref": expected,
-        "cookie": settings.wechat_mp_cookie,
-        "token": settings.wechat_mp_token,
-    }
+    return resolve_profile(auth_ref or expected)
+
+
+def _mp_auth_failure_reason(response: httpx.Response, data: dict[str, Any]) -> str | None:
+    base_resp = data.get("base_resp")
+    if not isinstance(base_resp, dict):
+        base_resp = {}
+    ret = base_resp.get("ret")
+    message = str(base_resp.get("err_msg") or base_resp.get("msg") or "")
+    normalized_message = message.lower()
+    obvious_markers = (
+        "invalid session",
+        "session expired",
+        "login expired",
+        "重新登录",
+        "登录超时",
+        "登录已失效",
+    )
+    if str(ret) in {"200003", "200004"} or any(marker in normalized_message for marker in obvious_markers):
+        return f"WeChat MP login expired (ret={ret})"
+
+    final_path = urlparse(str(response.url)).path.lower()
+    content_type = response.headers.get("content-type", "").lower()
+    if final_path in {"/", "/cgi-bin/loginpage", "/cgi-bin/bizlogin"} and "json" not in content_type:
+        return "WeChat MP request was redirected to the login page"
+    return None
+
+
+def _mark_auth_expired(
+    auth_ref: str,
+    reason: str,
+    credential_token: str,
+    credential_cookie: str,
+) -> dict[str, Any]:
+    from app.wechat_auth import mark_profile_expired
+
+    mark_profile_expired(auth_ref, reason, credential_token, credential_cookie)
+    logger.warning("wechat_mp_auth_expired profile=%s reason=%s", auth_ref, reason)
+    return {"status": "auth_invalid", "reason": reason}
 
 
 def wechat_resolve_account(nickname_or_account_id: str, auth_ref: str = "wechat_mp_default") -> dict:
@@ -550,7 +580,26 @@ def wechat_resolve_account(nickname_or_account_id: str, auth_ref: str = "wechat_
         response = client.get(MP_SEARCH_BIZ_URL, params=params)
     if response.status_code in {403, 429}:
         return {"status": "rate_limited", "items": []}
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError:
+        reason = _mp_auth_failure_reason(response, {})
+        if reason:
+            return _mark_auth_expired(
+                auth_ref,
+                reason,
+                str(auth["token"]),
+                str(auth["cookie"]),
+            )
+        return {"status": "failed", "reason": "WeChat MP returned a non-JSON response"}
+    failure_reason = _mp_auth_failure_reason(response, data)
+    if failure_reason:
+        return _mark_auth_expired(
+            auth_ref,
+            failure_reason,
+            str(auth["token"]),
+            str(auth["cookie"]),
+        )
     accounts = data.get("list") or []
     if not accounts:
         return {"status": "needs_resolver", "accounts": []}
@@ -608,7 +657,32 @@ def wechat_fetch_account_history(
             response = client.get(MP_APPMSG_URL, params=params)
             if response.status_code in {403, 429}:
                 return {"status": "rate_limited", "items": items}
-            data = response.json()
+            try:
+                data = response.json()
+            except ValueError:
+                reason = _mp_auth_failure_reason(response, {})
+                if reason:
+                    return {
+                        **_mark_auth_expired(
+                            auth_ref,
+                            reason,
+                            str(auth["token"]),
+                            str(auth["cookie"]),
+                        ),
+                        "items": items,
+                    }
+                return {"status": "failed", "reason": "WeChat MP returned a non-JSON response", "items": items}
+            failure_reason = _mp_auth_failure_reason(response, data)
+            if failure_reason:
+                return {
+                    **_mark_auth_expired(
+                        auth_ref,
+                        failure_reason,
+                        str(auth["token"]),
+                        str(auth["cookie"]),
+                    ),
+                    "items": items,
+                }
             raw_items = data.get("app_msg_list") or []
             if not raw_items:
                 break

@@ -19,6 +19,8 @@ services:
   backend:
     build: ./backend
     env_file: .env
+    volumes:
+      - wechat_browser_data:/var/lib/os-news-tracker/wechat-browser
     environment:
       DATABASE_URL: postgresql+psycopg://osnews_app:OsNewsTracker2026DbA7K9M4@db:5432/osnews
     depends_on:
@@ -36,3 +38,4 @@ services:
 
 volumes:
   pgdata:
+  wechat_browser_data:

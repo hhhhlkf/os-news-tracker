@@ -37,6 +37,10 @@ export interface ManualNewsRunRequest {
   start_at?: string | null;
   end_at?: string | null;
   target_count: number;
+  /** manual = 批量抓取选中；manual_method = 单方式 */
+  trigger_type?: "manual" | "manual_method" | null;
+  /** 同一次「抓取选中」共享，用于统计页按批次堆叠 */
+  batch_id?: string | null;
 }
 
 export interface AgentCrawlRunRequest {
@@ -378,4 +382,115 @@ export interface MultiDiscoveryStartResponse {
 export interface MultiDiscoveryNameResponse {
   name: string;
   resolved_route_type: DiscoveryRouteType | null;
+}
+
+// ---- Token usage statistics ----
+export interface TokenTotals {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
+export interface TokenTrendPoint extends TokenTotals {
+  bucket: string;
+}
+
+export interface TokenUsageSummaryResponse {
+  start: string;
+  end: string;
+  bucket: "hour" | "day";
+  exact_since: string | null;
+  summary: TokenTotals & {
+    query_tokens: number;
+    discovery_tokens: number;
+    call_count: number;
+  };
+  trend: TokenTrendPoint[];
+}
+
+export interface QueryMethodTokenUsage extends TokenTotals {
+  method_id: number;
+  label: string;
+}
+
+export interface QueryRunTokenUsage extends TokenTotals {
+  run_key: string;
+  run_id: number;
+  kind: "morning" | "method" | "batch";
+  trigger_type: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  methods: QueryMethodTokenUsage[];
+}
+
+export interface QueryRunUsageResponse {
+  exact_since: string | null;
+  total: number;
+  runs: QueryRunTokenUsage[];
+}
+
+export interface DiscoveryRunTokenUsage extends TokenTotals {
+  run_id: number;
+  site_url: string;
+  status: string;
+  started_at: string | null;
+  ended_at: string | null;
+  exact?: boolean;
+}
+
+export interface DiscoveryRunUsageResponse {
+  exact_since: string | null;
+  total: number;
+  runs: DiscoveryRunTokenUsage[];
+}
+
+export interface ItemVolumePoint {
+  bucket: string;
+  high: number;
+  medium: number;
+  low: number;
+  total: number;
+}
+
+export interface ItemVolumeDailyResponse {
+  start: string;
+  end: string;
+  summary: {
+    high: number;
+    medium: number;
+    low: number;
+    total: number;
+  };
+  trend: ItemVolumePoint[];
+}
+
+export type WechatQrSessionStatus =
+  | "pending"
+  | "qr_ready"
+  | "scanned"
+  | "success"
+  | "expired"
+  | "failed"
+  | "cancelled";
+
+export interface WechatAuthProfileStatus {
+  profile_name: string;
+  status: string;
+  configured: boolean;
+  source: "database" | "environment" | "none";
+  last_error: string | null;
+  updated_at: string | null;
+  last_verified_at: string | null;
+}
+
+export interface WechatQrSession {
+  session_id: string;
+  profile_name: string;
+  status: WechatQrSessionStatus;
+  qr_image_data_url: string | null;
+  message: string | null;
+  created_at: string;
+  updated_at: string;
+  expires_at: string | null;
 }

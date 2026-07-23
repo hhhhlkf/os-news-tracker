@@ -64,6 +64,10 @@ class ManualNewsRunRequest(BaseModel):
     start_at: datetime | None = None
     end_at: datetime | None = None
     target_count: int = Field(gt=0, le=500)
+    # Token accounting: manual = multi-method batch UI; manual_method = single-method run.
+    trigger_type: Literal["manual", "manual_method"] | None = None
+    # Shared id for one「抓取选中」batch so token charts can stack methods together.
+    batch_id: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def validate_mode(self):

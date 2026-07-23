@@ -10,6 +10,7 @@ import {
 import type { MailImmediateSendRequest, MailPreviewResponse, MailProviderKind, MailTemplate } from "../mail/types";
 import { ImportanceBadge } from "./ImportanceBadge";
 import { formatDateYmd, HotspotTags, SourceCta, SourceQualityMeta, TechHighlightsList } from "./ItemMetaBlocks";
+import { clampInput, INPUT_LIMITS } from "../inputLimits";
 
 export function MailImmediateSendPanel(props: {
   homeFilters: ItemQueryParams;
@@ -293,13 +294,15 @@ export function MailImmediateSendPanel(props: {
           <div style={{ display: "grid", gap: 10 }}>
             <input
               value={subject}
-              onChange={(e) => setSubject(e.target.value)}
+              maxLength={INPUT_LIMITS.subject}
+              onChange={(e) => setSubject(clampInput(e.target.value, INPUT_LIMITS.subject))}
               placeholder="邮件标题"
               style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "10px 12px", fontSize: 13, color: "#344054" }}
             />
             <textarea
               value={recipientsText}
-              onChange={(e) => setRecipientsText(e.target.value)}
+              maxLength={INPUT_LIMITS.emailListMultiline}
+              onChange={(e) => setRecipientsText(clampInput(e.target.value, INPUT_LIMITS.emailListMultiline))}
               placeholder="收件人邮箱，支持换行、逗号或空格分隔"
               rows={4}
               style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "10px 12px", fontSize: 13, color: "#344054", resize: "vertical" }}

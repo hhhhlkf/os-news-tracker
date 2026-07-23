@@ -11,6 +11,7 @@ import { fetchMorningCrawlDashboard } from "../morningCrawl/api";
 import { demoItems } from "../demoData";
 import { buildDemoFacets, filterDemoItems, makeListResponse, resolveHomeDataMode } from "./homeData";
 import type { CrawlMethod } from "../types";
+import { clampInput, INPUT_LIMITS } from "../inputLimits";
 
 const PAGE_SIZE = 10;
 const ENTRY_CARD_MIN_HEIGHT = 196;
@@ -316,7 +317,8 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
             <input
               placeholder="搜索标题、摘要、分类…"
               value={filters.q ?? ""}
-              onChange={(e) => setFilter("q", e.target.value)}
+              maxLength={INPUT_LIMITS.searchQuery}
+              onChange={(e) => setFilter("q", clampInput(e.target.value, INPUT_LIMITS.searchQuery))}
               style={{
                 flex: "1 1 420px",
                 minWidth: 260,

@@ -11,6 +11,7 @@ import {
   updateMailSchedule,
 } from "../mail/api";
 import type { MailDeliveryLog, MailFilterSnapshot, MailFrequency, MailSchedule } from "../mail/types";
+import { clampInput, INPUT_LIMITS } from "../inputLimits";
 
 export interface ScheduleDraft {
   templateId: number | null;
@@ -419,17 +420,18 @@ export function MailScheduleListPanel(props: {
             <div style={{ display: "grid", gap: 10 }}>
               <label style={{ display: "grid", gap: 4 }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>任务名</span>
-                <input value={cName} onChange={(e) => setCName(e.target.value)} style={FIELD} />
+                <input value={cName} maxLength={INPUT_LIMITS.shortName} onChange={(e) => setCName(clampInput(e.target.value, INPUT_LIMITS.shortName))} style={FIELD} />
               </label>
               <label style={{ display: "grid", gap: 4 }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>邮件标题</span>
-                <input value={cSubject} onChange={(e) => setCSubject(e.target.value)} style={FIELD} />
+                <input value={cSubject} maxLength={INPUT_LIMITS.subject} onChange={(e) => setCSubject(clampInput(e.target.value, INPUT_LIMITS.subject))} style={FIELD} />
               </label>
               <label style={{ display: "grid", gap: 4 }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>收件人</span>
                 <textarea
                   value={cRecipients}
-                  onChange={(e) => setCRecipients(e.target.value)}
+                  maxLength={INPUT_LIMITS.emailListMultiline}
+                  onChange={(e) => setCRecipients(clampInput(e.target.value, INPUT_LIMITS.emailListMultiline))}
                   rows={3}
                   placeholder="收件人邮箱，支持换行、逗号或空格分隔"
                   style={{ ...FIELD, resize: "vertical" }}

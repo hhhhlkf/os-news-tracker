@@ -18,6 +18,7 @@ import {
   ROUTE_TYPE_LABELS,
   type RouteInputState,
 } from "../discovery/routeInput";
+import { clampInput, INPUT_LIMITS } from "../inputLimits";
 
 const DISCOVERY_PANEL_STORAGE_KEY = "os-news-tracker.discovery-panel";
 
@@ -73,11 +74,15 @@ function clearDiscoveryPanelState(): void {
 export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: number) => void }) {
   const queryClient = useQueryClient();
   const [persistedState] = useState<DiscoveryPanelPersistedState>(() => readDiscoveryPanelState());
-  const [rawInput, setRawInput] = useState(persistedState.rawInput ?? "");
+  const [rawInput, setRawInput] = useState(
+    clampInput(persistedState.rawInput ?? "", INPUT_LIMITS.discoveryInput),
+  );
   const [selectedRouteType, setSelectedRouteType] = useState<DiscoveryRouteType | null>(
     persistedState.selectedRouteType ?? null,
   );
-  const [name, setName] = useState(persistedState.name ?? "");
+  const [name, setName] = useState(
+    clampInput(persistedState.name ?? "", INPUT_LIMITS.displayName),
+  );
   const [nameError, setNameError] = useState<string | null>(null);
   const [runId, setRunId] = useState<number | null>(persistedState.runId ?? null);
   const [dup, setDup] = useState<{ method_id: number; domain: string } | null>(null);
@@ -139,7 +144,7 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
   const nameMut = useMutation({
     mutationFn: (request: MultiDiscoveryNameRequest) => suggestDiscoveryName(request),
     onSuccess: (r) => {
-      setName(r.name);
+      setName(clampInput(r.name, INPUT_LIMITS.displayName));
       setNameError(null);
     },
     onError: (e) => {
@@ -300,8 +305,9 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
             <input
               placeholder="输入探查内容，如 URL、公众号名、搜索关键词"
               value={rawInput}
+              maxLength={INPUT_LIMITS.discoveryInput}
               onChange={(e) => {
-                setRawInput(e.target.value);
+                setRawInput(clampInput(e.target.value, INPUT_LIMITS.discoveryInput));
                 setNameError(null);
               }}
               style={{ ...inputBase, flex: 1 }}
@@ -326,8 +332,9 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
             <input
               placeholder="名称（选填）"
               value={name}
+              maxLength={INPUT_LIMITS.displayName}
               onChange={(e) => {
-                setName(e.target.value);
+                setName(clampInput(e.target.value, INPUT_LIMITS.displayName));
                 setNameError(null);
               }}
               style={{ ...inputBase, flex: "1 1 auto", minWidth: 0, width: "100%" }}
@@ -455,7 +462,7 @@ const btnPrimary: CSSProperties = { border: "none", borderRadius: 999, padding: 
 const btnDisabled: CSSProperties = { ...btnPrimary, background: "#98a2b3", cursor: "not-allowed", flexShrink: 0 };
 const btnDanger: CSSProperties = { ...btnPrimary, background: "#dc2626" };
 const btnGhost: CSSProperties = { border: "1px solid #d0d5dd", background: "#fff", borderRadius: 8, padding: "9px 11px", fontSize: 12, color: "#475467", cursor: "pointer", flexShrink: 0 };
-const toggleBtn: CSSProperties = { border: "1px solid #d0d5dd", background: "#fff", borderRadius: 999, padding: "8px 14px", fontSize: 12, color: "#344054", fontWeight: 700, cursor: "pointer" };
+const toggleBtn: CSSProperties = { border: "1px solid #d0d5dd", background: "#fff", borderRadius: 999, padding: "8px 14px", fontSize: 13, color: "#344054", fontWeight: 700, cursor: "pointer" };
 const resetBtn: CSSProperties = { ...toggleBtn, color: "#047857", borderColor: "#6ee7b7", background: "#ecfdf3" };
 const WORKSPACE_HEIGHT = 760;
 const controlGrid: CSSProperties = {

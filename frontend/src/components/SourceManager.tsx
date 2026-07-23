@@ -15,6 +15,7 @@ import type {
   SourceShape,
 } from "../types";
 import { MAIN_CATEGORIES } from "../types";
+import { clampInput, INPUT_LIMITS } from "../inputLimits";
 
 interface SourceManagerApi {
   fetchSources: typeof fetchSources;
@@ -358,11 +359,11 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
               <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 2fr) minmax(160px, 1fr) minmax(160px, 1fr)", gap: 12 }}>
                 <label style={labelStyle}>
                   <span>网址</span>
-                  <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/feed.xml" style={inputStyle} />
+                  <input value={url} maxLength={INPUT_LIMITS.url} onChange={(e) => setUrl(clampInput(e.target.value, INPUT_LIMITS.url))} placeholder="https://example.com/feed.xml" style={inputStyle} />
                 </label>
                 <label style={labelStyle}>
                   <span>来源名称</span>
-                  <input value={name} onChange={(e) => setName(e.target.value)} placeholder="可自动拟定" style={inputStyle} />
+                  <input value={name} maxLength={INPUT_LIMITS.displayName} onChange={(e) => setName(clampInput(e.target.value, INPUT_LIMITS.displayName))} placeholder="可自动拟定" style={inputStyle} />
                 </label>
                 <label style={labelStyle}>
                   <span>内容类型</span>
@@ -398,35 +399,35 @@ export function SourceManager({ onSourcesChanged, api = defaultApi, collapseSign
                         </label>
                         <label style={labelStyle}>
                           <span>列表路径 (items_path)</span>
-                          <input value={advItemsPath} onChange={(e) => setAdvItemsPath(e.target.value)} placeholder="如 obj.records，根数组留空" style={inputStyle} />
+                          <input value={advItemsPath} maxLength={INPUT_LIMITS.pathExpr} onChange={(e) => setAdvItemsPath(clampInput(e.target.value, INPUT_LIMITS.pathExpr))} placeholder="如 obj.records，根数组留空" style={inputStyle} />
                         </label>
                       </div>
 
                       <div style={{ display: "grid", gridTemplateColumns: "minmax(120px, 1fr) minmax(120px, 1fr)", gap: 12 }}>
                         <label style={labelStyle}>
                           <span>标题字段名</span>
-                          <input value={advFieldTitle} onChange={(e) => setAdvFieldTitle(e.target.value)} placeholder="title" style={inputStyle} />
+                          <input value={advFieldTitle} maxLength={INPUT_LIMITS.pathExpr} onChange={(e) => setAdvFieldTitle(clampInput(e.target.value, INPUT_LIMITS.pathExpr))} placeholder="title" style={inputStyle} />
                         </label>
                         <label style={labelStyle}>
                           <span>日期字段名</span>
-                          <input value={advFieldDate} onChange={(e) => setAdvFieldDate(e.target.value)} placeholder="date" style={inputStyle} />
+                          <input value={advFieldDate} maxLength={INPUT_LIMITS.pathExpr} onChange={(e) => setAdvFieldDate(clampInput(e.target.value, INPUT_LIMITS.pathExpr))} placeholder="date" style={inputStyle} />
                         </label>
                       </div>
 
                       <div style={{ display: "grid", gridTemplateColumns: "minmax(120px, 1fr) minmax(200px, 2fr)", gap: 12 }}>
                         <label style={labelStyle}>
                           <span>链接字段名</span>
-                          <input value={advFieldUrl} onChange={(e) => setAdvFieldUrl(e.target.value)} placeholder="url，无则留空" style={inputStyle} />
+                          <input value={advFieldUrl} maxLength={INPUT_LIMITS.pathExpr} onChange={(e) => setAdvFieldUrl(clampInput(e.target.value, INPUT_LIMITS.pathExpr))} placeholder="url，无则留空" style={inputStyle} />
                         </label>
                         <label style={labelStyle}>
                           <span>链接模板 (url_template)</span>
-                          <input value={advFieldUrlTemplate} onChange={(e) => setAdvFieldUrlTemplate(e.target.value)} placeholder="https://site.com/{item.path}" style={inputStyle} />
+                          <input value={advFieldUrlTemplate} maxLength={INPUT_LIMITS.url} onChange={(e) => setAdvFieldUrlTemplate(clampInput(e.target.value, INPUT_LIMITS.url))} placeholder="https://site.com/{item.path}" style={inputStyle} />
                         </label>
                       </div>
 
                       <label style={labelStyle}>
                         <span>内容字段名</span>
-                        <input value={advFieldContent} onChange={(e) => setAdvFieldContent(e.target.value)} placeholder="summary 或 summary,content" style={inputStyle} />
+                        <input value={advFieldContent} maxLength={INPUT_LIMITS.pathExpr} onChange={(e) => setAdvFieldContent(clampInput(e.target.value, INPUT_LIMITS.pathExpr))} placeholder="summary 或 summary,content" style={inputStyle} />
                       </label>
 
                       {advMethod === "POST" && (

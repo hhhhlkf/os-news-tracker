@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     wechat_mp_cookie: str | None = None
     wechat_mp_token: str | None = None
     wechat_mp_profile_name: str = "wechat_mp_default"
+    wechat_browser_data_dir: str = "/var/lib/os-news-tracker/wechat-browser"
+    wechat_qr_session_timeout_seconds: int = 300
     smtp_host: str = "localhost"
     smtp_port: int = 25
     smtp_username: str | None = None

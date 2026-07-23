@@ -24,6 +24,7 @@ services:
     command: uvicorn app.entry:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       - ./backend:/app
+      - wechat_browser_data_dev:/var/lib/os-news-tracker/wechat-browser
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://osnews_app:OsNewsTracker2026DbA7K9M4@db:5432/osnews
@@ -57,3 +58,4 @@ services:
 volumes:
   pgdata_dev:
   frontend_node_modules:
+  wechat_browser_data_dev:
