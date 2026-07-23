@@ -10,6 +10,7 @@ import {
   updateCrawlMethodReviewReminderConfig,
 } from "../api/client";
 import type { CrawlMethod } from "../types";
+import { clampInput, INPUT_LIMITS } from "../inputLimits";
 
 export function CrawlMethodReviewList({ highlightId, onOpenMethod }: { highlightId?: number | null; onOpenMethod?: (id: number) => void }) {
   const qc = useQueryClient();
@@ -196,7 +197,8 @@ export function CrawlMethodReviewList({ highlightId, onOpenMethod }: { highlight
               style={recipientInput}
               placeholder="管理员邮箱，多个用逗号分隔"
               value={recipientsText}
-              onChange={(event) => setRecipientsText(event.target.value)}
+              maxLength={INPUT_LIMITS.emailList}
+              onChange={(event) => setRecipientsText(clampInput(event.target.value, INPUT_LIMITS.emailList))}
             />
             <button type="button" style={btnGhost} disabled={reminderMut.isPending} onClick={() => saveReminderConfig()}>
               保存提醒

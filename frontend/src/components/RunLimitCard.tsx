@@ -1,4 +1,5 @@
 import { useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
+import { clampDigitInput, INPUT_LIMITS } from "../inputLimits";
 import { TimeRangePicker } from "./TimeRangePicker";
 import type { NewsRunFormState } from "./runLimits";
 
@@ -66,7 +67,11 @@ export function RunLimitCard(props: RunLimitCardProps) {
             <input
               value={formState.targetCount}
               disabled={disabled}
-              onChange={(event) => commit((state) => ({ ...state, targetCount: event.target.value }))}
+              maxLength={INPUT_LIMITS.countDigits}
+              onChange={(event) => commit((state) => ({
+                ...state,
+                targetCount: clampDigitInput(event.target.value, INPUT_LIMITS.countDigits),
+              }))}
               inputMode="numeric"
               style={inputStyle}
             />
@@ -80,10 +85,10 @@ export function RunLimitCard(props: RunLimitCardProps) {
 const sectionToggleStyle: CSSProperties = {
   border: "1px solid #d0d5dd",
   borderRadius: 999,
-  padding: "7px 12px",
-  background: "#ffffff",
+  padding: "8px 14px",
+  background: "#fff",
   color: "#344054",
-  fontSize: 12,
+  fontSize: 13,
   fontWeight: 700,
   cursor: "pointer",
 };

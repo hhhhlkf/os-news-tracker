@@ -53,7 +53,9 @@ export function DiscoveryLogPanel({ logs }: { logs: NewsRunLogEntry[] }) {
   const discoveryCount = logs.filter((log) => classifyLog(log) === "discovery").length;
   const methodCount = logs.filter((log) => classifyLog(log) === "method").length;
   return (
-    <div style={{ background: "#0b1220", borderRadius: 10, padding: "12px 14px",
+    <div
+      className="scrollbar-on-dark"
+      style={{ background: "#0b1220", borderRadius: 10, padding: "12px 14px",
       fontFamily: "JetBrains Mono, ui-monospace, monospace", fontSize: 12, lineHeight: 1.7, color: "#d0d5dd",
       display: "flex", flexDirection: "column", minHeight: 280, width: "100%", minWidth: 0, height: "100%" }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>

@@ -451,6 +451,46 @@ class SiteDiscoveryRun(Base):
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class LlmUsageEvent(Base):
+    """Exact provider-reported token usage linked to a query or discovery run."""
+    __tablename__ = "llm_usage_events"
+    __table_args__ = (
+        Index("ix_llm_usage_events_occurred_context", "occurred_at", "context_type"),
+        Index("ix_llm_usage_events_discovery_run", "discovery_run_id"),
+        Index("ix_llm_usage_events_crawl_method_run", "crawl_method_run_id"),
+        Index("ix_llm_usage_events_morning_run", "morning_crawl_run_id"),
+        Index("ix_llm_usage_events_morning_method", "morning_crawl_run_method_id"),
+        Index("ix_llm_usage_events_method", "method_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    context_type: Mapped[str] = mapped_column(String(20), nullable=False)  # query | discovery
+    trigger_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    stage: Mapped[str] = mapped_column(String(80), nullable=False, default="llm")
+    model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    discovery_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("site_discovery_runs.id", ondelete="CASCADE"), nullable=True
+    )
+    crawl_method_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crawl_method_runs.id", ondelete="CASCADE"), nullable=True
+    )
+    morning_crawl_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("morning_crawl_runs.id", ondelete="CASCADE"), nullable=True
+    )
+    morning_crawl_run_method_id: Mapped[int | None] = mapped_column(
+        ForeignKey("morning_crawl_run_methods.id", ondelete="CASCADE"), nullable=True
+    )
+    method_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crawl_methods.id", ondelete="SET NULL"), nullable=True
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 # --- System morning crawl (runs all active discovery methods on a schedule) ---
 
 class MorningCrawlConfig(Base):
@@ -527,6 +567,24 @@ class DiscoveryPromptSet(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     prompts: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class WechatAuthProfile(Base):
+    """Runtime-updatable authentication for the WeChat MP management API."""
+    __tablename__ = "wechat_auth_profiles"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    profile_name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    cookie: Mapped[str] = mapped_column(Text, nullable=False)
+    token: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="valid", nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )

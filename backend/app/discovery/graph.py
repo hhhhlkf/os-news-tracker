@@ -315,10 +315,12 @@ def save_method(state: DiscoveryState, db=None) -> DiscoveryState:
 def _make_llm():
     """构造 LangChain ChatModel，指向内部 LLM 网关（OpenAI 兼容）。"""
     from langchain_openai import ChatOpenAI
+    from app.llm.usage import UsageCallbackHandler
     s = get_settings()
     return ChatOpenAI(
         base_url=s.llm_base_url, model=s.llm_model,
         api_key=s.llm_api_key, temperature=0, max_retries=4,
+        callbacks=[UsageCallbackHandler()],
     )
 
 
@@ -4161,11 +4163,19 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
     from datetime import datetime, timezone
     from langgraph.checkpoint.postgres import PostgresSaver
     from app.db import SessionLocal
+    from app.llm.usage import UsageScope, activate_usage_scope, deactivate_usage_scope
     from app.models import SiteDiscoveryRun
     from app.run_logs import append_run_log
     s = get_settings()
     source_label = name or site_url
-    token = activate_run(run_id)
+    cancel_token = activate_run(run_id)
+    usage = UsageScope(
+        context_type="discovery",
+        trigger_type="manual",
+        stage="site_discovery",
+        discovery_run_id=run_id,
+    )
+    usage_token = activate_usage_scope(usage)
     with PostgresSaver.from_conn_string(_to_psycopg_conn_string(s.database_url)) as checkpointer:
         checkpointer.setup()  # 自动建 checkpoint 表
         g = build_graph(checkpointer=checkpointer)
@@ -4239,7 +4249,7 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
             run = db_sess.get(SiteDiscoveryRun, run_id)
             run.status = "completed" if final.get("verdict") == "dsl" else "failed"
             run.resulting_method_id = final.get("method_id")
-            run.llm_token_usage = final.get("token_used", 0)
+            run.llm_token_usage = usage.total_tokens
             run.node_trace = node_trace  # 最终完整 trace
             run.ended_at = datetime.now(timezone.utc)
             if final.get("error"):
@@ -4248,7 +4258,7 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
             append_run_log("任务", f"Discovery 探查结束 · verdict={final.get('verdict')}",
                            source=source_label, run_id=run_id,
                            status=run.status, steps=len(node_trace),
-                           token_used=final.get("token_used", 0))
+                           token_used=usage.total_tokens)
             logger.info("discovery run %s: finished, verdict=%s, %d steps traced",
                         run_id, final.get("verdict"), len(node_trace))
         except DiscoveryCancelled as e:
@@ -4274,8 +4284,17 @@ def _execute_discovery(run_id: int, site_url: str, force: bool, name: str | None
                            run_id=run_id, level="error")
             logger.exception("discovery run %s: failed with exception", run_id)
         finally:
+            try:
+                run = db_sess.get(SiteDiscoveryRun, run_id)
+                if run is not None:
+                    run.llm_token_usage = usage.total_tokens
+                    db_sess.commit()
+            except Exception:
+                db_sess.rollback()
+                logger.exception("failed to finalize discovery token usage for run %s", run_id)
             db_sess.close()
-            deactivate_run(token)
+            deactivate_usage_scope(usage_token)
+            deactivate_run(cancel_token)
             unregister_run(run_id)
 
 

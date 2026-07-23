@@ -127,6 +127,8 @@ describe("CrawlMethodList", () => {
         start_at: null,
         end_at: null,
         target_count: 12,
+        trigger_type: "manual_method",
+        batch_id: null,
       },
       expect.any(AbortSignal),
     );

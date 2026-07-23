@@ -8,6 +8,7 @@ import {
   renameMainCategory,
   type MainCategory,
 } from "../discovery/mainCategoryApi";
+import { clampInput, INPUT_LIMITS } from "../inputLimits";
 
 const SECTION: React.CSSProperties = {
   background: "#fff",
@@ -147,7 +148,8 @@ export function MainCategoryPanel() {
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         <input
           value={newName}
-          onChange={(e) => setNewName(e.target.value)}
+          maxLength={INPUT_LIMITS.shortName}
+          onChange={(e) => setNewName(clampInput(e.target.value, INPUT_LIMITS.shortName))}
           onKeyDown={(e) => { if (e.key === "Enter") submitCreate(); }}
           placeholder="新主分类名称"
           style={{ flex: 1, minWidth: 200, border: "1px solid #d0d7e2", borderRadius: 8, padding: "8px 10px", fontSize: 14, color: "#101828" }}
@@ -173,7 +175,8 @@ export function MainCategoryPanel() {
                   <input
                     value={editingName}
                     autoFocus
-                    onChange={(e) => setEditingName(e.target.value)}
+                    maxLength={INPUT_LIMITS.shortName}
+                    onChange={(e) => setEditingName(clampInput(e.target.value, INPUT_LIMITS.shortName))}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") submitRename(c);
                       if (e.key === "Escape") setEditingId(null);

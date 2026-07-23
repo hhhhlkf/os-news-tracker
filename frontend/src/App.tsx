@@ -2,7 +2,9 @@ import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
 import { useState, type CSSProperties } from "react";
 import { HomePage } from "./pages/HomePage";
 import { DiscoveryPage } from "./pages/DiscoveryPage";
+import { StatisticsDiscoveryPage } from "./pages/StatisticsDiscoveryPage";
 import { isSystemAuthenticated, logout, systemLogin } from "./auth";
+import { clampInput, INPUT_LIMITS } from "./inputLimits";
 
 function TopNav({ authenticated, onAuthenticatedChange }: { authenticated: boolean; onAuthenticatedChange: (value: boolean) => void }) {
   const [password, setPassword] = useState("");
@@ -42,6 +44,9 @@ function TopNav({ authenticated, onAuthenticatedChange }: { authenticated: boole
         <NavLink to="/discover" style={linkStyle}>
           站点发现
         </NavLink>
+        <NavLink to="/statistics" style={linkStyle}>
+          统计与发现
+        </NavLink>
       </div>
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         {authenticated ? (
@@ -55,7 +60,8 @@ function TopNav({ authenticated, onAuthenticatedChange }: { authenticated: boole
               type="password"
               placeholder="管理密码"
               value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              maxLength={INPUT_LIMITS.password}
+              onChange={(event) => setPassword(clampInput(event.target.value, INPUT_LIMITS.password))}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && password.trim()) void handleLogin();
               }}
@@ -78,6 +84,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<HomePage hasSystemAccess={authenticated} />} />
         <Route path="/discover" element={<DiscoveryPage hasSystemAccess={authenticated} />} />
+        <Route path="/statistics" element={<StatisticsDiscoveryPage hasSystemAccess={authenticated} />} />
       </Routes>
     </BrowserRouter>
   );

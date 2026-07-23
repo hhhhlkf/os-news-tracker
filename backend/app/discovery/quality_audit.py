@@ -11,7 +11,7 @@ from typing import Any
 from app.discovery.ingester import parse_published_at
 
 QUALITY_AUDIT_SAMPLE_LIMIT = 12
-QUALITY_LLM_TIMEOUT_SECONDS = 20.0
+QUALITY_LLM_TIMEOUT_SECONDS = 60.0
 
 QUALITY_AUDIT_PROMPT = """你是 OS 技术情报系统的信息源质量审计员。
 
@@ -168,8 +168,11 @@ def _llm_quality_score(
 ) -> int | None:
     if not sample:
         return 0
+    import logging
+
     from app.discovery.prompts import render_prompt
 
+    logger = logging.getLogger(__name__)
     prompt = render_prompt(
         "quality_audit",
         QUALITY_AUDIT_PROMPT,
@@ -190,10 +193,19 @@ def _llm_quality_score(
                 timeout=QUALITY_LLM_TIMEOUT_SECONDS,
             )
         else:
-            raw = llm.complete(prompt, temperature=0.0, response_format={"type": "json_object"})
+            raw = llm.complete(
+                prompt,
+                temperature=0.0,
+                response_format={"type": "json_object"},
+                timeout=QUALITY_LLM_TIMEOUT_SECONDS,
+            )
         data = _extract_json(raw)
         return _clamp_score(data.get("quality_score"))
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "quality audit LLM failed, falling back to heuristic · error=%s",
+            str(exc)[:300],
+        )
         return None
 
 

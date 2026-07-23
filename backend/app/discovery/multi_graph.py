@@ -474,34 +474,21 @@ def _run_and_save_multi_recipe(
 
         existing_domain = db.query(CrawlMethodDomain).filter_by(domain=domain).first()
 
-        if existing_domain is not None and not force:
-            m = db.get(CrawlMethod, existing_domain.method_id)
-            append_run_log(
-                "存库",
-                "复用已有多源爬取方式",
-                source=source_label,
-                domain=domain,
-                method_id=m.id,
-                method_status=m.status,
-                discovered_count=len(items),
-            )
-            return {
-                "status": "completed",
-                "method_id": m.id,
-                "route": route.model_dump(),
-                "discovered_count": len(items),
-                "method_status": m.status,
-                "multi_audit_result": audit_result,
-                "note": "existing method reused (force=false)",
-            }
-
+        # Quality audit runs on every successful multi discovery (including reuse),
+        # so its LLM tokens are always attributed to this discovery run.
         quality_audit = None
+        audit_tokens = 0
         if audit_result.get("passed"):
-            quality_audit = audit_source_quality(
-                items=items,
-                source_kind=route.kind,
-                input_type=route.input_type,
-            )
+            from app.llm.usage import current_usage_total, usage_stage
+
+            tokens_before = current_usage_total()
+            with usage_stage("quality_audit"):
+                quality_audit = audit_source_quality(
+                    items=items,
+                    source_kind=route.kind,
+                    input_type=route.input_type,
+                )
+            audit_tokens = max(0, current_usage_total() - tokens_before)
             append_run_log(
                 "质量审计",
                 "信息源质量审计完成",
@@ -513,6 +500,7 @@ def _run_and_save_multi_recipe(
                 quality_audit_status=quality_audit.quality_audit_status,
                 method_status=method_status,
                 reason=quality_audit.quality_reason,
+                token_used=audit_tokens,
             )
         else:
             append_run_log(
@@ -521,7 +509,34 @@ def _run_and_save_multi_recipe(
                 source=source_label,
                 audit_kind=audit_result.get("audit_kind"),
                 reason=audit_result.get("reason"),
+                token_used=0,
             )
+
+        if existing_domain is not None and not force:
+            m = db.get(CrawlMethod, existing_domain.method_id)
+            if quality_audit is not None:
+                apply_quality_audit_to_method(m, quality_audit)
+                db.commit()
+            append_run_log(
+                "存库",
+                "复用已有多源爬取方式",
+                source=source_label,
+                domain=domain,
+                method_id=m.id,
+                method_status=m.status,
+                discovered_count=len(items),
+                token_used=audit_tokens,
+            )
+            return {
+                "status": "completed",
+                "method_id": m.id,
+                "route": route.model_dump(),
+                "discovered_count": len(items),
+                "method_status": m.status,
+                "multi_audit_result": audit_result,
+                "quality_audit": quality_audit.as_update_values() if quality_audit else None,
+                "note": "existing method reused (force=false)",
+            }
 
         if existing_domain is not None and force:
             append_run_log(
@@ -809,10 +824,18 @@ def _execute_multi_discovery_run(
     route_source: str,
 ) -> None:
     from app.discovery.runtime import finish_discovery_run
+    from app.llm.usage import UsageScope, activate_usage_scope, deactivate_usage_scope
     from app.run_logs import append_run_log, run_log_context
 
     source_label = name or raw_input
     node_trace: list[dict[str, Any]] = []
+    usage = UsageScope(
+        context_type="discovery",
+        trigger_type="manual",
+        stage="multi_discovery",
+        discovery_run_id=run_id,
+    )
+    usage_token = activate_usage_scope(usage)
     with run_log_context(run_id):
         try:
             route = source_router_for_input(raw_input, hints)
@@ -891,6 +914,7 @@ def _execute_multi_discovery_run(
                 resulting_method_id=result.get("method_id"),
                 node_trace=node_trace,
                 error_message=None if status == "completed" else str(result.get("status") or "multi discovery failed"),
+                llm_token_usage=usage.total_tokens,
             )
             append_run_log(
                 "探查",
@@ -898,6 +922,7 @@ def _execute_multi_discovery_run(
                 source=source_label,
                 status=status,
                 method_id=result.get("method_id"),
+                token_used=usage.total_tokens,
             )
         except Exception as exc:
             finish_discovery_run(
@@ -905,14 +930,18 @@ def _execute_multi_discovery_run(
                 status="failed",
                 node_trace=node_trace,
                 error_message=str(exc),
+                llm_token_usage=usage.total_tokens,
             )
             append_run_log(
                 "探查",
                 f"多源智能探查后台任务失败 · {exc}",
                 source=source_label,
                 level="error",
+                token_used=usage.total_tokens,
             )
             logger.exception("multi discovery run %s failed", run_id)
+        finally:
+            deactivate_usage_scope(usage_token)
 
 
 def start_multi_discovery_run(

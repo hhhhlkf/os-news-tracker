@@ -1,8 +1,16 @@
 import hashlib
 import json as jsonlib
+import logging
 import time
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough mixed CN/EN estimate when the gateway omits usage."""
+    return max(1, (len(text or "") + 3) // 4)
 
 
 class LlmClient:
@@ -33,7 +41,14 @@ class LlmClient:
     ) -> str:
         key = self._key(prompt, temperature=temperature, response_format=response_format)
         if key in self._cache:
-            return self._cache[key]
+            content = self._cache[key]
+            self._record_usage(
+                prompt=prompt,
+                content=content,
+                usage={},
+                model=self._model,
+            )
+            return content
         payload = {
             "model": self._model,
             "temperature": temperature,
@@ -86,7 +101,48 @@ class LlmClient:
             if detail:
                 raise RuntimeError(f"{exc} · response_body={detail}") from exc
             raise
-        return resp.json()["choices"][0]["message"]["content"]
+        response_payload = resp.json()
+        content = response_payload["choices"][0]["message"]["content"]
+        prompt = ""
+        messages = payload.get("messages") or []
+        if messages and isinstance(messages[0], dict):
+            prompt = str(messages[0].get("content") or "")
+        self._record_usage(
+            prompt=prompt,
+            content=content,
+            usage=response_payload.get("usage") or {},
+            model=response_payload.get("model") or payload.get("model"),
+        )
+        return content
+
+    def _record_usage(
+        self,
+        *,
+        prompt: str,
+        content: str,
+        usage: dict,
+        model: str | None,
+    ) -> None:
+        from app.llm.usage import record_usage
+
+        prompt_tokens = usage.get("prompt_tokens")
+        completion_tokens = usage.get("completion_tokens")
+        total_tokens = usage.get("total_tokens")
+        if not total_tokens and not prompt_tokens and not completion_tokens:
+            prompt_tokens = _estimate_tokens(prompt)
+            completion_tokens = _estimate_tokens(content)
+            total_tokens = prompt_tokens + completion_tokens
+            logger.info(
+                "LLM usage missing from response; estimated prompt=%s completion=%s",
+                prompt_tokens,
+                completion_tokens,
+            )
+        record_usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            model=model,
+        )
 
     def _should_retry_without_response_format(self, exc: Exception) -> bool:
         text = str(exc).lower()

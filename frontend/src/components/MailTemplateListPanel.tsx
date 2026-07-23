@@ -10,6 +10,7 @@ import {
 } from "../mail/api";
 import type { MailFilterSnapshot, MailPreviewResponse, MailProviderKind, MailTemplate } from "../mail/types";
 import { formatDateYmd, HotspotTags, SourceCta, SourceQualityMeta, TechHighlightsList } from "./ItemMetaBlocks";
+import { clampInput, INPUT_LIMITS } from "../inputLimits";
 
 function formatMultiFilter(raw: string | null | undefined): string {
   if (!raw) return "";
@@ -387,7 +388,8 @@ export function MailTemplateListPanel(props: {
                     <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>模板名</span>
                     <input
                       value={editName}
-                      onChange={(e) => setEditName(e.target.value)}
+                      maxLength={INPUT_LIMITS.shortName}
+                      onChange={(e) => setEditName(clampInput(e.target.value, INPUT_LIMITS.shortName))}
                       style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "8px 10px", fontSize: 13, color: "#344054" }}
                     />
                   </label>
@@ -395,7 +397,8 @@ export function MailTemplateListPanel(props: {
                     <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>邮件标题</span>
                     <input
                       value={editSubject}
-                      onChange={(e) => setEditSubject(e.target.value)}
+                      maxLength={INPUT_LIMITS.subject}
+                      onChange={(e) => setEditSubject(clampInput(e.target.value, INPUT_LIMITS.subject))}
                       style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "8px 10px", fontSize: 13, color: "#344054" }}
                     />
                   </label>
@@ -403,7 +406,8 @@ export function MailTemplateListPanel(props: {
                     <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>收件人</span>
                     <textarea
                       value={editRecipients}
-                      onChange={(e) => setEditRecipients(e.target.value)}
+                      maxLength={INPUT_LIMITS.emailListMultiline}
+                      onChange={(e) => setEditRecipients(clampInput(e.target.value, INPUT_LIMITS.emailListMultiline))}
                       rows={3}
                       placeholder="收件人邮箱，支持换行、逗号或空格分隔"
                       style={{ border: "1px solid #d0d5dd", borderRadius: 10, padding: "8px 10px", fontSize: 13, color: "#344054", resize: "vertical" }}

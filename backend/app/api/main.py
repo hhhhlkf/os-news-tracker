@@ -11,6 +11,8 @@ from app.api.mail_routes import router as mail_router
 from app.api.morning_crawl_routes import router as morning_crawl_router
 from app.api.routes import router
 from app.api.source_routes import router as source_router
+from app.api.statistics_routes import router as statistics_router
+from app.api.wechat_auth_routes import router as wechat_auth_router
 
 
 def create_app(*, lifespan: Any = None) -> FastAPI:
@@ -29,6 +31,8 @@ def create_app(*, lifespan: Any = None) -> FastAPI:
     app.include_router(discovery_router)
     app.include_router(mail_router)
     app.include_router(morning_crawl_router)
+    app.include_router(statistics_router)
+    app.include_router(wechat_auth_router)
     return app
 
 

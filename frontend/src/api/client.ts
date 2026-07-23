@@ -26,6 +26,12 @@ import type {
   MultiDiscoveryStartResponse,
   MultiDiscoveryNameRequest,
   MultiDiscoveryNameResponse,
+  TokenUsageSummaryResponse,
+  QueryRunUsageResponse,
+  DiscoveryRunUsageResponse,
+  ItemVolumeDailyResponse,
+  WechatAuthProfileStatus,
+  WechatQrSession,
 } from "../types";
 import { authHeaders } from "../auth";
 
@@ -517,4 +523,80 @@ export async function cancelDiscoveryMethodFetch(
     headers: authHeaders(),
   });
   return expectOk(r, "failed to cancel method fetch");
+}
+
+export interface TokenUsageQuery {
+  start: string;
+  end: string;
+  bucket?: "hour" | "day";
+  trigger_type?: string;
+  limit?: number;
+  offset?: number;
+}
+
+function tokenUsageParams(query: TokenUsageQuery): string {
+  const params = new URLSearchParams({ start: query.start, end: query.end });
+  if (query.bucket) params.set("bucket", query.bucket);
+  if (query.trigger_type) params.set("trigger_type", query.trigger_type);
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  if (query.offset !== undefined) params.set("offset", String(query.offset));
+  return params.toString();
+}
+
+export async function fetchTokenUsageSummary(query: TokenUsageQuery): Promise<TokenUsageSummaryResponse> {
+  const response = await fetch(`${BASE}/statistics/token-usage/summary?${tokenUsageParams(query)}`, {
+    headers: authHeaders(),
+  });
+  return expectOk<TokenUsageSummaryResponse>(response, "failed to load token usage summary");
+}
+
+export async function fetchQueryRunUsage(query: TokenUsageQuery): Promise<QueryRunUsageResponse> {
+  const response = await fetch(`${BASE}/statistics/token-usage/query-runs?${tokenUsageParams(query)}`, {
+    headers: authHeaders(),
+  });
+  return expectOk<QueryRunUsageResponse>(response, "failed to load query token usage");
+}
+
+export async function fetchDiscoveryRunUsage(query: TokenUsageQuery): Promise<DiscoveryRunUsageResponse> {
+  const response = await fetch(`${BASE}/statistics/token-usage/discovery-runs?${tokenUsageParams(query)}`, {
+    headers: authHeaders(),
+  });
+  return expectOk<DiscoveryRunUsageResponse>(response, "failed to load discovery token usage");
+}
+
+export async function fetchItemVolumeDaily(query: Pick<TokenUsageQuery, "start" | "end">): Promise<ItemVolumeDailyResponse> {
+  const params = new URLSearchParams({ start: query.start, end: query.end });
+  const response = await fetch(`${BASE}/statistics/item-volume/daily?${params}`, {
+    headers: authHeaders(),
+  });
+  return expectOk<ItemVolumeDailyResponse>(response, "failed to load daily item volume");
+}
+
+export async function fetchWechatAuthProfile(): Promise<WechatAuthProfileStatus> {
+  const response = await fetch(`${BASE}/wechat-auth/profile`, { headers: authHeaders() });
+  return expectOk<WechatAuthProfileStatus>(response, "failed to load WeChat authentication status");
+}
+
+export async function startWechatQrSession(): Promise<WechatQrSession> {
+  const response = await fetch(`${BASE}/wechat-auth/qr-sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({}),
+  });
+  return expectOk<WechatQrSession>(response, "failed to start WeChat QR login");
+}
+
+export async function fetchWechatQrSession(sessionId: string): Promise<WechatQrSession> {
+  const response = await fetch(`${BASE}/wechat-auth/qr-sessions/${encodeURIComponent(sessionId)}`, {
+    headers: authHeaders(),
+  });
+  return expectOk<WechatQrSession>(response, "failed to load WeChat QR login status");
+}
+
+export async function cancelWechatQrSession(sessionId: string): Promise<WechatQrSession> {
+  const response = await fetch(
+    `${BASE}/wechat-auth/qr-sessions/${encodeURIComponent(sessionId)}/cancel`,
+    { method: "POST", headers: authHeaders() },
+  );
+  return expectOk<WechatQrSession>(response, "failed to cancel WeChat QR login");
 }

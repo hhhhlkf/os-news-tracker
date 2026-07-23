@@ -50,6 +50,22 @@ export default defineConfig({
         target: "http://backend:8000",
         changeOrigin: true,
       },
+      "/wechat-auth/profile": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
+      "/wechat-auth/qr-sessions": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
+      "/statistics/token-usage": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
+      "/statistics/item-volume": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
     },
   },
 });

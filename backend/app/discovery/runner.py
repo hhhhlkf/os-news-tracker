@@ -29,6 +29,7 @@ def execute_discovery_fetch(
         prepare_fetch_recipe,
     )
     from app.extract.scrapling_extractor import ScraplingExtractor
+    from app.llm.usage import UsageScope, activate_usage_scope, deactivate_usage_scope
     from app.models import CrawlMethod, Item, Source
     from app.pipeline import Pipeline
     from app.processing.enricher import Enricher
@@ -58,8 +59,25 @@ def execute_discovery_fetch(
         append_run_log(stage, message, source=source, level=level, **fields)
 
     request = ManualNewsRunRequest(**request_payload) if request_payload else None
+    trigger_type = "manual_method"
+    if request is not None and request.trigger_type in {"manual", "manual_method"}:
+        trigger_type = request.trigger_type
+    elif isinstance(request_payload, dict) and request_payload.get("trigger_type") in {
+        "manual",
+        "manual_method",
+    }:
+        trigger_type = str(request_payload["trigger_type"])
     owns_session = db is None
     db = db or SessionLocal()
+    usage_token = activate_usage_scope(
+        UsageScope(
+            context_type="query",
+            trigger_type=trigger_type,
+            stage="query_enrichment",
+            crawl_method_run_id=run_id,
+            method_id=method_id,
+        )
+    )
     try:
         method = db.get(CrawlMethod, method_id)
         if not method:
@@ -257,5 +275,6 @@ def execute_discovery_fetch(
             ),
         }
     finally:
+        deactivate_usage_scope(usage_token)
         if owns_session:
             db.close()

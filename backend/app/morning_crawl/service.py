@@ -395,6 +395,7 @@ def _run_methods(db: Session, run: MorningCrawlRun, *, trigger_type: str) -> Mor
 
 
 def _run_methods_body(db: Session, run: MorningCrawlRun, *, trigger_type: str) -> MorningCrawlRun:
+    from app.llm.usage import UsageScope, usage_scope
     from app.run_logs import append_run_log
 
     config = get_or_create_config(db)
@@ -426,7 +427,17 @@ def _run_methods_body(db: Session, run: MorningCrawlRun, *, trigger_type: str) -
         append_run_log("定时抓取", "开始执行爬取方式", source=domain, method_id=method_id)
         try:
             request = _build_request(config)
-            result = _fetch_and_ingest_method(db, method, request)
+            with usage_scope(
+                UsageScope(
+                    context_type="query",
+                    trigger_type=trigger_type,
+                    stage="query_enrichment",
+                    morning_crawl_run_id=run.id,
+                    morning_crawl_run_method_id=rm_id,
+                    method_id=method_id,
+                )
+            ):
+                result = _fetch_and_ingest_method(db, method, request)
             rm.status = result["status"]
             rm.discovered_count = result["discovered_count"]
             rm.stored_count = result["stored_count"]

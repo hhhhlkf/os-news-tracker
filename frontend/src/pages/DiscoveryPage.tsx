@@ -8,6 +8,7 @@ import { MainCategoryPanel } from "../components/MainCategoryPanel";
 import { buildNewsRunFormState } from "../components/runLimits";
 import { PromptStudioPanel } from "../components/PromptStudioPanel";
 import { RunLimitCard } from "../components/RunLimitCard";
+import { WechatAuthPanel } from "../components/WechatAuthPanel";
 
 export function DiscoveryPage({ hasSystemAccess = false }: { hasSystemAccess?: boolean }) {
   const queryClient = useQueryClient();
@@ -61,6 +62,7 @@ export function DiscoveryPage({ hasSystemAccess = false }: { hasSystemAccess?: b
         />
         {hasSystemAccess && <PromptStudioPanel />}
         <MainCategoryPanel />
+        {hasSystemAccess && <WechatAuthPanel />}
 
         {openMethod != null && (
           <CrawlMethodDetail methodId={openMethod} onClose={() => setOpenMethod(null)} allowManage={hasSystemAccess} />
