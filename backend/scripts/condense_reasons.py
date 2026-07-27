@@ -1,6 +1,6 @@
 """一次性脚本：将超过50字的 why_it_matters 手工归纳为 ≤50 字并写回。
 
-运行：cd backend && DATABASE_URL=postgresql+psycopg://osnews_app:OsNewsTracker2026DbA7K9M4@localhost:15432/osnews .venv/bin/python -m scripts.condense_reasons
+运行：cd backend && DATABASE_URL=postgresql+psycopg://osnews_app:change-me@localhost:15432/osnews .venv/bin/python -m scripts.condense_reasons
 """
 
 from sqlalchemy import select

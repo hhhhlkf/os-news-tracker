@@ -4,10 +4,11 @@ secondary date filter drops them all."""
 import os
 import json
 
-os.environ.setdefault(
-    "DATABASE_URL",
-    "postgresql+psycopg://osnews_app:OsNewsTracker2026DbA7K9M4@db:5432/osnews_empty_test",
-)
+if not os.environ.get("DATABASE_URL"):
+    raise RuntimeError(
+        "DATABASE_URL is required; set it before running _diag_openeuler.py"
+    )
+
 os.environ.setdefault("ENABLE_SCHEDULER", "0")
 
 from app.db import SessionLocal
