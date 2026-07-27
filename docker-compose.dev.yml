@@ -2,15 +2,15 @@ services:
   db:
     image: postgres:16
     environment:
-      POSTGRES_DB: osnews
-      POSTGRES_USER: osnews_app
-      POSTGRES_PASSWORD: OsNewsTracker2026DbA7K9M4
+      POSTGRES_DB: ${POSTGRES_DB:-osnews}
+      POSTGRES_USER: ${POSTGRES_USER:-osnews_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     volumes:
       - pgdata_dev:/var/lib/postgresql/data
     ports:
       - "15432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U osnews_app -d osnews"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 2s
       timeout: 5s
       retries: 10
@@ -27,7 +27,7 @@ services:
       - wechat_browser_data_dev:/var/lib/os-news-tracker/wechat-browser
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+psycopg://osnews_app:OsNewsTracker2026DbA7K9M4@db:5432/osnews
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
       ENABLE_SCHEDULER: "0"
       ENABLE_MAIL_SCHEDULER: "1"
       ENABLE_MORNING_CRAWL_SCHEDULER: "1"

@@ -96,7 +96,10 @@ cp .env.example .env
 然后编辑 `.env`，至少保证以下配置存在：
 
 ```ini
-DATABASE_URL=postgresql+psycopg://osnews_app:OsNewsTracker2026DbA7K9M4@db:5432/osnews_empty_test
+POSTGRES_DB=osnews
+POSTGRES_USER=osnews_app
+POSTGRES_PASSWORD=change-me
+DATABASE_URL=postgresql+psycopg://osnews_app:change-me@db:5432/osnews
 LLM_BASE_URL=https://your-llm-gateway.example.com/v1
 LLM_API_KEY=sk-your-api-key
 LLM_MODEL=your-model
@@ -110,7 +113,7 @@ FETCH_PER_HOST_DELAY_SECONDS=2
 
 - `DATABASE_URL` 中主机名必须保持为 `db`
 - 因为后端运行在 Docker Compose 网络中，`db` 是数据库容器服务名
-- 当前开发环境数据库名使用 `osnews_empty_test`
+- 当前开发环境数据库名使用 `osnews`
 
 ## 6. 启动开发环境
 

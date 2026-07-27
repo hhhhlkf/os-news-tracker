@@ -1,6 +1,6 @@
 """一次性脚本：将 osnews_empty_test 中超过50字的 why_it_matters 归纳为 ≤50 字。
 
-运行：cd backend && DATABASE_URL=postgresql+psycopg://osnews_app:OsNewsTracker2026DbA7K9M4@localhost:15432/osnews_empty_test .venv/bin/python -m scripts.condense_reasons_v2
+运行：cd backend && DATABASE_URL=postgresql+psycopg://osnews_app:change-me@localhost:15432/osnews_empty_test .venv/bin/python -m scripts.condense_reasons_v2
 """
 
 from sqlalchemy import select

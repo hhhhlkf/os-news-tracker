@@ -333,7 +333,10 @@ os-news-tracker/
 ### 必要配置
 
 ```ini
-DATABASE_URL=postgresql+psycopg://osnews_app:OsNewsTracker2026DbA7K9M4@db:5432/osnews
+POSTGRES_DB=osnews
+POSTGRES_USER=osnews_app
+POSTGRES_PASSWORD=change-me
+DATABASE_URL=postgresql+psycopg://osnews_app:change-me@db:5432/osnews
 LLM_BASE_URL=https://your-llm-gateway.example.com/v1
 LLM_API_KEY=replace-me
 LLM_MODEL=replace-me
