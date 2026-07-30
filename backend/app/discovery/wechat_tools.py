@@ -536,7 +536,11 @@ def _mp_auth_failure_reason(response: httpx.Response, data: dict[str, Any]) -> s
         "登录超时",
         "登录已失效",
     )
-    if str(ret) in {"200003", "200004"} or any(marker in normalized_message for marker in obvious_markers):
+    # 200040 ("invalid csrf token") is an auth failure too: the stored token no
+    # longer matches a live session, and only a fresh login can repair the pair.
+    if str(ret) in {"200003", "200004", "200040"} or any(
+        marker in normalized_message for marker in obvious_markers
+    ):
         return f"WeChat MP login expired (ret={ret})"
 
     final_path = urlparse(str(response.url)).path.lower()
@@ -544,6 +548,81 @@ def _mp_auth_failure_reason(response: httpx.Response, data: dict[str, Any]) -> s
     if final_path in {"/", "/cgi-bin/loginpage", "/cgi-bin/bizlogin"} and "json" not in content_type:
         return "WeChat MP request was redirected to the login page"
     return None
+
+
+def probe_mp_session(*, cookie: str, token: str) -> tuple[str, str | None]:
+    """Ask WeChat directly whether this credential is still logged in.
+
+    Returns one of ``valid`` / ``expired`` / ``unknown``. ``unknown`` means the
+    probe could not reach a verdict — a timeout, a rate limit or a WeChat-side
+    error. It must never be treated as an expiry, or a transient outage would
+    revoke a credential that still works.
+
+    The article-list endpoint is used because it answers in JSON with an
+    unambiguous ``base_resp.ret``: 0 when the session holds, 200003 when the
+    cookie is dead, 200040 when the token no longer matches. The console home
+    page cannot be used — it answers HTTP 200 on the same path whether or not
+    the caller is logged in, so it carries no machine-readable verdict.
+    """
+    headers = {**DEFAULT_HEADERS, "Cookie": cookie}
+    params = {
+        "action": "list_ex",
+        "begin": "0",
+        "count": "1",
+        "type": "9",
+        "query": "",
+        "token": token,
+        "lang": "zh_CN",
+        "f": "json",
+        "ajax": "1",
+    }
+    try:
+        with httpx.Client(headers=headers, timeout=15, follow_redirects=True) as client:
+            response = client.get(MP_APPMSG_URL, params=params)
+    except httpx.HTTPError as exc:
+        return "unknown", f"无法连接微信公众平台（{type(exc).__name__}），本次未能确认登录态。"
+    if response.status_code in {403, 429}:
+        return "unknown", f"微信公众平台限流（HTTP {response.status_code}），本次未能确认登录态。"
+
+    try:
+        data = response.json()
+    except ValueError:
+        failure_reason = _mp_auth_failure_reason(response, {})
+        if failure_reason:
+            return "expired", failure_reason
+        return "unknown", "微信公众平台返回了非 JSON 响应，本次未能确认登录态。"
+
+    failure_reason = _mp_auth_failure_reason(response, data)
+    if failure_reason:
+        return "expired", failure_reason
+    base_resp = data.get("base_resp")
+    ret = base_resp.get("ret") if isinstance(base_resp, dict) else None
+    if ret == 0:
+        return "valid", None
+    message = str(base_resp.get("err_msg") or "") if isinstance(base_resp, dict) else ""
+    # Anything else (frequency control, server-side errors) says nothing about
+    # the login state, so the stored verdict is deliberately left untouched.
+    return "unknown", f"微信公众平台返回 ret={ret}（{message or '无错误信息'}），本次未能确认登录态。"
+
+
+def _mp_business_failure(data: dict[str, Any]) -> tuple[str, str] | None:
+    """Classify a non-zero base_resp that is not an authentication failure.
+
+    WeChat reports frequency control in band: HTTP 200 with ``ret=200013`` and
+    no ``app_msg_list`` key at all. Without this check an empty payload is
+    indistinguishable from an account that genuinely published nothing, and a
+    throttled crawl silently reports "no articles".
+    """
+    base_resp = data.get("base_resp")
+    if not isinstance(base_resp, dict):
+        return None
+    ret = base_resp.get("ret")
+    if ret in (0, None):
+        return None
+    message = str(base_resp.get("err_msg") or base_resp.get("msg") or "")
+    if str(ret) == "200013" or "freq control" in message.lower():
+        return "rate_limited", f"微信公众平台触发频率限制（ret={ret}），请稍后再试。"
+    return "failed", f"微信公众平台返回 ret={ret}（{message or '无错误信息'}）。"
 
 
 def _mark_auth_expired(
@@ -600,6 +679,10 @@ def wechat_resolve_account(nickname_or_account_id: str, auth_ref: str = "wechat_
             str(auth["token"]),
             str(auth["cookie"]),
         )
+    business_failure = _mp_business_failure(data)
+    if business_failure:
+        status, reason = business_failure
+        return {"status": status, "reason": reason, "accounts": []}
     accounts = data.get("list") or []
     if not accounts:
         return {"status": "needs_resolver", "accounts": []}
@@ -683,6 +766,10 @@ def wechat_fetch_account_history(
                     ),
                     "items": items,
                 }
+            business_failure = _mp_business_failure(data)
+            if business_failure:
+                status, reason = business_failure
+                return {"status": status, "reason": reason, "items": items}
             raw_items = data.get("app_msg_list") or []
             if not raw_items:
                 break

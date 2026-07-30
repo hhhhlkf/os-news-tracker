@@ -548,13 +548,17 @@ def _run_and_save_multi_recipe(
                 discovered_count=len(items),
             )
             m = db.get(CrawlMethod, existing_domain.method_id)
+            # 覆盖重探的结果与已审核 DSL 完全相同时，只更新审计资料；
+            # 不能将正式库中的方法无条件重置为 pending。
+            requires_review = m.review_status != "approved" or m.signature != sig
             m.dsl_recipe = sanitized_recipe
             m.signature = sig
             m.status = method_status
-            m.review_status = REVIEW_PENDING
-            m.reviewed_at = None
-            m.reviewed_by = None
-            m.review_note = None
+            if requires_review:
+                m.review_status = REVIEW_PENDING
+                m.reviewed_at = None
+                m.reviewed_by = None
+                m.review_note = None
             m.updated_at = dt.now(timezone.utc)
             if quality_audit is not None:
                 apply_quality_audit_to_method(m, quality_audit)

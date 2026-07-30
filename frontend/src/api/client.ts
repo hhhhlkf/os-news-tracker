@@ -30,7 +30,9 @@ import type {
   QueryRunUsageResponse,
   DiscoveryRunUsageResponse,
   ItemVolumeDailyResponse,
+  WechatAuthLogoutResult,
   WechatAuthProfileStatus,
+  WechatAuthVerification,
   WechatQrSession,
 } from "../types";
 import { authHeaders } from "../auth";
@@ -575,6 +577,22 @@ export async function fetchItemVolumeDaily(query: Pick<TokenUsageQuery, "start" 
 export async function fetchWechatAuthProfile(): Promise<WechatAuthProfileStatus> {
   const response = await fetch(`${BASE}/wechat-auth/profile`, { headers: authHeaders() });
   return expectOk<WechatAuthProfileStatus>(response, "failed to load WeChat authentication status");
+}
+
+export async function verifyWechatAuthProfile(): Promise<WechatAuthVerification> {
+  const response = await fetch(`${BASE}/wechat-auth/profile/verify`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return expectOk<WechatAuthVerification>(response, "failed to verify WeChat authentication");
+}
+
+export async function logoutWechatAuthProfile(): Promise<WechatAuthLogoutResult> {
+  const response = await fetch(`${BASE}/wechat-auth/profile/logout`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return expectOk<WechatAuthLogoutResult>(response, "failed to log out of WeChat");
 }
 
 export async function startWechatQrSession(): Promise<WechatQrSession> {

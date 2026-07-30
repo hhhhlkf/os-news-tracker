@@ -94,7 +94,7 @@ def _render_importance_badge(value: str | None) -> str:
     )
 
 
-def _render_source_cta(url: str) -> str:
+def _render_source_cta(url: str, *, compact: bool = False) -> str:
     safe_url = escape(url)
     domain = url
     try:
@@ -108,6 +108,16 @@ def _render_source_cta(url: str) -> str:
     if len(domain) > 10:
         domain = f"{domain[:9]}…"
     safe_domain = escape(domain)
+    if compact:
+        return f"""
+    <a
+      href="{safe_url}"
+      style="display:inline-flex;align-items:center;gap:4px;height:22px;box-sizing:border-box;padding:3px 7px;border:1px solid #d0d5dd;border-radius:6px;background:#fff;color:#344054;font-size:11px;text-decoration:none;line-height:1;max-width:148px;width:fit-content;min-width:0;flex-shrink:0;white-space:nowrap;overflow:hidden;"
+    >
+      <span>阅读原文</span>
+      <span style="color:#98a2b3;max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{safe_domain}</span>
+    </a>
+    """
     return f"""
     <a
       href="{safe_url}"
@@ -131,7 +141,7 @@ def _quality_grade_for_score(score: int | None) -> str | None:
     return "D"
 
 
-def _render_source_quality(item: dict) -> str:
+def _render_source_quality(item: dict, *, compact: bool = False) -> str:
     source_name = str(item.get("source_name") or "").strip()
     score = item.get("source_quality_score")
     try:
@@ -141,16 +151,19 @@ def _render_source_quality(item: dict) -> str:
     status = str(item.get("source_quality_status") or "")
     grade = str(item.get("source_quality_grade") or _quality_grade_for_score(score_value) or "")
 
+    name_size = "11px" if compact else "12px"
+    name_max = "140px" if compact else "190px"
     source_html = (
-        f'<span style="font-size:12px;color:#475467;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{escape(source_name)}</span>'
+        f'<span style="font-size:{name_size};color:#475467;min-width:0;max-width:{name_max};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{escape(source_name)}</span>'
         if source_name
-        else '<span style="font-size:12px;color:#98a2b3;">来源未标注</span>'
+        else f'<span style="font-size:{name_size};color:#98a2b3;white-space:nowrap;">来源未标注</span>'
     )
     if score_value is None:
         badge_style = (
-            "min-width:58px;text-align:center;border-radius:8px;padding:3px 7px;font-size:12px;"
+            f"min-width:{'48px' if compact else '58px'};text-align:center;border-radius:{'6px' if compact else '8px'};"
+            f"padding:{'2px 5px' if compact else '3px 7px'};font-size:{'10px' if compact else '12px'};"
             "font-weight:800;line-height:1.1;white-space:nowrap;border:1px solid #d0d5dd;"
-            "color:#475467;background:#f9fafb;"
+            "color:#475467;background:#f9fafb;flex-shrink:0;"
         )
         label = "未审计"
     else:
@@ -161,14 +174,21 @@ def _render_source_quality(item: dict) -> str:
         else:
             colors = ("#abefc6", "#027a48", "#ecfdf3")
         badge_style = (
-            "min-width:58px;text-align:center;border-radius:8px;padding:3px 7px;font-size:12px;"
+            f"min-width:{'48px' if compact else '58px'};text-align:center;border-radius:{'6px' if compact else '8px'};"
+            f"padding:{'2px 5px' if compact else '3px 7px'};font-size:{'10px' if compact else '12px'};"
             f"font-weight:800;line-height:1.1;white-space:nowrap;border:1px solid {colors[0]};"
-            f"color:{colors[1]};background:{colors[2]};"
+            f"color:{colors[1]};background:{colors[2]};flex-shrink:0;"
         )
         label = f"{grade} {score_value}".strip()
+    shell = (
+        f'display:inline-flex;align-items:center;gap:{"5px" if compact else "8px"};'
+        f'height:{"22px" if compact else "28px"};box-sizing:border-box;min-width:0;'
+        f'max-width:{"240px" if compact else "320px"};padding:{"3px 7px" if compact else "6px 9px"};'
+        f'border:1px solid #d0d5dd;border-radius:{"6px" if compact else "8px"};background:#fff;'
+        "line-height:1;overflow:hidden;flex-shrink:1;"
+    )
     return (
-        '<div style="display:inline-flex;align-items:center;gap:8px;height:28px;box-sizing:border-box;min-width:0;max-width:320px;'
-        'padding:6px 9px;border:1px solid #d0d5dd;border-radius:8px;background:#fff;line-height:1;">'
+        f'<div style="{shell}">'
         f"{source_html}"
         f'<span style="{badge_style}">{escape(label)}</span>'
         "</div>"
@@ -248,20 +268,35 @@ def render_mail_html(context: dict) -> str:
         source_url = str(item.get("source_url") or "")
         hotspots_html = _render_hotspot_tags([str(h) for h in (item.get("hotspots") or [])])
         key_points_html = _render_tech_highlights([str(point) for point in (item.get("key_points") or [])])
-        source_cta_html = _render_source_cta(source_url) if source_url else '<div style="font-size:13px;color:#98a2b3;">暂无</div>'
-        source_quality_html = _render_source_quality(item)
+        source_cta_html = (
+            _render_source_cta(source_url, compact=True)
+            if source_url
+            else '<span style="font-size:11px;color:#98a2b3;white-space:nowrap;">暂无原文链接</span>'
+        )
+        source_quality_html = _render_source_quality(item, compact=True)
+        source_row_html = (
+            f'<div style="display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0;overflow:hidden;">'
+            f"{source_cta_html}{source_quality_html}</div>"
+        )
         cards.append(
             f"""
-            <section style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px 20px;margin-bottom:14px;">
-              <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
-                <h2 style="margin:0;font-size:18px;line-height:1.45;color:#101828;">{title}</h2>
-                <div style="display:flex;gap:8px;align-items:center;white-space:nowrap;">
-                  {importance_html}
-                  <span style="font-size:12px;color:#667085;">{escape(published_at)}</span>
+            <details class="mail-item" style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px 16px;margin-bottom:12px;">
+              <summary style="list-style:none;cursor:pointer;outline:none;">
+                <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
+                  <h2 style="margin:0;min-width:0;flex:1;font-size:16px;line-height:1.45;color:#101828;font-weight:800;">{title}</h2>
+                  <div style="display:flex;gap:8px;align-items:center;flex-shrink:0;white-space:nowrap;">
+                    {importance_html}
+                    <span style="font-size:12px;color:#667085;">{escape(published_at)}</span>
+                    <span class="mail-item-toggle" style="flex-shrink:0;border:1px solid #d0d5dd;background:#fff;color:#344054;border-radius:8px;padding:4px 10px;font-size:12px;font-weight:700;white-space:nowrap;line-height:1.4;">
+                      <span class="mail-item-expand">展开 ▾</span>
+                      <span class="mail-item-collapse">收起 ▴</span>
+                    </span>
+                  </div>
                 </div>
-              </div>
+                <div style="margin-top:6px;font-size:13px;line-height:1.65;color:#475467;">{summary or "暂无摘要"}</div>
+                <div class="mail-item-source-collapsed" style="margin-top:8px;">{source_row_html}</div>
+              </summary>
               <div style="margin-top:12px;display:grid;gap:10px;color:#344054;font-size:14px;line-height:1.75;">
-                <p style="margin:0 0 8px;"><strong>摘要：</strong>{summary or "暂无"}</p>
                 <div>
                   <strong style="color:#101828;display:block;margin-bottom:6px;">技术要点</strong>
                   {key_points_html}
@@ -270,15 +305,9 @@ def render_mail_html(context: dict) -> str:
                   <strong style="color:#101828;display:block;margin-bottom:6px;">技术热点</strong>
                   {hotspots_html}
                 </div>
-                <div>
-                  <strong style="color:#101828;display:block;margin-bottom:6px;">来源链接</strong>
-                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                    {source_cta_html}
-                    {source_quality_html}
-                  </div>
-                </div>
+                {source_row_html}
               </div>
-            </section>
+            </details>
             """
         )
 
@@ -289,13 +318,22 @@ def render_mail_html(context: dict) -> str:
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <title>{subject}</title>
+      <style>
+        .mail-item > summary::-webkit-details-marker {{ display: none; }}
+        .mail-item > summary::marker {{ content: ""; }}
+        .mail-item-collapse {{ display: none; }}
+        .mail-item[open] .mail-item-expand {{ display: none; }}
+        .mail-item[open] .mail-item-collapse {{ display: inline; }}
+        .mail-item[open] .mail-item-toggle {{ background: #f2f4f7; }}
+        .mail-item[open] .mail-item-source-collapsed {{ display: none !important; }}
+      </style>
     </head>
     <body style="margin:0;padding:24px;background:#f5f7fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#101828;">
       <main style="max-width:960px;margin:0 auto;">
         <header style="background:linear-gradient(135deg,#101828 0%,#1f2937 100%);color:#f8fafc;border-radius:18px;padding:24px 28px;margin-bottom:18px;">
           <div style="font-size:12px;color:#98a2b3;margin-bottom:8px;">OS News Tracker</div>
           <h1 style="margin:0 0 8px;font-size:28px;line-height:1.2;">{subject}</h1>
-          <p style="margin:0;color:#d0d5dd;font-size:14px;line-height:1.7;">筛选条件：{escape(summary_text)}<br/>共 {len(items)} 条，按当前筛选生成。</p>
+          <p style="margin:0;color:#d0d5dd;font-size:14px;line-height:1.7;">筛选条件：{escape(summary_text)}<br/>共 {len(items)} 条，按当前筛选生成。点击右上角可展开单条详情。</p>
         </header>
         {notice_html}
         {''.join(cards) if cards else '<section style="background:#fff;border:1px dashed #d0d5dd;border-radius:14px;padding:24px;color:#667085;">当前筛选下暂无可发送新闻。</section>'}

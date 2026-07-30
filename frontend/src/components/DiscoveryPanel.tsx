@@ -300,7 +300,6 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
               <option value="website">网页</option>
               <option value="wechat_search">微信搜索</option>
               <option value="wechat_history">微信公众号</option>
-              <option value="internal_forum">司内论坛</option>
             </select>
             <input
               placeholder="输入探查内容，如 URL、公众号名、搜索关键词"

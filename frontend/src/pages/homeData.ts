@@ -143,11 +143,16 @@ export function filterDemoItems(items: ItemDetail[], filters: Record<string, str
     const matchesSource =
       selectedSourceIds.length === 0
       || item.source_links.some((source) => selectedSourceIds.includes(source.source_id));
+    const selectedItemIds = (filters.item_ids ?? "")
+      .split(",")
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isInteger(value) && value > 0);
+    const matchesItemId = selectedItemIds.length === 0 || selectedItemIds.includes(item.id);
 
     const matchesPublishedTime = matchesTimeRange(item.published_at, filters, "published");
     const matchesFetchedTime = matchesTimeRange(item.fetched_at, filters, "fetched");
 
-    return matchesSearch && matchesCategory && matchesType && matchesImportance && matchesSubTag && matchesSource && matchesPublishedTime && matchesFetchedTime;
+    return matchesSearch && matchesCategory && matchesType && matchesImportance && matchesSubTag && matchesSource && matchesItemId && matchesPublishedTime && matchesFetchedTime;
   });
 
   const sortBy: SortBy = (filters.sort_by as SortBy) ?? "published_at";

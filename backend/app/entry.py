@@ -44,6 +44,21 @@ def _startup(app: FastAPI) -> None:
     _run_migrations()
     # 仅回收超时的 running run，避免开发态热重启时误伤刚启动的任务
     reclaim_stale_runs(STALE_RUN_TIMEOUT_SECONDS)
+    # 趋势总结由当前 Web 进程内的 daemon thread 执行。进程重启或热重载
+    # 后，旧线程已不存在，因此必须把遗留状态收敛为 failed，不能让前端
+    # 永久显示“运行中”。
+    from app.trends.service import TrendService
+
+    trend_session = SessionLocal()
+    try:
+        reclaimed_trend_runs = TrendService(trend_session).reclaim_orphaned_trend_runs()
+        if reclaimed_trend_runs:
+            logging.getLogger(__name__).warning(
+                "reclaimed %s interrupted trend evaluation run(s) after startup",
+                reclaimed_trend_runs,
+            )
+    finally:
+        trend_session.close()
     if _env_flag("RUN_SEED", "0"):
         seed_path = os.path.join(os.path.dirname(__file__), "sources", "seed_sources.yaml")
         session = SessionLocal()
@@ -71,6 +86,11 @@ def _startup(app: FastAPI) -> None:
         from app.scheduler import start_morning_crawl_scheduler
 
         app.state.morning_crawl_scheduler = start_morning_crawl_scheduler()
+    # 全局定时趋势总结同样使用独立开关，不影响新闻源 / 邮件 / 晨间抓取调度器。
+    if _env_flag("ENABLE_TREND_SCHEDULER", "0"):
+        from app.scheduler import start_trend_scheduler
+
+        app.state.trend_scheduler = start_trend_scheduler()
 
 
 @asynccontextmanager

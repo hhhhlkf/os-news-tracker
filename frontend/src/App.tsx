@@ -1,8 +1,9 @@
-import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
+import { BrowserRouter, Navigate, Routes, Route, NavLink } from "react-router-dom";
 import { useState, type CSSProperties } from "react";
 import { HomePage } from "./pages/HomePage";
 import { DiscoveryPage } from "./pages/DiscoveryPage";
 import { StatisticsDiscoveryPage } from "./pages/StatisticsDiscoveryPage";
+import { TrendWorkspacePage } from "./features/trends/TrendWorkspacePage";
 import { isSystemAuthenticated, logout, systemLogin } from "./auth";
 import { clampInput, INPUT_LIMITS } from "./inputLimits";
 
@@ -44,9 +45,16 @@ function TopNav({ authenticated, onAuthenticatedChange }: { authenticated: boole
         <NavLink to="/discover" style={linkStyle}>
           站点发现
         </NavLink>
-        <NavLink to="/statistics" style={linkStyle}>
-          统计与发现
-        </NavLink>
+        {authenticated && (
+          <>
+            <NavLink to="/statistics" style={linkStyle}>
+              统计与发现
+            </NavLink>
+            <NavLink to="/trends" style={linkStyle}>
+              趋势总结
+            </NavLink>
+          </>
+        )}
       </div>
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         {authenticated ? (
@@ -84,7 +92,14 @@ export default function App() {
       <Routes>
         <Route path="/" element={<HomePage hasSystemAccess={authenticated} />} />
         <Route path="/discover" element={<DiscoveryPage hasSystemAccess={authenticated} />} />
-        <Route path="/statistics" element={<StatisticsDiscoveryPage hasSystemAccess={authenticated} />} />
+        <Route
+          path="/statistics"
+          element={authenticated ? <StatisticsDiscoveryPage hasSystemAccess /> : <Navigate to="/" replace />}
+        />
+        <Route
+          path="/trends"
+          element={authenticated ? <TrendWorkspacePage hasSystemAccess /> : <Navigate to="/" replace />}
+        />
       </Routes>
     </BrowserRouter>
   );

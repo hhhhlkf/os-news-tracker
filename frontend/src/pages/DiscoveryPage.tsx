@@ -36,7 +36,7 @@ export function DiscoveryPage({ hasSystemAccess = false }: { hasSystemAccess?: b
     <div style={pageShell}>
       <div style={pageInner}>
         <header style={heroCard}>
-          <div style={eyebrow}>OS News Tracker</div>
+          <div style={eyebrow}>Site Discovery</div>
           <h1 style={heroTitle}>站点发现</h1>
           <p style={heroCopy}>输入网站，AI 探查员摸清爬取门道，沉淀为可复用的爬取方式。</p>
         </header>
@@ -89,6 +89,7 @@ const heroCard: CSSProperties = {
   color: "#f8fafc",
   borderRadius: 8,
   padding: 24,
+  minHeight: 160,
   marginBottom: 20,
   boxShadow: "0 18px 40px rgba(15, 23, 42, 0.14)",
 };
@@ -101,7 +102,7 @@ const eyebrow: CSSProperties = {
 
 const heroTitle: CSSProperties = {
   margin: 0,
-  fontSize: 28,
+  fontSize: 32,
   lineHeight: 1.2,
 };
 
@@ -109,6 +110,7 @@ const heroCopy: CSSProperties = {
   marginTop: 10,
   marginBottom: 0,
   color: "#d0d5dd",
+  fontSize: 14,
 };
 
 const runLimitSection: CSSProperties = {

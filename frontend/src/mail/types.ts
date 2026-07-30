@@ -4,6 +4,11 @@ export type MailBoundaryMode = "none" | "absolute" | "relative";
 export type MailRelativeRange = "24h" | "7d" | "30d";
 export type MailProviderKind = "tof4" | "smtp";
 
+/** User-facing channel name; API values stay `tof4` / `smtp`. */
+export function mailProviderLabel(provider: MailProviderKind): string {
+  return provider === "tof4" ? "司内发送" : "司外发送";
+}
+
 export interface MailFilterSnapshot {
   q?: string | null;
   main_category?: string | null;

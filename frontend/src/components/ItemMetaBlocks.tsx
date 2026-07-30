@@ -25,8 +25,9 @@ export function formatDateYmd(value: string | null | undefined): string {
   return value.slice(0, 10);
 }
 
-export function SourceCta({ url }: { url: string }) {
+export function SourceCta({ url, size = "default" }: { url: string; size?: "default" | "sm" }) {
   const domain = domainFromUrl(url);
+  const compact = size === "sm";
 
   return (
     <a
@@ -38,27 +39,30 @@ export function SourceCta({ url }: { url: string }) {
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 6,
-        height: 28,
+        gap: compact ? 4 : 6,
+        height: compact ? 22 : 28,
         boxSizing: "border-box",
-        padding: "6px 9px",
+        padding: compact ? "3px 7px" : "6px 9px",
         border: "1px solid #d0d5dd",
-        borderRadius: 8,
+        borderRadius: compact ? 6 : 8,
         background: "#fff",
         color: "#344054",
-        fontSize: 12,
+        fontSize: compact ? 11 : 12,
         textDecoration: "none",
         lineHeight: 1,
-        maxWidth: 168,
+        maxWidth: compact ? 148 : 168,
         width: "fit-content",
+        minWidth: 0,
+        flexShrink: 0,
         whiteSpace: "nowrap",
+        overflow: "hidden",
       }}
     >
       <span>阅读原文</span>
       <svg
         xmlns="http://www.w3.org/2000/svg"
-        width={14}
-        height={14}
+        width={compact ? 12 : 14}
+        height={compact ? 12 : 14}
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
@@ -71,7 +75,15 @@ export function SourceCta({ url }: { url: string }) {
         <polyline points="15 3 21 3 21 9" />
         <line x1="10" y1="14" x2="21" y2="3" />
       </svg>
-      <span style={{ color: "#98a2b3", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis" }}>
+      <span
+        style={{
+          color: "#98a2b3",
+          maxWidth: compact ? 64 : 80,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
         {truncateLinkText(domain)}
       </span>
     </a>
@@ -85,19 +97,24 @@ function gradeForScore(score: number) {
   return "D";
 }
 
-function qualityBadgeStyle(score: number | null | undefined, status: string | null | undefined): CSSProperties {
+function qualityBadgeStyle(
+  score: number | null | undefined,
+  status: string | null | undefined,
+  compact = false,
+): CSSProperties {
   const base: CSSProperties = {
-    minWidth: 58,
+    minWidth: compact ? 48 : 58,
     textAlign: "center",
-    borderRadius: 8,
-    padding: "3px 7px",
-    fontSize: 12,
+    borderRadius: compact ? 6 : 8,
+    padding: compact ? "2px 5px" : "3px 7px",
+    fontSize: compact ? 10 : 12,
     fontWeight: 800,
     lineHeight: 1.1,
     whiteSpace: "nowrap",
     border: "1px solid #d0d5dd",
     color: "#475467",
     background: "#f9fafb",
+    flexShrink: 0,
   };
   if (typeof score !== "number") return base;
   if (status === "failed" || score < 50) return { ...base, border: "1px solid #fecdca", color: "#b42318", background: "#fef3f2" };
@@ -110,8 +127,10 @@ export function SourceQualityMeta(props: {
   score?: number | null;
   grade?: string | null;
   status?: string | null;
+  size?: "default" | "sm";
 }) {
-  const { sourceName, score, status } = props;
+  const { sourceName, score, status, size = "default" } = props;
+  const compact = size === "sm";
   const label = typeof score === "number" ? `${props.grade ?? gradeForScore(score)} ${score}` : "未审计";
   return (
     <div
@@ -119,23 +138,26 @@ export function SourceQualityMeta(props: {
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 8,
-        height: 28,
+        gap: compact ? 5 : 8,
+        height: compact ? 22 : 28,
         boxSizing: "border-box",
         minWidth: 0,
-        maxWidth: 320,
-        padding: "6px 9px",
+        maxWidth: compact ? 240 : 320,
+        padding: compact ? "3px 7px" : "6px 9px",
         border: "1px solid #d0d5dd",
-        borderRadius: 8,
+        borderRadius: compact ? 6 : 8,
         background: "#fff",
         lineHeight: 1,
+        overflow: "hidden",
+        flexShrink: 1,
       }}
     >
       <span
         style={{
-          fontSize: 12,
+          fontSize: compact ? 11 : 12,
           color: sourceName ? "#475467" : "#98a2b3",
-          maxWidth: 190,
+          minWidth: 0,
+          maxWidth: compact ? 140 : 190,
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
@@ -143,7 +165,7 @@ export function SourceQualityMeta(props: {
       >
         {sourceName || "来源未标注"}
       </span>
-      <span style={qualityBadgeStyle(score, status)}>{label}</span>
+      <span style={qualityBadgeStyle(score, status, compact)}>{label}</span>
     </div>
   );
 }

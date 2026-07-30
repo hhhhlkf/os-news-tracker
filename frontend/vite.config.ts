@@ -42,6 +42,46 @@ export default defineConfig({
         target: "http://backend:8000",
         changeOrigin: true,
       },
+      "/trends/templates": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
+      "/trends/settings": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
+      "/trends/embedding": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
+      "/trends/cards": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
+      "/trends/vectors": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
+      "/trends/clusters": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
+      "/trends/storylines": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
+      "/trends/runs": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
+      "/trends/results": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
+      "/trends/schedule": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
       "/system-morning-crawl": {
         target: "http://backend:8000",
         changeOrigin: true,

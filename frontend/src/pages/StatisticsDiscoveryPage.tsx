@@ -513,7 +513,7 @@ export function StatisticsDiscoveryPage({ hasSystemAccess = false }: { hasSystem
     return (
       <main style={page}>
         <header style={heroCard}>
-          <div style={eyebrow}>SYSTEM ANALYTICS</div>
+          <div style={eyebrow}>Statistics And Discovery</div>
           <h1 style={pageTitle}>统计与发现</h1>
         </header>
         <div style={{ ...panel, color: "#475467" }}>该页面包含系统 Token 用量，请先在顶部使用管理密码登录。</div>
@@ -528,7 +528,7 @@ export function StatisticsDiscoveryPage({ hasSystemAccess = false }: { hasSystem
   return (
     <main style={page}>
       <header style={heroCard}>
-        <div style={eyebrow}>SYSTEM ANALYTICS</div>
+        <div style={eyebrow}>Statistics And Discovery</div>
         <h1 style={pageTitle}>统计与发现</h1>
         <p style={heroCopy}>
           精确追踪查询与智能探查的模型输入、输出和总 Token。
@@ -664,11 +664,12 @@ const heroCard: CSSProperties = {
   color: "#f8fafc",
   borderRadius: 8,
   padding: 24,
+  minHeight: 160,
   marginBottom: 22,
   boxShadow: "0 18px 40px rgba(15, 23, 42, 0.14)",
 };
-const pageTitle: CSSProperties = { margin: "4px 0 0", fontSize: 28, lineHeight: 1.2, color: "#f8fafc" };
-const eyebrow: CSSProperties = { fontSize: 13, color: "#98a2b3", marginBottom: 10, fontWeight: 700, letterSpacing: "0.08em" };
+const pageTitle: CSSProperties = { margin: 0, fontSize: 32, lineHeight: 1.2, color: "#f8fafc" };
+const eyebrow: CSSProperties = { fontSize: 13, color: "#98a2b3", marginBottom: 10 };
 const heroCopy: CSSProperties = { marginTop: 10, marginBottom: 0, color: "#d0d5dd", fontSize: 14 };
 const card: CSSProperties = { border: "1px solid #eaecf0", borderRadius: 12, padding: 18, background: "#fff", boxShadow: "0 1px 2px rgba(16,24,40,.04)" };
 const panel: CSSProperties = { ...card, marginTop: 14, minWidth: 0 };

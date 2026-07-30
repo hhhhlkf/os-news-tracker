@@ -97,6 +97,21 @@ def _tag_ids_for_root_names(db: Session, names: list[str]) -> list[int]:
     return tag_ids
 
 
+def _parse_item_ids(raw: str | None) -> list[int]:
+    """Parse the exact `item_ids=1,2,3` filter into deduped positive integers."""
+    ids: list[int] = []
+    seen: set[int] = set()
+    for value in _split_filter_values(raw):
+        if not value.isdigit() or int(value) <= 0:
+            raise HTTPException(status_code=422, detail=f"invalid item_ids value: {value!r}")
+        item_id = int(value)
+        if item_id in seen:
+            continue
+        seen.add(item_id)
+        ids.append(item_id)
+    return ids
+
+
 def _relative_time_delta(value: str | None) -> timedelta | None:
     if value == "24h":
         return timedelta(hours=24)
@@ -138,6 +153,7 @@ def list_items(
     importance: str | None = None,
     sub_tag: str | None = None,
     source_id: str | None = None,
+    item_ids: str | None = None,
     q: str | None = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
@@ -157,6 +173,10 @@ def list_items(
     fetched_before: str | None = None,
 ):
     stmt = select(Item)
+    # Exact primary-key filter used by the trend carousel; titles never take part.
+    exact_item_ids = _parse_item_ids(item_ids)
+    if exact_item_ids:
+        stmt = stmt.where(Item.id.in_(exact_item_ids))
     main_categories = _split_filter_values(main_category)
     if main_categories:
         stmt = stmt.where(Item.main_category.in_(main_categories))
@@ -190,8 +210,12 @@ def list_items(
             )
         )
     if q:
+        # title_tldr is the headline the list and detail pages actually render,
+        # so a word copied off the screen has to match it as well as the source title.
         like = f"%{q}%"
-        stmt = stmt.where((Item.title.ilike(like)) | (Item.summary.ilike(like)))
+        stmt = stmt.where(
+            Item.title.ilike(like) | Item.title_tldr.ilike(like) | Item.summary.ilike(like)
+        )
 
     # Time-range filters on published_at.
     # Absolute dates keep the historical natural-day semantics; relative presets

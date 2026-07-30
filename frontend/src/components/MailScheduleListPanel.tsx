@@ -10,7 +10,13 @@ import {
   sendNowMailSchedule,
   updateMailSchedule,
 } from "../mail/api";
-import type { MailDeliveryLog, MailFilterSnapshot, MailFrequency, MailSchedule } from "../mail/types";
+import {
+  mailProviderLabel,
+  type MailDeliveryLog,
+  type MailFilterSnapshot,
+  type MailFrequency,
+  type MailSchedule,
+} from "../mail/types";
 import { clampInput, INPUT_LIMITS } from "../inputLimits";
 import { emailListError, parseEmailList } from "../mail/emailValidation";
 import { DeleteIconButton } from "./DeleteIconButton";
@@ -250,7 +256,7 @@ export function MailScheduleListPanel(props: {
           ? `补发成功，共 ${data.item_count} 条。`
           : data.status === "查询空" || data.status === "skipped_empty"
             ? "当前筛选没有匹配到新闻，未补发。"
-          : `补发失败（${data.provider.toUpperCase()}）：${data.error_message ?? "未知错误"}`,
+          : `补发失败（${mailProviderLabel(data.provider)}）：${data.error_message ?? "未知错误"}`,
       );
       invalidate();
     },
