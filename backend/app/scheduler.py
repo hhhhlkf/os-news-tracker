@@ -322,3 +322,14 @@ def start_morning_crawl_scheduler() -> BackgroundScheduler:
     register_morning_crawl_jobs(scheduler)
     scheduler.start()
     return scheduler
+
+
+def start_trend_scheduler() -> BackgroundScheduler:
+    """趋势定时任务调度器：只调用 trends 模块的公开启动入口。
+
+    规则解析、去重、事实层编排等趋势业务判断全部留在 app/trends/scheduler.py，
+    这里不承载任何趋势逻辑；由独立开关 ENABLE_TREND_SCHEDULER 控制。
+    """
+    from app.trends.scheduler import start_trend_schedule_scheduler
+
+    return start_trend_schedule_scheduler()

@@ -4,6 +4,7 @@ import base64
 import fcntl
 import logging
 import re
+import shutil
 import threading
 import time
 import uuid
@@ -30,6 +31,19 @@ _SAFE_PROFILE_NAME = re.compile(r"[^a-zA-Z0-9_.-]+")
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _safe_profile_name(profile_name: str) -> str:
+    return _SAFE_PROFILE_NAME.sub("_", profile_name).strip("._") or "default"
+
+
+def profile_browser_data_dir(profile_name: str) -> Path:
+    """Persistent Chromium profile the QR login reuses across attempts."""
+    return Path(get_settings().wechat_browser_data_dir) / _safe_profile_name(profile_name)
+
+
+def _login_lock_path(profile_name: str) -> Path:
+    return Path(get_settings().wechat_browser_data_dir) / f".{_safe_profile_name(profile_name)}.login.lock"
 
 
 def get_stored_profile(profile_name: str) -> WechatAuthProfile | None:
@@ -100,6 +114,162 @@ def profile_public_status(profile_name: str) -> dict[str, Any]:
         "updated_at": None,
         "last_verified_at": None,
     }
+
+
+def verify_profile(profile_name: str) -> dict[str, Any]:
+    """Probe WeChat with the stored credential and persist the real verdict.
+
+    This is the only place the reported status is backed by WeChat itself; the
+    stored ``status`` is otherwise just bookkeeping from the last login or the
+    last crawl. An ``unknown`` result leaves the stored status untouched on
+    purpose, so a network blip never revokes a working credential.
+    """
+    from app.discovery.wechat_tools import probe_mp_session
+
+    profile = get_stored_profile(profile_name)
+    if profile is not None:
+        # A stored row with no credential means logged out or expired, and it
+        # deliberately shadows any env fallback: falling back would report a
+        # stale env cookie as valid right after an explicit logout.
+        if not (profile.cookie and profile.token):
+            return {
+                "result": "unconfigured",
+                "reason": "当前没有已保存的微信登录态，请扫码登录。",
+                "checked_at": _iso(utc_now()),
+                "profile": profile_public_status(profile_name),
+            }
+        cookie, token = profile.cookie, profile.token
+        persistable = True
+    else:
+        settings = get_settings()
+        expected = settings.wechat_mp_profile_name or "wechat_mp_default"
+        if (
+            profile_name != expected
+            or not settings.wechat_mp_cookie
+            or not settings.wechat_mp_token
+        ):
+            return {
+                "result": "unconfigured",
+                "reason": "尚未配置微信登录态，请先扫码登录。",
+                "checked_at": _iso(utc_now()),
+                "profile": profile_public_status(profile_name),
+            }
+        cookie, token = settings.wechat_mp_cookie, settings.wechat_mp_token
+        # An env-only credential has no row to update; report the live verdict
+        # and let an expiry create the usual sentinel below.
+        persistable = False
+
+    result, reason = probe_mp_session(cookie=cookie, token=token)
+    if result == "expired":
+        mark_profile_expired(profile_name, reason or "WeChat MP login expired", token, cookie)
+    elif result == "valid" and persistable:
+        mark_profile_verified(profile_name, token, cookie)
+    logger.info("wechat_auth_verify profile=%s result=%s", profile_name, result)
+    return {
+        "result": result,
+        "reason": reason,
+        "checked_at": _iso(utc_now()),
+        "profile": profile_public_status(profile_name),
+    }
+
+
+def logout_profile(profile_name: str) -> dict[str, Any]:
+    """Drop the stored credential and the retained browser session.
+
+    Clearing the Chromium profile is what makes the next login a real scan: the
+    QR flow reuses a persistent profile, and while that profile still holds a
+    WeChat session it logs straight back in as the same account without ever
+    showing a code.
+    """
+    lock_path = _login_lock_path(profile_name)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = lock_path.open("a+")
+    try:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("扫码会话正在进行中，请先取消该会话再退出登录。") from exc
+        try:
+            browser_data_dir = profile_browser_data_dir(profile_name)
+            browser_data_cleared = browser_data_dir.exists()
+            if browser_data_cleared:
+                shutil.rmtree(browser_data_dir, ignore_errors=True)
+                browser_data_cleared = not browser_data_dir.exists()
+            _clear_stored_credential(profile_name)
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    finally:
+        lock_file.close()
+
+    logger.info(
+        "wechat_auth_logout profile=%s browser_data_cleared=%s",
+        profile_name,
+        browser_data_cleared,
+    )
+    return {
+        "browser_data_cleared": browser_data_cleared,
+        "profile": profile_public_status(profile_name),
+    }
+
+
+def _clear_stored_credential(profile_name: str) -> None:
+    """Blank the row rather than delete it, so it keeps shadowing the env fallback."""
+    for attempt in range(2):
+        db = SessionLocal()
+        try:
+            profile = db.scalar(
+                select(WechatAuthProfile)
+                .where(WechatAuthProfile.profile_name == profile_name)
+                .with_for_update()
+            )
+            now = utc_now()
+            if profile is None:
+                profile = WechatAuthProfile(
+                    profile_name=profile_name,
+                    cookie="",
+                    token="",
+                    status="unconfigured",
+                    updated_at=now,
+                )
+                db.add(profile)
+            else:
+                profile.cookie = ""
+                profile.token = ""
+                profile.status = "unconfigured"
+                profile.last_error = None
+                profile.last_verified_at = None
+                profile.updated_at = now
+            db.commit()
+            return
+        except IntegrityError:
+            db.rollback()
+            if attempt > 0:
+                raise
+            # A concurrent writer inserted the row first; retry under the lock.
+        finally:
+            db.close()
+
+
+def mark_profile_verified(profile_name: str, credential_token: str, credential_cookie: str) -> None:
+    """Record a confirmed-live credential; heals a status an earlier probe soured."""
+    db = SessionLocal()
+    try:
+        profile = db.scalar(
+            select(WechatAuthProfile)
+            .where(WechatAuthProfile.profile_name == profile_name)
+            .with_for_update()
+        )
+        if profile is None:
+            return
+        # A verdict about an older credential must not bless a renewed one.
+        if profile.token != credential_token or profile.cookie != credential_cookie:
+            return
+        profile.status = "valid"
+        profile.last_error = None
+        profile.last_verified_at = utc_now()
+        db.commit()
+    finally:
+        db.close()
 
 
 def save_profile(profile_name: str, cookie: str, token: str) -> None:
@@ -246,10 +416,9 @@ class WechatQrLoginManager:
                 raise RuntimeError("The previous QR login session is still cleaning up")
 
             settings = get_settings()
-            safe_name = _SAFE_PROFILE_NAME.sub("_", profile_name).strip("._") or "default"
-            lock_dir = Path(settings.wechat_browser_data_dir)
-            lock_dir.mkdir(parents=True, exist_ok=True)
-            lock_file = (lock_dir / f".{safe_name}.login.lock").open("a+")
+            lock_path = _login_lock_path(profile_name)
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            lock_file = lock_path.open("a+")
             try:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
@@ -371,9 +540,7 @@ class WechatQrLoginManager:
         try:
             from playwright.sync_api import sync_playwright
 
-            settings = get_settings()
-            safe_name = _SAFE_PROFILE_NAME.sub("_", session.profile_name).strip("._") or "default"
-            user_data_dir = Path(settings.wechat_browser_data_dir) / safe_name
+            user_data_dir = profile_browser_data_dir(session.profile_name)
             user_data_dir.mkdir(parents=True, exist_ok=True)
 
             playwright = sync_playwright().start()

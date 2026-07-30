@@ -5,9 +5,11 @@ import {
   cancelWechatQrSession,
   fetchWechatAuthProfile,
   fetchWechatQrSession,
+  logoutWechatAuthProfile,
   startWechatQrSession,
+  verifyWechatAuthProfile,
 } from "../api/client";
-import type { WechatQrSessionStatus } from "../types";
+import type { WechatAuthVerificationResult, WechatQrSessionStatus } from "../types";
 
 const SECTION: CSSProperties = {
   background: "#fff",
@@ -36,6 +38,14 @@ const statusLabels: Record<string, string> = {
   scanned: "已扫码，等待手机确认",
   success: "续期成功",
   cancelled: "已取消",
+  unknown: "无法确认",
+};
+
+const verificationCopy: Record<WechatAuthVerificationResult, string> = {
+  valid: "已向微信公众平台确认，登录态仍然有效。",
+  expired: "微信公众平台判定登录态已失效，请扫码续期后再抓取。",
+  unknown: "本次未能连通微信公众平台，无法确认登录态；已保留上一次的判定结果。",
+  unconfigured: "尚未配置微信登录态，请先扫码续期。",
 };
 
 function readExpandedState(): boolean {
@@ -65,6 +75,15 @@ export function WechatAuthPanel() {
     queryFn: fetchWechatAuthProfile,
     retry: false,
   });
+  // The stored status is only bookkeeping, so opening the panel asks WeChat
+  // itself once; without this an expired session still reads as 有效.
+  const verifyQuery = useQuery({
+    queryKey: ["wechat-auth-verify"],
+    queryFn: verifyWechatAuthProfile,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+  });
   const sessionQuery = useQuery({
     queryKey: ["wechat-qr-session", sessionId],
     queryFn: () => fetchWechatQrSession(sessionId!),
@@ -82,17 +101,44 @@ export function WechatAuthPanel() {
   const cancelMutation = useMutation({
     mutationFn: (id: string) => cancelWechatQrSession(id),
   });
+  const logoutMutation = useMutation({
+    // Logging out clears the browser profile, so the login that follows is a
+    // real scan rather than a silent re-login with the retained session.
+    mutationFn: async () => {
+      const result = await logoutWechatAuthProfile();
+      const session = await startWechatQrSession();
+      return { result, session };
+    },
+    onSuccess: async ({ session }) => {
+      setSessionId(session.session_id);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["wechat-auth-profile"] }),
+        queryClient.invalidateQueries({ queryKey: ["wechat-auth-verify"] }),
+      ]);
+    },
+  });
 
   useEffect(() => {
     if (sessionQuery.data?.status === "success") {
       void queryClient.invalidateQueries({ queryKey: ["wechat-auth-profile"] });
+      void queryClient.invalidateQueries({ queryKey: ["wechat-auth-verify"] });
     }
   }, [queryClient, sessionQuery.data?.status]);
 
-  const profile = profileQuery.data;
+  const verification = verifyQuery.data;
+  // A live verdict supersedes the stored one; the check also rewrites the row,
+  // so its embedded profile is the freshest view of both.
+  const profile = verification?.profile ?? profileQuery.data;
   const session = cancelMutation.data ?? sessionQuery.data;
   const active = Boolean(session && !terminalStatuses.has(session.status));
-  const error = profileQuery.error ?? startMutation.error ?? sessionQuery.error ?? cancelMutation.error;
+  const error =
+    profileQuery.error
+    ?? startMutation.error
+    ?? sessionQuery.error
+    ?? cancelMutation.error
+    ?? logoutMutation.error;
+  const verifying = verifyQuery.isFetching;
+  const badgeStatus = verification?.result ?? profile?.status;
 
   return (
     <section style={SECTION}>
@@ -104,8 +150,8 @@ export function WechatAuthPanel() {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={statusBadge(profile?.status)}>
-            {profileQuery.isPending ? "读取中" : statusLabels[profile?.status ?? ""] ?? profile?.status ?? "未知"}
+          <span style={statusBadge(verifying ? undefined : badgeStatus)}>
+            {verifying ? "验证中" : statusLabels[badgeStatus ?? ""] ?? badgeStatus ?? "未知"}
           </span>
           <button type="button" onClick={() => setExpanded((value) => !value)} style={btnGhost}>
             {expanded ? "收起" : "展开"}
@@ -128,11 +174,30 @@ export function WechatAuthPanel() {
               }
             />
             <Detail label="最近续期" value={formatTime(profile?.updated_at ?? null)} />
-            <Detail label="最近验证" value={formatTime(profile?.last_verified_at ?? null)} />
+            <Detail label="最近确认有效" value={formatTime(profile?.last_verified_at ?? null)} />
+          </div>
+
+          <div style={verifying ? verifyBoxNeutral : verifyBoxFor(verification?.result)}>
+            {verifying
+              ? "正在向微信公众平台确认登录态…"
+              : verifyQuery.error instanceof Error
+                ? `登录态验证请求失败：${verifyQuery.error.message}`
+                : verification
+                  ? `${verificationCopy[verification.result]}（检查于 ${formatTime(verification.checked_at)}）`
+                  : "尚未验证登录态。"}
+            {verification?.reason && <div style={{ marginTop: 4 }}>{verification.reason}</div>}
           </div>
           {profile?.last_error && <div style={errorBox}>最近错误：{profile.last_error}</div>}
 
           <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              style={btnGhost}
+              disabled={verifying}
+              onClick={() => void verifyQuery.refetch()}
+            >
+              {verifying ? "验证中…" : "重新验证登录态"}
+            </button>
             <button
               type="button"
               style={btnPrimary}
@@ -155,7 +220,34 @@ export function WechatAuthPanel() {
                 取消扫码
               </button>
             )}
+            <button
+              type="button"
+              style={btnDanger}
+              disabled={active || logoutMutation.isPending}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    "退出登录会清除已保存的登录态和浏览器会话，随后立即打开新的扫码登录。需要重新用微信扫码，期间公众号抓取不可用。确定继续？",
+                  )
+                ) {
+                  return;
+                }
+                cancelMutation.reset();
+                startMutation.reset();
+                logoutMutation.mutate();
+              }}
+            >
+              {logoutMutation.isPending ? "正在退出登录…" : "退出登录并重新扫码"}
+            </button>
           </div>
+          {logoutMutation.data && (
+            <div style={verifyBoxNeutral}>
+              已退出登录，登录态已清除
+              {logoutMutation.data.result.browser_data_cleared
+                ? "，浏览器会话也已清空，下方二维码需要重新扫码。"
+                : "。未发现残留的浏览器会话，下方二维码需要重新扫码。"}
+            </div>
+          )}
           {error instanceof Error && <div style={errorBox}>{error.message}</div>}
 
           {session && (
@@ -199,6 +291,15 @@ function Detail({ label, value }: { label: string; value: string }) {
   );
 }
 
+function verifyBoxFor(result: WechatAuthVerificationResult | undefined): CSSProperties {
+  if (result === "valid") return { ...verifyBoxBase, color: "#027a48", background: "#ecfdf3", borderColor: "#a6f4c5" };
+  if (result === "expired") return { ...verifyBoxBase, color: "#b42318", background: "#fef3f2", borderColor: "#fecdca" };
+  if (result === "unknown" || result === "unconfigured") {
+    return { ...verifyBoxBase, color: "#b54708", background: "#fffaeb", borderColor: "#fedf89" };
+  }
+  return verifyBoxNeutral;
+}
+
 function statusBadge(status: string | undefined): CSSProperties {
   const good = status === "valid" || status === "success";
   const warning = status === "expired" || status === "failed";
@@ -213,6 +314,22 @@ function statusBadge(status: string | undefined): CSSProperties {
     whiteSpace: "nowrap",
   };
 }
+
+const verifyBoxBase: CSSProperties = {
+  marginTop: 12,
+  padding: "8px 10px",
+  borderRadius: 8,
+  border: "1px solid",
+  fontSize: 12,
+  lineHeight: 1.55,
+};
+
+const verifyBoxNeutral: CSSProperties = {
+  ...verifyBoxBase,
+  color: "#475467",
+  background: "#f9fafb",
+  borderColor: "#eaecf0",
+};
 
 const detailGrid: CSSProperties = {
   display: "grid",
@@ -240,6 +357,17 @@ const btnGhost: CSSProperties = {
   borderRadius: 999,
   background: "#fff",
   color: "#344054",
+  padding: "8px 14px",
+  fontSize: 13,
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const btnDanger: CSSProperties = {
+  border: "1px solid #fecdca",
+  borderRadius: 999,
+  background: "#fff",
+  color: "#b42318",
   padding: "8px 14px",
   fontSize: 13,
   fontWeight: 700,

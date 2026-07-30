@@ -9,10 +9,15 @@ import {
   sendImmediateMail,
   updateMailNoticeConfig,
 } from "../mail/api";
-import type { MailImmediateSendRequest, MailPreviewResponse, MailProviderKind, MailTemplate } from "../mail/types";
-import { ImportanceBadge } from "./ImportanceBadge";
+import {
+  mailProviderLabel,
+  type MailImmediateSendRequest,
+  type MailPreviewResponse,
+  type MailProviderKind,
+  type MailTemplate,
+} from "../mail/types";
 import { MailNoticeBox } from "./MailNoticeBox";
-import { formatDateYmd, HotspotTags, SourceCta, SourceQualityMeta, TechHighlightsList } from "./ItemMetaBlocks";
+import { MailPreviewItemCard } from "./MailPreviewItemCard";
 import { clampInput, INPUT_LIMITS } from "../inputLimits";
 import { emailListError, parseEmailList } from "../mail/emailValidation";
 
@@ -161,7 +166,7 @@ export function MailImmediateSendPanel(props: {
       return previewImmediateMail(request);
     },
     onSuccess: (data) => {
-      setStatusMessage(`预览已生成，共 ${data.item_count} 条，通道：${data.provider.toUpperCase()}。`);
+      setStatusMessage(`预览已生成，共 ${data.item_count} 条，通道：${mailProviderLabel(data.provider)}。`);
       setPreviewData(data);
     },
     onError: (error) => {
@@ -177,10 +182,10 @@ export function MailImmediateSendPanel(props: {
     onSuccess: (data) => {
       setStatusMessage(
         data.status === "sent"
-          ? `发送成功，共 ${data.item_count} 条，通道：${data.provider.toUpperCase()}。`
+          ? `发送成功，共 ${data.item_count} 条，通道：${mailProviderLabel(data.provider)}。`
           : data.status === "查询空" || data.status === "skipped_empty"
             ? "当前筛选没有匹配到新闻，未发送。"
-          : `发送失败（${data.provider.toUpperCase()}）：${data.error_message ?? "未知错误"}`,
+          : `发送失败（${mailProviderLabel(data.provider)}）：${data.error_message ?? "未知错误"}`,
       );
     },
     onError: (error) => {
@@ -327,7 +332,7 @@ export function MailImmediateSendPanel(props: {
     snapshotSummary,
   ]);
 
-  const providerLabel = useMemo(() => (mailProvider === "tof4" ? "TOF4 API" : "SMTP"), [mailProvider]);
+  const providerLabel = useMemo(() => mailProviderLabel(mailProvider), [mailProvider]);
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "0.8fr 1.2fr", gap: 12, alignItems: "start" }}>
@@ -399,8 +404,8 @@ export function MailImmediateSendPanel(props: {
               <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>发送通道</span>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {([
-                  { value: "tof4", label: "TOF4 API" },
-                  { value: "smtp", label: "SMTP" },
+                  { value: "tof4", label: mailProviderLabel("tof4") },
+                  { value: "smtp", label: mailProviderLabel("smtp") },
                 ] as const).map((option) => {
                   const active = mailProvider === option.value;
                   return (
@@ -570,7 +575,7 @@ export function MailImmediateSendPanel(props: {
           <div style={{ fontSize: 13, lineHeight: 1.7, color: "#d0d5dd" }}>
             筛选条件：{previewHeaderSummary}
             <br />
-            通道：{previewData?.provider?.toUpperCase() ?? providerLabel}
+            通道：{previewData?.provider ? mailProviderLabel(previewData.provider) : providerLabel}
             <br />
             {previewData ? `共 ${previewData.item_count} 条，准备发送给 ${previewData.recipients.length || 0} 个收件人。` : "点击“生成预览”后展示邮件内容。"}
           </div>
@@ -579,38 +584,7 @@ export function MailImmediateSendPanel(props: {
           <MailNoticeBox notice={previewNotice} />
           {previewData?.items.length ? (
             previewData.items.map((item, index) => (
-              <div key={`${item.source_url}-${index}`} style={{ background: "#fff", border: "1px solid #eaecf0", borderRadius: 12, padding: "14px 16px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 8 }}>
-                  <div style={{ fontSize: 16, fontWeight: 800, color: "#101828" }}>{item.title}</div>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", whiteSpace: "nowrap" }}>
-                    <ImportanceBadge value={item.importance} />
-                    <div style={{ fontSize: 11, color: "#667085" }}>{formatDateYmd(item.published_at)}</div>
-                  </div>
-                </div>
-                <div style={{ display: "grid", gap: 10, fontSize: 13, color: "#475467", lineHeight: 1.7 }}>
-                  <div><strong style={{ color: "#101828" }}>摘要：</strong>{item.summary ?? "暂无"}</div>
-                  <div>
-                    <strong style={{ color: "#101828", display: "block", marginBottom: 6 }}>技术要点</strong>
-                    <TechHighlightsList items={item.key_points} compact />
-                  </div>
-                  <div>
-                    <strong style={{ color: "#101828", display: "block", marginBottom: 6 }}>技术热点</strong>
-                    <HotspotTags tags={item.hotspots} />
-                  </div>
-                  <div>
-                    <strong style={{ color: "#101828", display: "block", marginBottom: 6 }}>来源链接</strong>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      <SourceCta url={item.source_url} />
-                      <SourceQualityMeta
-                        sourceName={item.source_name}
-                        score={item.source_quality_score}
-                        grade={item.source_quality_grade}
-                        status={item.source_quality_status}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <MailPreviewItemCard key={`${item.source_url}-${index}`} item={item} />
             ))
           ) : (
             <div style={{ border: "1px dashed #d0d5dd", background: "#fff", color: "#667085", borderRadius: 12, padding: 18 }}>

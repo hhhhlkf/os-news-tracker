@@ -268,13 +268,17 @@ def save_method(state: DiscoveryState, db=None) -> DiscoveryState:
         if existing is not None and state.get("force"):
             # 覆盖：更新现有 method，保留 method_id/source_id，审计历史连续
             m = db.get(CrawlMethod, existing.method_id)
+            # 同一抓取范式的重跑只更新审计结果，不应把已审核入库的方式
+            # 重新打回待审核。只有 DSL 签名实际变化时才需要重新审核。
+            requires_review = m.review_status != "approved" or m.signature != sig
             m.dsl_recipe = recipe.model_dump()
             m.signature = sig
             m.status = method_status
-            m.review_status = REVIEW_PENDING
-            m.reviewed_at = None
-            m.reviewed_by = None
-            m.review_note = None
+            if requires_review:
+                m.review_status = REVIEW_PENDING
+                m.reviewed_at = None
+                m.reviewed_by = None
+                m.review_note = None
             m.updated_at = datetime.now(timezone.utc)
         elif existing is not None:
             # 同 domain 已有且未 force：保留旧（兜底，正常流程前置检查已拦截）

@@ -8,12 +8,18 @@ import {
   sendMailTemplate,
   updateMailTemplate,
 } from "../mail/api";
-import type { MailFilterSnapshot, MailPreviewResponse, MailProviderKind, MailTemplate } from "../mail/types";
-import { formatDateYmd, HotspotTags, SourceCta, SourceQualityMeta, TechHighlightsList } from "./ItemMetaBlocks";
+import {
+  mailProviderLabel,
+  type MailFilterSnapshot,
+  type MailPreviewResponse,
+  type MailProviderKind,
+  type MailTemplate,
+} from "../mail/types";
 import { clampInput, INPUT_LIMITS } from "../inputLimits";
 import { emailListError, parseEmailList } from "../mail/emailValidation";
 import { DeleteIconButton } from "./DeleteIconButton";
 import { MailNoticeBox } from "./MailNoticeBox";
+import { MailPreviewItemCard } from "./MailPreviewItemCard";
 
 function formatMultiFilter(raw: string | null | undefined): string {
   if (!raw) return "";
@@ -168,10 +174,10 @@ export function MailTemplateListPanel(props: {
     onSuccess: (data) => {
       setStatusMessage(
         data.status === "sent"
-          ? `发送成功，共 ${data.item_count} 条，通道：${data.provider.toUpperCase()}。`
+          ? `发送成功，共 ${data.item_count} 条，通道：${mailProviderLabel(data.provider)}。`
           : data.status === "查询空" || data.status === "skipped_empty"
             ? "当前筛选没有匹配到新闻，未发送。"
-          : `发送失败（${data.provider.toUpperCase()}）：${data.error_message ?? "未知错误"}`,
+          : `发送失败（${mailProviderLabel(data.provider)}）：${data.error_message ?? "未知错误"}`,
       );
       void queryClient.invalidateQueries({ queryKey: ["mail-templates"] });
     },
@@ -261,7 +267,7 @@ export function MailTemplateListPanel(props: {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
               <div style={PANEL_TITLE}>内容预览</div>
               <div style={{ fontSize: 12, color: "#667085" }}>
-                共 {previewData.item_count} 条 · {previewData.provider.toUpperCase()}
+                共 {previewData.item_count} 条 · {mailProviderLabel(previewData.provider)}
               </div>
             </div>
             <div style={{ overflowY: "auto", minHeight: 0, display: "grid", gap: 10, alignContent: "start" }}>
@@ -272,26 +278,7 @@ export function MailTemplateListPanel(props: {
                 </div>
               ) : (
                 previewData.items.map((item, index) => (
-                  <div key={`${item.source_url}-${index}`} style={{ border: "1px solid #eaecf0", borderRadius: 12, padding: "12px 14px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 6 }}>
-                      <div style={{ fontSize: 15, fontWeight: 800, color: "#101828" }}>{item.title}</div>
-                      <div style={{ fontSize: 11, color: "#667085", whiteSpace: "nowrap" }}>{formatDateYmd(item.published_at)}</div>
-                    </div>
-                    <div style={{ display: "grid", gap: 8, fontSize: 13, color: "#475467", lineHeight: 1.7 }}>
-                      <div><strong style={{ color: "#101828" }}>摘要：</strong>{item.summary ?? "暂无"}</div>
-                      <TechHighlightsList items={item.key_points} compact />
-                      <HotspotTags tags={item.hotspots} />
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                        <SourceCta url={item.source_url} />
-                        <SourceQualityMeta
-                          sourceName={item.source_name}
-                          score={item.source_quality_score}
-                          grade={item.source_quality_grade}
-                          status={item.source_quality_status}
-                        />
-                      </div>
-                    </div>
-                  </div>
+                  <MailPreviewItemCard key={`${item.source_url}-${index}`} item={item} compact />
                 ))
               )}
             </div>
@@ -453,8 +440,8 @@ export function MailTemplateListPanel(props: {
                   <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>发送通道</span>
                     {([
-                      { value: "tof4", label: "TOF4 API" },
-                      { value: "smtp", label: "SMTP" },
+                      { value: "tof4", label: mailProviderLabel("tof4") },
+                      { value: "smtp", label: mailProviderLabel("smtp") },
                     ] as const).map((option) => {
                       const active = sendProvider === option.value;
                       return (

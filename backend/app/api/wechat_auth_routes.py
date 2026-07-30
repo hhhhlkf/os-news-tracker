@@ -5,7 +5,12 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import require_system_access
 from app.config import get_settings
-from app.wechat_auth import profile_public_status, wechat_qr_login_manager
+from app.wechat_auth import (
+    logout_profile,
+    profile_public_status,
+    verify_profile,
+    wechat_qr_login_manager,
+)
 
 router = APIRouter(prefix="/wechat-auth", tags=["wechat-auth"])
 
@@ -30,6 +35,31 @@ def get_wechat_auth_profile(
 ) -> dict[str, Any]:
     response.headers["Cache-Control"] = "no-store"
     return profile_public_status(_profile_name(profile_name))
+
+
+@router.post("/profile/verify")
+def verify_wechat_auth_profile(
+    response: Response,
+    profile_name: str | None = None,
+    _access: dict[str, Any] = Depends(require_system_access),
+) -> dict[str, Any]:
+    """Check the stored credential against WeChat instead of trusting the DB status."""
+    response.headers["Cache-Control"] = "no-store"
+    return verify_profile(_profile_name(profile_name))
+
+
+@router.post("/profile/logout")
+def logout_wechat_auth_profile(
+    response: Response,
+    profile_name: str | None = None,
+    _access: dict[str, Any] = Depends(require_system_access),
+) -> dict[str, Any]:
+    """Clear the credential and the retained browser session so the next login rescans."""
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return logout_profile(_profile_name(profile_name))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/qr-sessions", status_code=202)

@@ -1,0 +1,20 @@
+# Dedicated trend embedding worker image.
+#
+# Only this image carries torch/transformers, so the web image stays slim and
+# never imports a model runtime. Model weights are NOT baked in: they are
+# downloaded once into the mounted embedding_model_cache volume.
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY pyproject.toml ./
+COPY app ./app
+COPY alembic.ini ./
+COPY alembic ./alembic
+
+# CPU-only torch keeps the image out of multi-GB CUDA territory.
+RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu -e .[embedding]
+
+ENV HF_HUB_DISABLE_TELEMETRY=1
+
+CMD ["uvicorn", "app.trends.embedding_service:app", "--host", "0.0.0.0", "--port", "8100"]

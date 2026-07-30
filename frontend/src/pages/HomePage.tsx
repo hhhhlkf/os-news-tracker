@@ -6,6 +6,7 @@ import { ItemList } from "../components/ItemList";
 import { ItemDetail } from "../components/ItemDetail";
 import { MailTaskCenter } from "../components/MailTaskCenter";
 import { MorningCrawlModal } from "../components/MorningCrawlModal";
+import { TrendCarousel } from "../features/trends/TrendCarousel";
 import { fetchMailSchedules, fetchMailTemplates } from "../mail/api";
 import { fetchMorningCrawlDashboard } from "../morningCrawl/api";
 import { demoItems } from "../demoData";
@@ -64,6 +65,10 @@ function summarizeTimeFilter(filters: Record<string, string>, prefix: "published
   return `${label}：${from} ~ ${to}`;
 }
 
+function splitItemIds(raw: string | undefined): string[] {
+  return (raw ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+}
+
 function methodDisplayName(method: CrawlMethod): string {
   return method.source_name?.trim() || method.domain || method.entry_url || `来源#${method.source_id ?? method.id}`;
 }
@@ -83,6 +88,10 @@ function summarizeActiveFilters(filters: Record<string, string>, methods: CrawlM
   const fetchedSummary = summarizeTimeFilter(filters, "fetched", "查询时间");
   if (fetchedSummary) {
     chips.push(fetchedSummary);
+  }
+  const exactItemIds = splitItemIds(filters.item_ids);
+  if (exactItemIds.length > 0) {
+    chips.push(`趋势筛选：${exactItemIds.length} 条新闻`);
   }
   if (filters.source_id) {
     const nameBySourceId = new Map(
@@ -129,7 +138,19 @@ function countActiveFilters(filters: Record<string, string>): number {
   if (filters.source_id) {
     count += 1;
   }
+  if (splitItemIds(filters.item_ids).length > 0) {
+    count += 1;
+  }
   return count;
+}
+
+/** What the trend carousel injected into the list filters, so it can be undone. */
+interface TrendSelection {
+  resultId: string | null;
+  itemId: number | null;
+  label: string;
+  /** The search word to restore, set only when a source pill overwrote it. */
+  restoreQuery: string | null;
 }
 
 export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolean }) {
@@ -138,19 +159,83 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
   const [openId, setOpenId] = useState<number | null>(null);
   const [mailOpen, setMailOpen] = useState(false);
   const [morningCrawlOpen, setMorningCrawlOpen] = useState(false);
+  const [trendSelection, setTrendSelection] = useState<TrendSelection | null>(null);
 
   const setFilter = (key: string, value: string) => {
     setPage(1);
     setFilters((f) => ({ ...f, [key]: value }));
   };
 
+  // A source pill fills the search box for display only. Typing turns that text
+  // back into a real search word, so the exact trend filter is dropped first.
+  const setSearchQuery = (value: string) => {
+    setPage(1);
+    const hadTrendFilter = trendSelection !== null;
+    setTrendSelection(null);
+    setFilters((f) => ({ ...f, q: value, ...(hadTrendFilter ? { item_ids: "" } : {}) }));
+  };
+
+  const applyTrendFilter = (trend: { resultId: string; topic: string; itemIds: number[] }) => {
+    setPage(1);
+    setOpenId(null);
+    setTrendSelection({
+      resultId: trend.resultId,
+      itemId: null,
+      label: trend.topic || "所选趋势",
+      restoreQuery: trendSelection?.restoreQuery ?? null,
+    });
+    setFilters((f) => ({ ...f, item_ids: trend.itemIds.join(",") }));
+  };
+
+  const applyTrendSourceFilter = (source: { itemId: number; title: string }) => {
+    setPage(1);
+    setOpenId(null);
+    // The title only fills the search box; filtering stays on the exact item_id,
+    // so same-named news can never be matched by accident.
+    setTrendSelection({
+      resultId: null,
+      itemId: source.itemId,
+      label: source.title,
+      restoreQuery: trendSelection?.restoreQuery ?? filters.q ?? "",
+    });
+    setFilters((f) => ({ ...f, item_ids: String(source.itemId), q: source.title }));
+  };
+
+  const clearTrendFilter = () => {
+    setPage(1);
+    const restoreQuery = trendSelection?.restoreQuery ?? null;
+    setFilters((f) => ({ ...f, item_ids: "", ...(restoreQuery === null ? {} : { q: restoreQuery }) }));
+    setTrendSelection(null);
+  };
+
+  // The title a source pill wrote into the search box is display text, never a
+  // query term: the exact item_id alone decides what the list shows.
+  const isSearchInjectedByTrend = trendSelection?.restoreQuery != null;
+  const effectiveFilters = useMemo(() => {
+    if (!isSearchInjectedByTrend) return filters;
+    const { q: _displayOnlyTitle, ...rest } = filters;
+    return rest;
+  }, [filters, isSearchInjectedByTrend]);
+
   const params = useMemo(
     () => ({
-      ...Object.fromEntries(Object.entries(filters).filter(([, value]) => value)),
+      ...Object.fromEntries(Object.entries(effectiveFilters).filter(([, value]) => value)),
       limit: PAGE_SIZE,
       offset: (page - 1) * PAGE_SIZE,
     }),
-    [filters, page],
+    [effectiveFilters, page],
+  );
+  // The trend carousel's exact item filter is an ephemeral browse action, so it
+  // stays out of the mail task center's filter snapshot and estimate.
+  const mailFilters = useMemo(
+    () => ({
+      ...Object.fromEntries(
+        Object.entries(effectiveFilters).filter(([key, value]) => value && key !== "item_ids"),
+      ),
+      limit: PAGE_SIZE,
+      offset: (page - 1) * PAGE_SIZE,
+    }),
+    [effectiveFilters, page],
   );
   const itemsQuery = useQuery({
     queryKey: ["items", params],
@@ -191,7 +276,7 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
     facetsFailed: facetsQuery.isError,
   });
 
-  const demoFilteredItems = useMemo(() => filterDemoItems(demoItems, filters), [filters]);
+  const demoFilteredItems = useMemo(() => filterDemoItems(demoItems, effectiveFilters), [effectiveFilters]);
   const demoList = useMemo(
     () => makeListResponse(demoFilteredItems, PAGE_SIZE, (page - 1) * PAGE_SIZE),
     [demoFilteredItems, page],
@@ -204,13 +289,13 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
   const selectedLiveItemId = mode === "live" ? openId ?? undefined : undefined;
 
   const hasLiveEmptyState = mode === "live" && listData?.total === 0;
-  const activeFilterCount = countActiveFilters(filters);
+  const activeFilterCount = countActiveFilters(effectiveFilters);
   const crawlMethods = crawlMethodsQuery.data ?? [];
   const activeCrawlMethods = useMemo(
     () => crawlMethods.filter((method) => method.status === "active"),
     [crawlMethods],
   );
-  const filterChips = summarizeActiveFilters(filters, activeCrawlMethods);
+  const filterChips = summarizeActiveFilters(effectiveFilters, activeCrawlMethods);
   const templateCount = mailTemplatesQuery.data?.length ?? 0;
   const scheduleCount = mailSchedulesQuery.data?.length ?? 0;
   const enabledScheduleCount = (mailSchedulesQuery.data ?? []).filter((s) => s.enabled).length;
@@ -254,6 +339,7 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
             color: "#f8fafc",
             borderRadius: 8,
             padding: 24,
+            minHeight: 160,
             marginBottom: 20,
           }}
         >
@@ -305,6 +391,13 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
           </div>
         )}
 
+        <TrendCarousel
+          onSelectTrend={applyTrendFilter}
+          onSelectSource={applyTrendSourceFilter}
+          activeResultId={trendSelection?.resultId ?? null}
+          activeItemId={trendSelection?.itemId ?? null}
+        />
+
         <section
           style={{
             border: "1px solid #d0d5dd",
@@ -319,7 +412,7 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
               placeholder="搜索标题、摘要、分类…"
               value={filters.q ?? ""}
               maxLength={INPUT_LIMITS.searchQuery}
-              onChange={(e) => setFilter("q", clampInput(e.target.value, INPUT_LIMITS.searchQuery))}
+              onChange={(e) => setSearchQuery(clampInput(e.target.value, INPUT_LIMITS.searchQuery))}
               style={{
                 flex: "1 1 420px",
                 minWidth: 260,
@@ -355,6 +448,7 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
                 setPage(1);
                 setFilters({ q: "", sort_by: "published_at", sort_dir: "desc" });
                 setOpenId(null);
+                setTrendSelection(null);
               }}
               style={{
                 border: "1px solid #d0d5dd",
@@ -368,6 +462,46 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
               清空筛选
             </button>
           </div>
+          {trendSelection && (
+            <div
+              style={{
+                marginTop: 12,
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 12,
+                flexWrap: "wrap",
+                border: "1px solid #d3e3fb",
+                background: "#eff6ff",
+                borderRadius: 8,
+                padding: "10px 12px",
+              }}
+            >
+              <div style={{ fontSize: 12, color: "#175cd3", minWidth: 0 }}>
+                趋势筛选：{trendSelection.label}
+                <span style={{ color: "#667085" }}>
+                  {" "}
+                  · 按 {splitItemIds(filters.item_ids).length} 条新闻 ID 精确匹配
+                </span>
+              </div>
+              <button
+                onClick={clearTrendFilter}
+                style={{
+                  border: "1px solid #84adff",
+                  background: "#fff",
+                  color: "#175cd3",
+                  borderRadius: 8,
+                  padding: "6px 12px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                清除趋势筛选
+              </button>
+            </div>
+          )}
         </section>
 
         <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
@@ -568,7 +702,7 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
           </div>
         )}
 
-        <MailTaskCenter open={mailOpen} onClose={() => setMailOpen(false)} homeFilters={params} />
+        <MailTaskCenter open={mailOpen} onClose={() => setMailOpen(false)} homeFilters={mailFilters} />
         {hasSystemAccess && <MorningCrawlModal open={morningCrawlOpen} onClose={() => setMorningCrawlOpen(false)} />}
       </div>
     </div>

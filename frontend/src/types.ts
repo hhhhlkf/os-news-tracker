@@ -484,6 +484,22 @@ export interface WechatAuthProfileStatus {
   last_verified_at: string | null;
 }
 
+export type WechatAuthVerificationResult = "valid" | "expired" | "unknown" | "unconfigured";
+
+/** Outcome of a live check against WeChat, not a read of the stored status. */
+export interface WechatAuthVerification {
+  result: WechatAuthVerificationResult;
+  reason: string | null;
+  checked_at: string;
+  profile: WechatAuthProfileStatus;
+}
+
+export interface WechatAuthLogoutResult {
+  /** Whether the persistent browser profile was actually removed. */
+  browser_data_cleared: boolean;
+  profile: WechatAuthProfileStatus;
+}
+
 export interface WechatQrSession {
   session_id: string;
   profile_name: string;

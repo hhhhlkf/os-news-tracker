@@ -6,6 +6,7 @@ from sqlalchemy import pool
 from alembic import context
 
 from app.models import Base
+import app.trends.models  # noqa: F401 - register trend metadata for Alembic discovery
 from app.config import get_settings
 
 # this is the Alembic Config object, which provides

@@ -31,13 +31,40 @@ services:
       ENABLE_SCHEDULER: "0"
       ENABLE_MAIL_SCHEDULER: "1"
       ENABLE_MORNING_CRAWL_SCHEDULER: "1"
+      ENABLE_TREND_SCHEDULER: "1"
       RUN_STARTUP_BACKFILL: "0"
       WATCHFILES_FORCE_POLLING: "true"
+      TRENDS_EMBEDDING_WORKER_BASE_URL: http://embedding-worker:8100
     depends_on:
       db:
         condition: service_healthy
     ports:
       - "8000:8000"
+
+  embedding-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.embedding-worker
+    working_dir: /app
+    command: uvicorn app.trends.embedding_service:app --host 0.0.0.0 --port 8100 --reload
+    volumes:
+      - ./backend:/app
+      - embedding_model_cache_dev:/var/lib/os-news-tracker/embedding-models
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
+      ENABLE_SCHEDULER: "0"
+      ENABLE_MAIL_SCHEDULER: "0"
+      ENABLE_MORNING_CRAWL_SCHEDULER: "0"
+      ENABLE_TREND_SCHEDULER: "0"
+      WATCHFILES_FORCE_POLLING: "true"
+    mem_limit: 8g
+    depends_on:
+      db:
+        condition: service_healthy
+    # Published in dev only, for direct probing of /health and /embed.
+    ports:
+      - "8100:8100"
 
   frontend:
     build:
@@ -59,3 +86,4 @@ volumes:
   pgdata_dev:
   frontend_node_modules:
   wechat_browser_data_dev:
+  embedding_model_cache_dev:

@@ -143,6 +143,12 @@ STAGES: list[StageDef] = [
         description="抓取入库管线：对每条文章做中文摘要、分类、标签、重要性、是否入库（含反爬页判定）。",
         required_tokens=["{categories}", "{existing_tags}", "{title}", "{content}"],
     ),
+    StageDef(
+        key="relevance_filter",
+        label="相关性预筛选",
+        description="搜索来源及启用相关性过滤的信息源，在富集前判断文章是否继续处理。",
+        required_tokens=["{keywords}", "{title}", "{snippet}"],
+    ),
 ]
 
 STAGE_MAP: dict[str, StageDef] = {s.key: s for s in STAGES}
@@ -164,6 +170,7 @@ def get_stage_defaults() -> dict[str, str]:
     from app.discovery.quality_audit import QUALITY_AUDIT_PROMPT
     from app.discovery.wechat_tools import WECHAT_PREFETCH_PROMPT
     from app.processing.enricher import _PROMPT_TEMPLATE as ENRICH_PROMPT
+    from app.processing.relevance import _PROMPT as RELEVANCE_FILTER_PROMPT
 
     return {
         "explorer_system": EXPLORER_SYSTEM_PROMPT,
@@ -175,6 +182,7 @@ def get_stage_defaults() -> dict[str, str]:
         "wechat_prefetch": WECHAT_PREFETCH_PROMPT,
         "naming": _NAMING_PROMPT,
         "enrich": ENRICH_PROMPT,
+        "relevance_filter": RELEVANCE_FILTER_PROMPT,
     }
 
 
