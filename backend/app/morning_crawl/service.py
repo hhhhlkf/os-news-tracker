@@ -90,6 +90,9 @@ def _compute_next_run(config: MorningCrawlConfig, reference: datetime) -> dateti
         anchor = config.created_at.weekday() if config.created_at else reference.weekday()
         while candidate.weekday() != anchor:
             candidate = candidate + timedelta(days=1)
+    elif config.frequency == "weekdays":
+        while candidate.weekday() >= 5:
+            candidate = candidate + timedelta(days=1)
     return candidate
 
 
@@ -216,7 +219,7 @@ def config_to_response(config: MorningCrawlConfig) -> MorningCrawlConfigResponse
     return MorningCrawlConfigResponse(
         enabled=config.enabled,
         run_time=config.run_time,
-        frequency=config.frequency if config.frequency in ("daily", "weekly") else "daily",
+        frequency=config.frequency if config.frequency in ("daily", "weekdays", "weekly") else "daily",
         lookback_window=config.lookback_window if config.lookback_window in ("24h", "7d", "30d", "all") else "24h",
         patrol_interval_hours=config.patrol_interval_hours,
         last_run_at=config.last_run_at,
@@ -336,6 +339,7 @@ def _fetch_and_ingest_method(db: Session, method: CrawlMethod, request) -> dict:
     """运行单条 discovery method 的 DSL 并走正常 pipeline 入库。复用 discovery 内部入口，不反调 HTTP。"""
     from app.discovery.execution import run_method
     from app.discovery.ingester import CrawlOutputIngester
+    from app.discovery.interpreter import DslExecutionPartialError
     from app.discovery.progress import log_discovery_progress
     from app.discovery.recipe_prepare import (
         apply_fetch_limits,
@@ -362,7 +366,28 @@ def _fetch_and_ingest_method(db: Session, method: CrawlMethod, request) -> dict:
     recipe = prepare_fetch_recipe(method.dsl_recipe, request)
     existing_urls = list(db.scalars(select(Item.url).where(Item.source_id == method.source_id)))
     recipe = attach_wechat_skip_keys(recipe, existing_urls)
-    output = run_method(recipe, progress_callback=_log_progress)
+    partial_error: DslExecutionPartialError | None = None
+    try:
+        output = run_method(recipe, progress_callback=_log_progress)
+    except DslExecutionPartialError as exc:
+        # A paginated fetch may time out only after earlier pages already
+        # yielded useful candidates. Keep and ingest those candidates instead
+        # of letting the whole scheduled method become a hard failure.
+        partial_error = exc
+        output = {
+            "items": list(exc.items),
+            "stats": {**(exc.stats or {}), "status": "partial", "error": str(exc)},
+        }
+        append_run_log(
+            "定时抓取",
+            f"DSL 执行部分完成，已保留已抓到候选继续处理 · {exc}",
+            source=method.domain,
+            method_id=method.id,
+            level="warning",
+            raw_count=len(output["items"]),
+            stats_count=output["stats"].get("discovered_count"),
+            error_type=type(exc).__name__,
+        )
     raw_items = list(output.get("items", []))
     output["items"] = apply_fetch_limits(raw_items, request)
 
@@ -375,11 +400,13 @@ def _fetch_and_ingest_method(db: Session, method: CrawlMethod, request) -> dict:
             stored += 1
 
     method.last_run_at = datetime.now(timezone.utc)
-    method.last_run_status = "ok" if stored > 0 else "empty"
+    status = "partial" if partial_error is not None else ("ok" if stored > 0 else "empty")
+    method.last_run_status = status
     return {
         "discovered_count": len(raws),
         "stored_count": stored,
-        "status": "ok" if stored > 0 else "empty",
+        "status": status,
+        "error_message": str(partial_error) if partial_error is not None else None,
     }
 
 
@@ -405,7 +432,7 @@ def _run_methods_body(db: Session, run: MorningCrawlRun, *, trigger_type: str) -
 
     append_run_log("定时抓取", "系统定时抓取开始", trigger_type=trigger_type, total_methods=len(methods))
 
-    success = failed = stored_total = 0
+    success = failed = partial = stored_total = 0
     cancelled = False
     for method in methods:
         if _is_cancel_requested(run.id):
@@ -441,9 +468,13 @@ def _run_methods_body(db: Session, run: MorningCrawlRun, *, trigger_type: str) -
             rm.status = result["status"]
             rm.discovered_count = result["discovered_count"]
             rm.stored_count = result["stored_count"]
+            rm.error_message = result.get("error_message")
             rm.finished_at = beijing_now()
             db.commit()
-            success += 1
+            if result["status"] == "partial":
+                partial += 1
+            else:
+                success += 1
             stored_total += result["stored_count"]
             append_run_log(
                 "定时抓取",
@@ -478,9 +509,9 @@ def _run_methods_body(db: Session, run: MorningCrawlRun, *, trigger_type: str) -
         run.error_message = "已手动停止"
     elif run.total_methods == 0:
         run.status = "success"
-    elif failed == 0:
+    elif failed == 0 and partial == 0:
         run.status = "success"
-    elif success == 0:
+    elif failed > 0 and success == 0 and partial == 0:
         run.status = "failed"
     else:
         run.status = "partial"
@@ -505,6 +536,7 @@ def _run_methods_body(db: Session, run: MorningCrawlRun, *, trigger_type: str) -
         status=run.status,
         success_methods=success,
         failed_methods=failed,
+        partial_methods=partial,
         stored_count=stored_total,
     )
     return run
@@ -617,6 +649,8 @@ def schedule_due_now(config: MorningCrawlConfig, *, now: datetime, today: str) -
         anchor = config.created_at.weekday() if config.created_at else now.weekday()
         if now.weekday() != anchor:
             return False
+    elif config.frequency == "weekdays" and now.weekday() >= 5:
+        return False
     if now < scheduled_at:
         return False
 

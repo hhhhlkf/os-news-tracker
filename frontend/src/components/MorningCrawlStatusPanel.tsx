@@ -218,6 +218,7 @@ export function MorningCrawlStatusPanel() {
             <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>频率</span>
             <select value={frequency} disabled={!editing} onChange={(e) => setFrequency(e.target.value as MorningCrawlFrequency)} style={{ ...FIELD, opacity: editing ? 1 : 0.7 }}>
               <option value="daily">每日</option>
+              <option value="weekdays">每日（仅工作日）</option>
               <option value="weekly">每周</option>
             </select>
           </label>
@@ -248,6 +249,7 @@ export function MorningCrawlStatusPanel() {
           <li>定时抓取只运行状态为 active 的 discovery methods，逐条执行、走正常入库富化流程。</li>
           <li>单条方式失败不会阻断整次定时抓取；只有整次无失败才记为「今日已完成」。</li>
           <li>到点未成功时，巡检任务按设定间隔兜底补跑。</li>
+          <li>选择「每日（仅工作日）」后，仅在周一至周五执行；周末不会触发定时抓取或巡检补跑。</li>
           <li>所有时间按北京时间（UTC+8）判定与展示。</li>
         </ul>
       </section>

@@ -1,4 +1,4 @@
-export type MorningCrawlFrequency = "daily" | "weekly";
+export type MorningCrawlFrequency = "daily" | "weekdays" | "weekly";
 export type MorningCrawlLookback = "24h" | "7d" | "30d" | "all";
 
 export interface MorningCrawlConfig {

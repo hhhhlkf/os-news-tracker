@@ -513,7 +513,7 @@ class MorningCrawlConfig(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     enabled: Mapped[bool] = mapped_column(default=True)
     run_time: Mapped[str] = mapped_column(String(10), default="07:00")   # 北京时间 HH:MM
-    frequency: Mapped[str] = mapped_column(String(20), default="daily")  # daily | weekly
+    frequency: Mapped[str] = mapped_column(String(20), default="daily")  # daily | weekdays | weekly
     lookback_window: Mapped[str] = mapped_column(String(20), default="24h")  # 24h | 7d | 30d | all
     patrol_interval_hours: Mapped[int] = mapped_column(Integer, default=3)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
