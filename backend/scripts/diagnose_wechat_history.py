@@ -19,10 +19,11 @@ import json
 from typing import Any
 
 from app.discovery.wechat_tools import (
+    probe_mp_session,
     wechat_fetch_account_history,
     wechat_resolve_account,
 )
-from app.wechat_auth import probe_mp_session, profile_public_status, resolve_profile
+from app.wechat_auth import profile_public_status, resolve_profile
 
 
 def _print_result(label: str, payload: dict[str, Any]) -> None:
