@@ -414,19 +414,60 @@ docker compose up -d --force-recreate backend
 
 ## 部署
 
-### 生产部署
+### 开发部署
 
-生产 Compose 使用：
+开发环境使用 `docker-compose.dev.yml`，其数据卷为 `pgdata_dev`（默认 Compose 项目名下通常显示为 `os-news-tracker_pgdata_dev`）。源码会挂载进容器，适用于本地开发和调试：
 
-- PostgreSQL 16，数据卷 `pgdata`。
-- FastAPI backend，端口 `8000`。
-- React 静态文件经 Nginx 提供，宿主机端口 `8080`。
+- backend：`uvicorn app.entry:app --reload`，端口 `8000`。
+- frontend：`vite --host 0.0.0.0 --port 5173`，端口 `5173`。
+- frontend dev server 代理 `/items`、`/discovery`、`/mail`、`/auth` 等 API 到 backend 容器。
 
 ```bash
+# 首次部署
 cp .env.example .env
-# 编辑 .env
+# 编辑 .env：至少设置 POSTGRES_PASSWORD、DATABASE_URL、LLM_*、SYSTEM_ACCESS_PASSWORD
+docker compose -f docker-compose.dev.yml up --build -d
+docker compose -f docker-compose.dev.yml ps
+
+# 如需手动执行迁移（应用启动时也会自动执行）
+docker compose -f docker-compose.dev.yml exec backend alembic upgrade head
+
+# 查看后端启动日志
+docker compose -f docker-compose.dev.yml logs -f backend
+```
+
+访问：
+
+- 前端：http://localhost:5173
+- 后端 API：http://localhost:8000
+- Swagger：http://localhost:8000/docs
+
+停止开发环境但保留数据卷：
+
+```bash
+docker compose -f docker-compose.dev.yml down
+```
+
+不要在需要保留数据时使用 `down -v`；它会删除 `pgdata_dev`，包括全部开发数据。
+
+### 正式环境部署
+
+正式环境使用根目录 `docker-compose.yml`，其 PostgreSQL 数据卷为 `pgdata`（默认名称通常是 `os-news-tracker_pgdata`）。该 Compose 不挂载源码，前端由 Nginx 提供静态文件：
+
+- PostgreSQL 16：宿主机端口 `15432`。
+- FastAPI backend：宿主机端口 `8000`。
+- React/Nginx：宿主机端口 `8080`。
+- embedding worker：仅在 Compose 内部网络开放。
+
+```bash
+# 首次部署
+cp .env.example .env
+# 编辑 .env；必须使用正式环境的强密码和真实服务凭据
 docker compose up --build -d
 docker compose ps
+
+# 如需手动执行迁移（应用启动时也会自动执行）
+docker compose exec backend alembic upgrade head
 ```
 
 访问：
@@ -436,26 +477,61 @@ docker compose ps
 - Swagger：http://localhost:8000/docs
 - PostgreSQL：宿主机 `localhost:15432`
 
-### 开发部署
+正式环境不要将 `15432` 暴露到公网；应通过防火墙或移除 `db.ports` 限制访问范围。
 
-开发 Compose 使用源码挂载和热更新：
+### 将开发数据导入正式数据卷
 
-- backend：`uvicorn app.entry:app --reload`，端口 `8000`。
-- frontend：`vite --host 0.0.0.0 --port 5173`，端口 `5173`。
-- frontend dev server 代理 `/items`、`/discovery`、`/mail`、`/auth` 等 API 到 backend 容器。
+以下流程用 PostgreSQL 逻辑备份导入数据，而不是复制 `/var/lib/postgresql/data` 的物理目录；这样不会受容器状态、文件权限和 PostgreSQL 小版本差异影响。
+
+> 导入到已有正式库会覆盖该库的全部业务表数据，属于高风险操作。先完成变更审批和备份，并停止正式 backend、embedding worker、frontend，避免导入期间继续写入。生产环境应按既定数据库变更流程执行。
+
+1. 在开发环境导出数据。开发服务启动时执行：
 
 ```bash
-cp .env.example .env
-# 编辑 .env
-docker compose -f docker-compose.dev.yml up --build -d
-docker compose -f docker-compose.dev.yml logs -f backend
+mkdir -p backups
+docker compose -f docker-compose.dev.yml exec -T db sh -lc \
+  'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc --no-owner --no-privileges' \
+  > backups/osnews-dev.dump
 ```
 
-访问：
+2. 停止开发栈（保留 `pgdata_dev`），启动正式数据库并备份其现有内容：
 
-- 前端：http://localhost:5173
-- 后端 API：http://localhost:8000
-- Swagger：http://localhost:8000/docs
+```bash
+docker compose -f docker-compose.dev.yml down
+docker compose up -d db
+docker compose exec -T db sh -lc \
+  'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc --no-owner --no-privileges' \
+  > backups/osnews-prod-before-import.dump
+```
+
+3. 如果正式卷是新建的空库，直接恢复：
+
+```bash
+docker compose cp backups/osnews-dev.dump db:/tmp/osnews-dev.dump
+docker compose exec -T db sh -lc \
+  'PGPASSWORD="$POSTGRES_PASSWORD" pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --no-privileges --exit-on-error /tmp/osnews-dev.dump'
+```
+
+如果正式库已经有业务表，需要明确确认覆盖后，先清空 `public` schema 再恢复。下面示例假定默认数据库用户为 `osnews_app`；若修改过 `POSTGRES_USER`，请将命令中的所有者替换为实际用户。
+
+```bash
+docker compose cp backups/osnews-dev.dump db:/tmp/osnews-dev.dump
+docker compose exec -T db psql -v ON_ERROR_STOP=1 -U osnews_app -d osnews \
+  -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public AUTHORIZATION osnews_app;'
+docker compose exec -T db sh -lc \
+  'PGPASSWORD="$POSTGRES_PASSWORD" pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --no-privileges --exit-on-error /tmp/osnews-dev.dump'
+```
+
+4. 校验并启动正式服务：
+
+```bash
+docker compose exec -T db sh -lc \
+  'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select version_num from alembic_version; select count(*) from information_schema.tables where table_schema = '\''public'\'';"'
+docker compose up --build -d
+docker compose ps
+```
+
+导入后应确认 Alembic 版本、表数量和关键业务数据均符合开发库。发生异常时，停止正式服务后，以 `backups/osnews-prod-before-import.dump` 按同一恢复方式还原；不要删除该备份，直到完成业务验收。
 
 ### 本地非 Docker 开发
 
