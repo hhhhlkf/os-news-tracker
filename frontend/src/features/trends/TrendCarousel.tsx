@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchTrendCarousel, fetchTrendCarouselTemplates } from "./api";
-import type { TrendCarouselItem } from "./types";
+import type { TrendCarouselItem, TrendResultSource } from "./types";
 
 const carouselTemplatesQueryKey = ["trends", "results", "carousel", "templates"] as const;
 const carouselQueryKey = ["trends", "results", "carousel"] as const;
@@ -292,24 +292,112 @@ function TrendCard({
       </div>
       <div style={cardTopic}>{item.topic}</div>
       <div style={cardSummary}>{item.trend_summary}</div>
-      <div style={sourceRow}>
-        {item.sources.map((source) => (
-          <button
-            key={source.item_id}
-            type="button"
-            style={source.item_id === activeItemId ? activeSourcePill : sourcePill}
-            title={source.title}
-            aria-label={`查看引用新闻：${source.title}`}
-            onClick={(event) => {
-              event.stopPropagation();
-              onSelectSource({ itemId: source.item_id, title: source.title });
-            }}
-          >
-            {shortenSourceTitle(source.title)}
-          </button>
-        ))}
-      </div>
+      <SourcePillsRow
+        sources={item.sources}
+        activeItemId={activeItemId}
+        onSelectSource={onSelectSource}
+      />
     </article>
+  );
+}
+
+/** Single-row citation pills with end arrows, same idea as the Token chart scroll legend. */
+function SourcePillsRow({
+  sources,
+  activeItemId,
+  onSelectSource,
+}: {
+  sources: TrendResultSource[];
+  activeItemId: number | null;
+  onSelectSource: TrendCarouselProps["onSelectSource"];
+}) {
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const [needsPager, setNeedsPager] = useState(false);
+  const [canPrev, setCanPrev] = useState(false);
+  const [canNext, setCanNext] = useState(false);
+
+  const syncPager = () => {
+    const el = viewportRef.current;
+    if (!el) {
+      setNeedsPager(false);
+      setCanPrev(false);
+      setCanNext(false);
+      return;
+    }
+    const maxScroll = el.scrollWidth - el.clientWidth;
+    const overflow = maxScroll > 1;
+    setNeedsPager(overflow);
+    setCanPrev(overflow && el.scrollLeft > 1);
+    setCanNext(overflow && el.scrollLeft < maxScroll - 1);
+  };
+
+  useLayoutEffect(() => {
+    syncPager();
+    const el = viewportRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => syncPager());
+    observer.observe(el);
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
+    return () => observer.disconnect();
+  }, [sources]);
+
+  const scrollByPage = (direction: -1 | 1) => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const step = Math.max(80, Math.floor(el.clientWidth * 0.85));
+    el.scrollBy({ left: direction * step, behavior: "smooth" });
+  };
+
+  return (
+    <div
+      style={sourceRowShell}
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => event.stopPropagation()}
+    >
+      <div
+        ref={viewportRef}
+        style={sourceViewport}
+        onScroll={syncPager}
+        aria-label="引用新闻"
+      >
+        <div style={sourceTrack}>
+          {sources.map((source) => (
+            <button
+              key={source.item_id}
+              type="button"
+              style={source.item_id === activeItemId ? activeSourcePill : sourcePill}
+              title={source.title}
+              aria-label={`查看引用新闻：${source.title}`}
+              onClick={() => onSelectSource({ itemId: source.item_id, title: source.title })}
+            >
+              {shortenSourceTitle(source.title)}
+            </button>
+          ))}
+        </div>
+      </div>
+      {needsPager && (
+        <div style={sourcePager}>
+          <button
+            type="button"
+            style={canPrev ? sourcePageButton : sourcePageButtonDisabled}
+            disabled={!canPrev}
+            aria-label="上一组引用"
+            onClick={() => scrollByPage(-1)}
+          >
+            ‹
+          </button>
+          <button
+            type="button"
+            style={canNext ? sourcePageButton : sourcePageButtonDisabled}
+            disabled={!canNext}
+            aria-label="下一组引用"
+            onClick={() => scrollByPage(1)}
+          >
+            ›
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -365,6 +453,7 @@ const viewport: CSSProperties = {
 };
 const track: CSSProperties = {
   display: "flex",
+  alignItems: "stretch",
   width: "100%",
   willChange: "transform",
 };
@@ -372,11 +461,18 @@ const slide: CSSProperties = {
   flex: "0 0 100%",
   minWidth: 0,
   boxSizing: "border-box",
+  // Stretch with the tallest page in the track, then fill that height.
+  alignSelf: "stretch",
 };
 const grid: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gridTemplateRows: "1fr",
   gap: 12,
+  width: "100%",
+  height: "100%",
+  minHeight: "100%",
+  alignItems: "stretch",
 };
 const card: CSSProperties = {
   border: "1px solid #eaecf0",
@@ -388,6 +484,8 @@ const card: CSSProperties = {
   gap: 8,
   cursor: "pointer",
   minWidth: 0,
+  height: "100%",
+  boxSizing: "border-box",
 };
 const activeCard: CSSProperties = {
   ...card,
@@ -408,7 +506,48 @@ const categoryBadge: CSSProperties = {
 const cardScore: CSSProperties = { fontSize: 11, color: "#98a2b3", whiteSpace: "nowrap" };
 const cardTopic: CSSProperties = { fontSize: 14, fontWeight: 800, color: "#101828", lineHeight: 1.4 };
 const cardSummary: CSSProperties = { fontSize: 12, color: "#475467", lineHeight: 1.6 };
-const sourceRow: CSSProperties = { display: "flex", flexWrap: "wrap", gap: 6, marginTop: "auto", paddingTop: 4 };
+const sourceRowShell: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  marginTop: "auto",
+  paddingTop: 4,
+  minWidth: 0,
+  width: "100%",
+  flexShrink: 0,
+};
+const sourceViewport: CSSProperties = {
+  flex: "1 1 auto",
+  minWidth: 0,
+  overflow: "hidden",
+};
+const sourceTrack: CSSProperties = {
+  display: "flex",
+  flexWrap: "nowrap",
+  gap: 6,
+  width: "max-content",
+};
+const sourcePager: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 2,
+  flex: "0 0 auto",
+};
+const sourcePageButton: CSSProperties = {
+  border: "none",
+  background: "transparent",
+  color: "#98a2b3",
+  fontSize: 14,
+  fontWeight: 700,
+  lineHeight: 1,
+  padding: "2px 4px",
+  cursor: "pointer",
+};
+const sourcePageButtonDisabled: CSSProperties = {
+  ...sourcePageButton,
+  opacity: 0.35,
+  cursor: "default",
+};
 const sourcePill: CSSProperties = {
   border: "1px solid #e4ebf5",
   borderRadius: 999,
@@ -417,6 +556,7 @@ const sourcePill: CSSProperties = {
   fontSize: 11,
   padding: "3px 9px",
   maxWidth: 150,
+  flex: "0 0 auto",
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
