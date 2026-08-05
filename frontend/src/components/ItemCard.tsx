@@ -8,7 +8,7 @@ import { generateItemOsInsight, generateItemReason } from "../api/client";
 /** Compact meta lines under the title — shared size so 推荐理由 / OS启发 match. */
 const metaLine: CSSProperties = {
   fontSize: 11.5,
-  lineHeight: 1.4,
+  lineHeight: 1.42,
   color: "#475467",
 };
 
@@ -67,7 +67,7 @@ function OsInsight({ item }: { item: ItemSummary }) {
   }
 
   return (
-    <div style={{ ...metaLine, marginTop: 2 }}>
+    <div style={{ ...metaLine, marginTop: 3 }}>
       <span style={{ color: "#0e7490", fontWeight: 600 }}>OS启发：</span>
       {body}
     </div>
@@ -83,10 +83,10 @@ export function ItemCard({ item, onClick, sortBy }: {
   return (
     <button onClick={onClick} style={{
       display: "block", width: "100%", textAlign: "left",
-      border: "1px solid #eaecf0", borderRadius: 10, padding: "12px 16px",
+      border: "1px solid #eaecf0", borderRadius: 10, padding: "13px 16px",
       marginBottom: 10, background: "#fff", cursor: "pointer",
     }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 5 }}>
         <ImportanceBadge value={item.importance} />
         <InfoTypeBadge value={item.info_type} />
         {item.main_category && (
@@ -105,11 +105,11 @@ export function ItemCard({ item, onClick, sortBy }: {
             )
         }
       </div>
-      <div style={{ fontWeight: 600, lineHeight: 1.35 }}>{item.title_tldr ?? item.title}</div>
+      <div style={{ fontWeight: 600, lineHeight: 1.38 }}>{item.title_tldr ?? item.title}</div>
       <div
         style={{
-          marginTop: 5,
-          paddingTop: 5,
+          marginTop: 6,
+          paddingTop: 6,
           borderTop: "1px dashed #eaecf0",
         }}
       >
