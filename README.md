@@ -390,12 +390,23 @@ SYSTEM_ACCESS_PASSWORD=admin
 | `RUN_STARTUP_BACKFILL` | `0` | 启动时执行回填。 |
 | `ENABLE_MAIL_SCHEDULER` | `0` | 邮件定时任务调度。 |
 | `ENABLE_MORNING_CRAWL_SCHEDULER` | `0` | 系统晨抓调度。 |
+| `ENABLE_TREND_SCHEDULER` | `0` | 趋势评估定时调度。 |
+| `TRENDS_EMBEDDING_WORKER_BASE_URL` | 空 | 趋势 embedding worker 地址；Compose 内一般为 `http://embedding-worker:8100`。 |
 
-开发 Compose 默认：
+开发 Compose（`docker-compose.dev.yml`）默认：
 
 - `ENABLE_SCHEDULER=0`
 - `ENABLE_MAIL_SCHEDULER=1`
 - `ENABLE_MORNING_CRAWL_SCHEDULER=1`
+- `ENABLE_TREND_SCHEDULER=1`
+- `RUN_STARTUP_BACKFILL=0`
+
+正式 Compose（`docker-compose.yml`）默认：
+
+- `ENABLE_SCHEDULER` 未强制写入，沿用 `entry.py` 默认 `1`
+- `ENABLE_MAIL_SCHEDULER=1`
+- `ENABLE_MORNING_CRAWL_SCHEDULER=1`
+- `ENABLE_TREND_SCHEDULER=1`
 - `RUN_STARTUP_BACKFILL=0`
 
 ### `.env` 修改后的生效方式
@@ -452,12 +463,12 @@ docker compose -f docker-compose.dev.yml down
 
 ### 正式环境部署
 
-正式环境使用根目录 `docker-compose.yml`，其 PostgreSQL 数据卷为 `pgdata`（默认名称通常是 `os-news-tracker_pgdata`）。该 Compose 不挂载源码，前端由 Nginx 提供静态文件：
+正式环境使用根目录 `docker-compose.yml`。服务与开发 Compose 相同（`db` / `backend` / `embedding-worker` / `frontend`），但不挂载源码、不启用热重载；前端以 Nginx 提供静态文件，API 由 `frontend/nginx.conf` 反代到 backend（前缀与开发 Vite proxy 对齐）。
 
-- PostgreSQL 16：宿主机端口 `15432`。
-- FastAPI backend：宿主机端口 `8000`。
+- PostgreSQL 16：宿主机端口 `15432`，数据卷 `pgdata`（默认名称通常是 `os-news-tracker_pgdata`）。
+- FastAPI backend：宿主机端口 `8000`；邮件 / 晨抓 / 趋势调度默认开启，并指向内网 embedding-worker。
 - React/Nginx：宿主机端口 `8080`。
-- embedding worker：仅在 Compose 内部网络开放。
+- embedding worker：仅在 Compose 内部网络开放 `8100`，模型缓存卷 `embedding_model_cache`。
 
 ```bash
 # 首次部署

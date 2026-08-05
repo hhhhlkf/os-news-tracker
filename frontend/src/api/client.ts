@@ -26,6 +26,7 @@ import type {
   MultiDiscoveryStartResponse,
   MultiDiscoveryNameRequest,
   MultiDiscoveryNameResponse,
+  QueryItemAvgResponse,
   TokenUsageSummaryResponse,
   QueryRunUsageResponse,
   DiscoveryRunUsageResponse,
@@ -193,6 +194,19 @@ export async function generateItemReason(id: number): Promise<ItemReasonResponse
     headers: { ...authHeaders() },
   });
   return expectOk<ItemReasonResponse>(r, "failed to generate item reason");
+}
+
+export interface ItemOsInsightResponse {
+  os_insight: string;
+  generated: boolean;
+}
+
+export async function generateItemOsInsight(id: number): Promise<ItemOsInsightResponse> {
+  const r = await fetch(`${BASE}/items/${id}/os-insight`, {
+    method: "POST",
+    headers: { ...authHeaders() },
+  });
+  return expectOk<ItemOsInsightResponse>(r, "failed to generate item OS insight");
 }
 
 export async function fetchFacets(): Promise<Facets> {
@@ -564,6 +578,13 @@ export async function fetchDiscoveryRunUsage(query: TokenUsageQuery): Promise<Di
     headers: authHeaders(),
   });
   return expectOk<DiscoveryRunUsageResponse>(response, "failed to load discovery token usage");
+}
+
+export async function fetchQueryItemAvg(query: TokenUsageQuery): Promise<QueryItemAvgResponse> {
+  const response = await fetch(`${BASE}/statistics/token-usage/query-item-avg?${tokenUsageParams(query)}`, {
+    headers: authHeaders(),
+  });
+  return expectOk<QueryItemAvgResponse>(response, "failed to load per-item average token usage");
 }
 
 export async function fetchItemVolumeDaily(query: Pick<TokenUsageQuery, "start" | "end">): Promise<ItemVolumeDailyResponse> {

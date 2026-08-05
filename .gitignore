@@ -12,4 +12,6 @@ dist/
 .superpowers/
 .DS_Store
 .claude/
+.agents/
+.cursor/
 db/

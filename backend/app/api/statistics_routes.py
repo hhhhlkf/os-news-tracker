@@ -24,6 +24,7 @@ from app.models import (
     Item,
     LlmUsageEvent,
     MorningCrawlRun,
+    MorningCrawlRunMethod,
     SiteDiscoveryRun,
     Source,
 )
@@ -308,6 +309,200 @@ def token_usage_query_runs(
                 "methods": segments,
             }
         )
+    rows.sort(key=lambda row: row.get("started_at") or "", reverse=True)
+    return {
+        "exact_since": _exact_since(db),
+        "total": len(rows),
+        "runs": rows[offset:offset + limit],
+    }
+
+
+def _avg_tokens_per_item(total_tokens: int, item_count: int) -> tuple[float, float]:
+    """Average tokens per discovered item.
+
+    Zero items with positive spend uses divisor 0.2 (never divide by zero).
+    """
+    divisor = 0.2 if item_count <= 0 else float(item_count)
+    return total_tokens / divisor, divisor
+
+
+@router.get("/token-usage/query-item-avg")
+def token_usage_query_item_avg(
+    start: datetime | None = None,
+    end: datetime | None = None,
+    trigger_type: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+) -> dict[str, Any]:
+    """Same time grain as query-runs: one stacked bar per query, segment = per-source avg.
+
+    - Denominator is ``discovered_count`` for that source within the query.
+    - If items == 0 but tokens > 0, divide by 0.2.
+    - Sources with zero token spend are omitted from the stack.
+    """
+    range_start, range_end = _range(start, end)
+    events = _events(db, start=range_start, end=range_end, context_type="query")
+    if trigger_type:
+        events = [event for event in events if _matches_trigger_filter(event.trigger_type, trigger_type)]
+
+    morning_ids = {event.morning_crawl_run_id for event in events if event.morning_crawl_run_id is not None}
+    method_run_ids = {event.crawl_method_run_id for event in events if event.crawl_method_run_id is not None}
+    morning_method_ids = {
+        event.morning_crawl_run_method_id
+        for event in events
+        if event.morning_crawl_run_method_id is not None
+    }
+    mornings = {
+        run.id: run
+        for run in db.scalars(select(MorningCrawlRun).where(MorningCrawlRun.id.in_(morning_ids)))
+    } if morning_ids else {}
+    method_runs = {
+        run.id: run
+        for run in db.scalars(select(CrawlMethodRun).where(CrawlMethodRun.id.in_(method_run_ids)))
+    } if method_run_ids else {}
+    morning_methods = {
+        row.id: row
+        for row in db.scalars(
+            select(MorningCrawlRunMethod).where(MorningCrawlRunMethod.id.in_(morning_method_ids))
+        )
+    } if morning_method_ids else {}
+    # Also load morning method rows by run for discovered_count lookup when events
+    # only carry morning_crawl_run_id + method_id.
+    morning_methods_by_run: dict[int, list[MorningCrawlRunMethod]] = defaultdict(list)
+    if morning_ids:
+        for row in db.scalars(
+            select(MorningCrawlRunMethod).where(MorningCrawlRunMethod.run_id.in_(morning_ids))
+        ):
+            morning_methods_by_run[row.run_id].append(row)
+
+    # Same grouping as query-runs: morning / batch / single method.
+    grouped: dict[tuple[str, int | str], list[LlmUsageEvent]] = defaultdict(list)
+    for event in events:
+        if event.morning_crawl_run_id is not None:
+            grouped[("morning", event.morning_crawl_run_id)].append(event)
+            continue
+        if event.crawl_method_run_id is None:
+            continue
+        run = method_runs.get(event.crawl_method_run_id)
+        batch_id = _payload_batch_id(run.request_payload if run is not None else None)
+        if batch_id is not None:
+            grouped[("batch", batch_id)].append(event)
+        else:
+            grouped[("method", event.crawl_method_run_id)].append(event)
+
+    all_method_ids = {event.method_id for event in events if event.method_id is not None}
+    labels = _method_labels(db, all_method_ids)
+
+    def _item_count_for_method(kind: str, group_id: int | str, method_id: int, run_events: list[LlmUsageEvent]) -> int:
+        if kind == "morning":
+            for row in morning_methods_by_run.get(int(group_id), []):
+                if row.method_id == method_id:
+                    return int(row.discovered_count or 0)
+            # Fallback: match via morning_crawl_run_method_id on events.
+            for event in run_events:
+                if event.method_id != method_id or event.morning_crawl_run_method_id is None:
+                    continue
+                row = morning_methods.get(event.morning_crawl_run_method_id)
+                if row is not None:
+                    return int(row.discovered_count or 0)
+            return 0
+        # batch / method → CrawlMethodRun.discovered_count for that method's run(s).
+        counts = [
+            int(method_runs[event.crawl_method_run_id].discovered_count or 0)
+            for event in run_events
+            if event.method_id == method_id
+            and event.crawl_method_run_id is not None
+            and event.crawl_method_run_id in method_runs
+        ]
+        return max(counts) if counts else 0
+
+    rows: list[dict[str, Any]] = []
+    for (kind, group_id), run_events in grouped.items():
+        per_method: dict[int, list[LlmUsageEvent]] = defaultdict(list)
+        for event in run_events:
+            if event.method_id is not None:
+                per_method[event.method_id].append(event)
+
+        segments: list[dict[str, Any]] = []
+        for method_id, method_events in sorted(per_method.items()):
+            totals = _totals(method_events)
+            total_tokens = int(totals["total_tokens"] or 0)
+            if total_tokens <= 0:
+                continue
+            item_count = _item_count_for_method(kind, group_id, method_id, run_events)
+            avg_tokens, divisor = _avg_tokens_per_item(total_tokens, item_count)
+            segments.append(
+                {
+                    "method_id": method_id,
+                    "label": labels.get(method_id, f"方式 {method_id}"),
+                    "item_count": item_count,
+                    "divisor": divisor,
+                    "avg_tokens_per_item": round(avg_tokens, 2),
+                    **totals,
+                }
+            )
+        if not segments:
+            continue
+
+        if kind == "morning":
+            run = mornings.get(int(group_id))
+            if run is None:
+                continue
+            started_at = run.started_at
+            finished_at = run.finished_at
+            status = run.status
+            run_trigger = run.trigger_type
+            run_id = run.id
+        elif kind == "batch":
+            batch_run_ids = {
+                event.crawl_method_run_id
+                for event in run_events
+                if event.crawl_method_run_id is not None
+            }
+            batch_runs = [method_runs[run_id] for run_id in batch_run_ids if run_id in method_runs]
+            if not batch_runs:
+                continue
+            started_times = [run.started_at for run in batch_runs if run.started_at is not None]
+            finished_times = [run.completed_at for run in batch_runs if run.completed_at is not None]
+            started_at = min(started_times) if started_times else None
+            finished_at = max(finished_times) if finished_times else None
+            status = _aggregate_run_status([run.status for run in batch_runs])
+            run_trigger = next(
+                (event.trigger_type for event in run_events if event.trigger_type),
+                "manual",
+            )
+            run_id = min(batch_run_ids)
+        else:
+            run = method_runs.get(int(group_id))
+            if run is None:
+                continue
+            started_at = run.started_at
+            finished_at = run.completed_at
+            status = run.status
+            run_trigger = next(
+                (event.trigger_type for event in run_events if event.trigger_type),
+                "manual_method",
+            )
+            run_id = run.id
+
+        avg_total = round(sum(seg["avg_tokens_per_item"] for seg in segments), 2)
+        rows.append(
+            {
+                "run_key": f"{kind}:{group_id}",
+                "run_id": run_id,
+                "kind": kind,
+                "trigger_type": run_trigger,
+                "status": status,
+                "started_at": started_at.isoformat() if started_at else None,
+                "finished_at": finished_at.isoformat() if finished_at else None,
+                "avg_tokens_per_item": avg_total,
+                **_totals(run_events),
+                "methods": segments,
+            }
+        )
+
     rows.sort(key=lambda row: row.get("started_at") or "", reverse=True)
     return {
         "exact_since": _exact_since(db),

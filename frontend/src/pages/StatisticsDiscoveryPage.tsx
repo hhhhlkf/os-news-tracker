@@ -5,6 +5,7 @@ import type { EChartsOption } from "echarts";
 import {
   fetchDiscoveryRunUsage,
   fetchItemVolumeDaily,
+  fetchQueryItemAvg,
   fetchQueryRunUsage,
   fetchTokenUsageSummary,
 } from "../api/client";
@@ -12,9 +13,9 @@ import {
 type RangePreset = "24h" | "7d" | "30d" | "custom";
 
 /**
- * Token console palette — each of the first three charts is a different instrument:
- * 探查 = probe cyan, 查询 = industrial steel spectrum, 趋势 = cold stock → copper burn.
- * Deliberately avoids purple/rainbow defaults.
+ * Token console palette — discovery / query / trend / volume each keep a distinct instrument:
+ * 探查 = probe cyan, 查询 = industrial steel spectrum, 趋势 = cold stock → copper burn,
+ * 消息量 = importance red/amber/slate. Deliberately avoids purple/rainbow defaults.
  */
 const SERIES_COLORS = {
   prompt: "#1d4e89",
@@ -185,6 +186,71 @@ function ChartCard({ title, subtitle, children }: {
         <div style={{ color: "#667085", fontSize: 12, marginTop: 4 }}>{subtitle}</div>
       </div>
       {children}
+    </section>
+  );
+}
+
+type ChartTab = {
+  key: string;
+  title: string;
+  subtitle: string;
+  content: ReactNode;
+};
+
+function TabbedChartCard({
+  tabs,
+  activeKey,
+  onChange,
+}: {
+  tabs: ChartTab[];
+  activeKey: string;
+  onChange: (key: string) => void;
+}) {
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  const active = tabs.find((tab) => tab.key === activeKey) ?? tabs[0];
+  if (!active) return null;
+
+  return (
+    <section style={panel}>
+      {/*
+        Underline tabs (Ant / Material / NN/g): peer content panels use text + ink bar,
+        not pill buttons. Dual signals — weight/color + bottom indicator — for 2-tab clarity.
+      */}
+      <div style={chartTabBar} role="tablist" aria-label="图表切换">
+        {tabs.map((tab) => {
+          const selected = tab.key === active.key;
+          const hovered = !selected && hoveredKey === tab.key;
+          return (
+            <button
+              key={tab.key}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              id={`chart-tab-${tab.key}`}
+              aria-controls={`chart-panel-${tab.key}`}
+              onClick={() => onChange(tab.key)}
+              onMouseEnter={() => setHoveredKey(tab.key)}
+              onMouseLeave={() => setHoveredKey(null)}
+              style={{
+                ...chartTab,
+                color: selected ? "#175cd3" : hovered ? "#344054" : "#667085",
+                fontWeight: selected ? 800 : 600,
+                borderBottomColor: selected ? "#175cd3" : "transparent",
+              }}
+            >
+              {tab.title}
+            </button>
+          );
+        })}
+      </div>
+      <div
+        role="tabpanel"
+        id={`chart-panel-${active.key}`}
+        aria-labelledby={`chart-tab-${active.key}`}
+      >
+        <div style={{ color: "#667085", fontSize: 12, marginBottom: 14 }}>{active.subtitle}</div>
+        {active.content}
+      </div>
     </section>
   );
 }
@@ -392,6 +458,8 @@ export function StatisticsDiscoveryPage({ hasSystemAccess = false }: { hasSystem
   const [customEnd, setCustomEnd] = useState("");
   const [triggerType, setTriggerType] = useState("");
   const [showLines, setShowLines] = useState(false);
+  const [discoveryTab, setDiscoveryTab] = useState<"discovery" | "trend">("discovery");
+  const [queryTab, setQueryTab] = useState<"query" | "volume" | "itemAvg">("query");
   const range = useMemo(
     () => rangeForPreset(preset, customStart, customEnd),
     [preset, customStart, customEnd],
@@ -416,6 +484,11 @@ export function StatisticsDiscoveryPage({ hasSystemAccess = false }: { hasSystem
   const itemVolumeQuery = useQuery({
     queryKey: ["item-volume-daily", range.start, range.end],
     queryFn: () => fetchItemVolumeDaily({ start: range.start, end: range.end }),
+    enabled: hasSystemAccess,
+  });
+  const itemAvgQuery = useQuery({
+    queryKey: ["token-usage-query-item-avg", query],
+    queryFn: () => fetchQueryItemAvg(query),
     enabled: hasSystemAccess,
   });
 
@@ -509,6 +582,36 @@ export function StatisticsDiscoveryPage({ hasSystemAccess = false }: { hasSystem
     return { points, legend };
   }, [itemVolumeQuery.data]);
 
+  const itemAvgChart = useMemo(() => {
+    const methods = new Map<number, string>();
+    for (const run of itemAvgQuery.data?.runs ?? []) {
+      for (const method of run.methods) methods.set(method.method_id, method.label);
+    }
+    const legend: LegendItem[] = [...methods.entries()].map(([methodId, label], index) => ({
+      key: String(methodId),
+      label,
+      title: label,
+      color: METHOD_COLORS[index % METHOD_COLORS.length],
+    }));
+    const colorOf = (methodId: number) => {
+      const index = legend.findIndex((item) => item.key === String(methodId));
+      return METHOD_COLORS[(index >= 0 ? index : 0) % METHOD_COLORS.length];
+    };
+    const points: ChartPoint[] = [...(itemAvgQuery.data?.runs ?? [])].reverse().map((run) => ({
+      key: run.run_key,
+      label: axisDateLabel(run.started_at),
+      total: run.avg_tokens_per_item,
+      tipSubtitle: `${dateLabel(run.started_at)} · ${triggerTypeLabel(run.trigger_type)}`,
+      segments: run.methods.map((method) => ({
+        key: String(method.method_id),
+        label: method.label,
+        value: method.avg_tokens_per_item,
+        color: colorOf(method.method_id),
+      })),
+    }));
+    return { points, legend };
+  }, [itemAvgQuery.data]);
+
   if (!hasSystemAccess) {
     return (
       <main style={page}>
@@ -522,8 +625,10 @@ export function StatisticsDiscoveryPage({ hasSystemAccess = false }: { hasSystem
   }
 
   const summary = summaryQuery.data?.summary;
-  const loading = summaryQuery.isLoading || runsQuery.isLoading || discoveryQuery.isLoading || itemVolumeQuery.isLoading;
-  const error = summaryQuery.error || runsQuery.error || discoveryQuery.error || itemVolumeQuery.error;
+  const loading = summaryQuery.isLoading || runsQuery.isLoading || discoveryQuery.isLoading
+    || itemVolumeQuery.isLoading || itemAvgQuery.isLoading;
+  const error = summaryQuery.error || runsQuery.error || discoveryQuery.error
+    || itemVolumeQuery.error || itemAvgQuery.error;
 
   return (
     <main style={page}>
@@ -580,40 +685,86 @@ export function StatisticsDiscoveryPage({ hasSystemAccess = false }: { hasSystem
       </div>
 
       <div style={chartGrid}>
-        <ChartCard title="每次探查 Token" subtitle="每次站点探查的输入与输出消耗；悬停查看明细">
-          <StackedBarChart
-            points={discoveryChart.points}
-            legend={discoveryChart.legend}
-            emptyText="当前范围暂无探查数据"
-            showLines={showLines}
-          />
-        </ChartCard>
-        <ChartCard title="每次查询 Token" subtitle="一根柱 / 一条线代表一次任务中各爬取方式的消耗；图例单行可左右翻页">
-          <StackedBarChart
-            points={queryChart.points}
-            legend={queryChart.legend}
-            emptyText="当前范围暂无查询数据"
-            showLines={showLines}
-          />
-        </ChartCard>
-        <ChartCard title="时间段 Token 趋势" subtitle="输入与输出 Token 按时间分系列统计">
-          <StackedBarChart
-            points={trendChart.points}
-            legend={trendChart.legend}
-            emptyText="当前范围暂无趋势数据"
-            showLines={showLines}
-          />
-        </ChartCard>
-        <ChartCard title="每日消息量" subtitle="按入库日期分高 / 中 / 低重要性统计">
-          <StackedBarChart
-            points={itemVolumeChart.points}
-            legend={itemVolumeChart.legend}
-            emptyText="当前范围暂无消息数据"
-            formatValue={formatCount}
-            totalLabel="合计"
-            showLines={showLines}
-          />
-        </ChartCard>
+        <TabbedChartCard
+          activeKey={discoveryTab}
+          onChange={(key) => setDiscoveryTab(key as "discovery" | "trend")}
+          tabs={[
+            {
+              key: "discovery",
+              title: "每次探查 Token",
+              subtitle: "每次站点探查的输入与输出消耗；悬停查看明细",
+              content: (
+                <StackedBarChart
+                  points={discoveryChart.points}
+                  legend={discoveryChart.legend}
+                  emptyText="当前范围暂无探查数据"
+                  showLines={showLines}
+                />
+              ),
+            },
+            {
+              key: "trend",
+              title: "时间段 Token 趋势",
+              subtitle: "输入与输出 Token 按时间分系列统计",
+              content: (
+                <StackedBarChart
+                  points={trendChart.points}
+                  legend={trendChart.legend}
+                  emptyText="当前范围暂无趋势数据"
+                  showLines={showLines}
+                />
+              ),
+            },
+          ]}
+        />
+        <TabbedChartCard
+          activeKey={queryTab}
+          onChange={(key) => setQueryTab(key as "query" | "volume" | "itemAvg")}
+          tabs={[
+            {
+              key: "query",
+              title: "每次查询 Token",
+              subtitle: "一根柱 / 一条线代表一次任务中各爬取方式的消耗；图例单行可左右翻页",
+              content: (
+                <StackedBarChart
+                  points={queryChart.points}
+                  legend={queryChart.legend}
+                  emptyText="当前范围暂无查询数据"
+                  showLines={showLines}
+                />
+              ),
+            },
+            {
+              key: "itemAvg",
+              title: "单条均 Token",
+              subtitle: "与「每次查询 Token」同时间刻度；一根柱一次查询，按信息源堆叠单条均耗；查出 0 条按 ÷0.2",
+              content: (
+                <StackedBarChart
+                  points={itemAvgChart.points}
+                  legend={itemAvgChart.legend}
+                  emptyText="当前范围暂无单条均 Token 数据"
+                  totalLabel="单条均合计"
+                  showLines={showLines}
+                />
+              ),
+            },
+            {
+              key: "volume",
+              title: "每日消息量",
+              subtitle: "按入库日期分高 / 中 / 低重要性统计",
+              content: (
+                <StackedBarChart
+                  points={itemVolumeChart.points}
+                  legend={itemVolumeChart.legend}
+                  emptyText="当前范围暂无消息数据"
+                  formatValue={formatCount}
+                  totalLabel="合计"
+                  showLines={showLines}
+                />
+              ),
+            },
+          ]}
+        />
       </div>
 
       <div style={chartGrid}>
@@ -679,6 +830,32 @@ const activeButton: CSSProperties = { ...button, borderColor: "#84adff", backgro
 const input: CSSProperties = { border: "1px solid #d0d5dd", borderRadius: 8, padding: "7px 10px", background: "#fff", color: "#344054", fontSize: 12 };
 const errorBox: CSSProperties = { border: "1px solid #fecdca", background: "#fef3f2", color: "#b42318", borderRadius: 8, padding: "9px 12px", fontSize: 12, marginBottom: 14 };
 const chartGrid: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 14 };
+const chartTabBar: CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "stretch",
+  gap: 4,
+  // Bleed to card edges so the ink bar reads as a header rail, not a floating button row.
+  margin: "-2px -18px 12px",
+  padding: "0 18px",
+  borderBottom: "1px solid #eaecf0",
+};
+const chartTab: CSSProperties = {
+  appearance: "none",
+  border: "none",
+  borderBottom: "2px solid transparent",
+  borderRadius: 0,
+  marginBottom: -1,
+  background: "transparent",
+  color: "#667085",
+  padding: "10px 14px 12px",
+  fontSize: 14,
+  fontWeight: 600,
+  fontFamily: "inherit",
+  lineHeight: 1.3,
+  cursor: "pointer",
+  transition: "color 160ms ease, border-color 160ms ease",
+};
 const chartHeight: CSSProperties = { width: "100%", height: 340 };
 const tableWrap: CSSProperties = { display: "grid", maxHeight: 360, overflowY: "auto" };
 const row: CSSProperties = { display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "center", gap: 14, padding: "11px 0", borderBottom: "1px solid #f2f4f7" };

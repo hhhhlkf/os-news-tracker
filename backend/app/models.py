@@ -115,6 +115,7 @@ class Item(Base):
     info_type: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     importance: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
     why_it_matters: Mapped[str | None] = mapped_column(Text, nullable=True)
+    os_insight: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="new", index=True)
     llm_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
 
