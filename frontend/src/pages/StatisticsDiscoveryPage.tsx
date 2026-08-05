@@ -255,6 +255,18 @@ function TabbedChartCard({
   );
 }
 
+function hexToRgba(hex: string, alpha: number): string {
+  const raw = hex.replace("#", "").trim();
+  const full = raw.length === 3
+    ? raw.split("").map((ch) => `${ch}${ch}`).join("")
+    : raw.padEnd(6, "0").slice(0, 6);
+  const r = Number.parseInt(full.slice(0, 2), 16);
+  const g = Number.parseInt(full.slice(2, 4), 16);
+  const b = Number.parseInt(full.slice(4, 6), 16);
+  if ([r, g, b].some((n) => Number.isNaN(n))) return `rgba(152, 162, 179, ${alpha})`;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 function StackedBarChart({
   points,
   legend,
@@ -280,6 +292,8 @@ function StackedBarChart({
     const dense = points.length > 8;
     const hasZoom = points.length > 18;
     const scrollLegend = legend.length > 4;
+    // Few series → soft gradient area; many series → flatter stacked area (less mud).
+    const fewSeries = legend.length <= 3;
     const seriesValues = (item: LegendItem) => points.map((point) => {
       const segment = point.segments.find((entry) => entry.key === item.key || entry.label === item.label);
       return segment?.value ?? 0;
@@ -287,17 +301,44 @@ function StackedBarChart({
     const series = legend.map((item) => {
       const data = seriesValues(item);
       if (showLines) {
+        // Stacked area line (ECharts handbook): keeps the same stack semantics as bars,
+        // instead of overlapping spaghetti lines that are hard to read.
         return {
           name: item.label,
           type: "line" as const,
+          stack: "total",
           data,
-          smooth: 0.2,
+          smooth: true,
           symbol: "circle",
-          symbolSize: 5,
-          showSymbol: points.length <= 20,
-          emphasis: { focus: "series" as const },
-          lineStyle: { width: 2, color: item.color },
+          symbolSize: fewSeries ? 7 : 5,
+          showSymbol: false,
+          connectNulls: true,
+          sampling: "lttb" as const,
+          emphasis: {
+            focus: "series" as const,
+            itemStyle: {
+              borderColor: "#fff",
+              borderWidth: 2,
+              shadowBlur: 6,
+              shadowColor: hexToRgba(item.color, 0.35),
+            },
+          },
+          lineStyle: {
+            width: fewSeries ? 2.5 : 1.8,
+            color: item.color,
+          },
           itemStyle: { color: item.color },
+          areaStyle: fewSeries
+            ? {
+              color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                { offset: 0, color: hexToRgba(item.color, 0.28) },
+                { offset: 1, color: hexToRgba(item.color, 0.02) },
+              ]),
+            }
+            : {
+              color: hexToRgba(item.color, 0.18),
+              opacity: 1,
+            },
         };
       }
       return {
@@ -314,10 +355,11 @@ function StackedBarChart({
 
     return {
       color: legend.map((item) => item.color),
-      animationDuration: 280,
+      animationDuration: 320,
+      animationEasing: "cubicOut",
       grid: {
         left: 52,
-        right: 16,
+        right: showLines ? 20 : 16,
         top: 40,
         // Reserve room for rotated labels and the dataZoom slider when it appears.
         bottom: hasZoom ? 78 : dense ? 56 : 40,
@@ -332,8 +374,8 @@ function StackedBarChart({
         right: 8,
         width: "96%",
         height: 28,
-        itemWidth: 10,
-        itemHeight: 10,
+        itemWidth: showLines ? 14 : 10,
+        itemHeight: showLines ? 8 : 10,
         itemGap: 10,
         pageButtonPosition: "end",
         pageIconSize: 10,
@@ -344,31 +386,55 @@ function StackedBarChart({
         data: legend.map((item) => item.label),
         formatter: (name: string) => shortMethodLabel(name, scrollLegend ? 10 : 14),
         tooltip: { show: true },
+        // Click legend to isolate a series — critical when many methods overlap.
+        selectedMode: true,
       },
       tooltip: {
         trigger: "axis",
         appendTo: "body",
         confine: false,
-        axisPointer: { type: showLines ? "line" : "shadow" },
-        backgroundColor: "#fff",
+        order: "valueDesc",
+        axisPointer: showLines
+          ? {
+            type: "cross",
+            snap: true,
+            label: {
+              backgroundColor: "#344054",
+              color: "#fff",
+              fontSize: 10,
+              formatter: (params) => {
+                if (params.axisDimension === "y") {
+                  return formatValue(Number(params.value));
+                }
+                return String(params.value ?? "");
+              },
+            },
+            crossStyle: { color: "#98a2b3", width: 1, type: "dashed" },
+            lineStyle: { color: "#98a2b3", width: 1, type: "dashed" },
+          }
+          : { type: "shadow" },
+        backgroundColor: "rgba(255,255,255,0.96)",
         borderColor: "#d0d5dd",
         borderWidth: 1,
-        padding: 10,
+        padding: [10, 12],
         textStyle: { color: "#475467", fontSize: 11 },
-        extraCssText: "box-shadow: 0 8px 24px rgba(16,24,40,.16); max-width: 320px;",
+        extraCssText: "box-shadow: 0 8px 24px rgba(16,24,40,.16); max-width: 340px; backdrop-filter: blur(2px);",
         formatter: (raw) => {
           const items = Array.isArray(raw) ? raw : [raw];
           const index = typeof items[0]?.dataIndex === "number" ? items[0].dataIndex : -1;
           const point = index >= 0 ? points[index] : undefined;
           if (!point) return "";
           const marker = showLines ? "●" : "■";
-          const rows = items
+          const rows = [...items]
             .filter((item) => Number(item.value ?? 0) > 0)
+            .sort((a, b) => Number(b.value ?? 0) - Number(a.value ?? 0))
             .map((item) => {
               const color = typeof item.color === "string" ? item.color : "#98a2b3";
               return `<div style="display:flex;justify-content:space-between;gap:18px;margin-top:3px">
-                <span><span style="color:${color}">${marker}</span> ${String(item.seriesName ?? "")}</span>
-                <strong>${formatValue(Number(item.value ?? 0))}</strong>
+                <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                  <span style="color:${color}">${marker}</span> ${String(item.seriesName ?? "")}
+                </span>
+                <strong style="font-variant-numeric:tabular-nums">${formatValue(Number(item.value ?? 0))}</strong>
               </div>`;
             })
             .join("");
@@ -382,7 +448,9 @@ function StackedBarChart({
       xAxis: {
         type: "category",
         data: categories,
-        axisTick: { alignWithLabel: true },
+        // Line/area charts read better without category gaps (ECharts basic line).
+        boundaryGap: !showLines,
+        axisTick: { alignWithLabel: true, show: !showLines },
         axisLine: { lineStyle: { color: "#eaecf0" } },
         axisLabel: {
           color: "#667085",
@@ -392,6 +460,9 @@ function StackedBarChart({
           rotate: dense ? 28 : 0,
           margin: 10,
         },
+        splitLine: showLines
+          ? { show: true, lineStyle: { color: "#f2f4f7", type: "dashed" } }
+          : undefined,
       },
       yAxis: {
         type: "value",
@@ -408,7 +479,15 @@ function StackedBarChart({
       dataZoom: hasZoom
         ? [
           { type: "inside", startValue: Math.max(0, points.length - 16), endValue: points.length - 1 },
-          { type: "slider", height: 18, bottom: 8 },
+          {
+            type: "slider",
+            height: 18,
+            bottom: 8,
+            borderColor: "#eaecf0",
+            fillerColor: "rgba(23, 92, 211, 0.12)",
+            handleStyle: { color: "#84adff" },
+            textStyle: { color: "#98a2b3", fontSize: 10 },
+          },
         ]
         : undefined,
       series,
@@ -668,9 +747,9 @@ export function StatisticsDiscoveryPage({ hasSystemAccess = false }: { hasSystem
           type="button"
           onClick={() => setShowLines((value) => !value)}
           style={showLines ? activeButton : button}
-          title={showLines ? "切换为堆叠柱状图" : "切换为分系列折线图"}
+          title={showLines ? "切换为堆叠柱状图" : "切换为堆叠面积曲线图"}
         >
-          {showLines ? "曲线开" : "曲线关"}
+          {showLines ? "面积曲线" : "柱状图"}
         </button>
       </div>
 
