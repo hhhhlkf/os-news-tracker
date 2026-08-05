@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.models import Item, ItemSource, ItemTag, Tag, TagAlias
-from app.processing.reason import generate_recommendation_reason
+from app.processing.reason import generate_os_insight, generate_recommendation_reason
 from app.run_logs import list_run_logs
 
 router = APIRouter()
@@ -30,6 +30,7 @@ def _item_summary(item: Item) -> dict:
         "fetched_at": item.fetched_at.isoformat() if item.fetched_at else None,
         "url": item.url,
         "why_it_matters": item.why_it_matters,
+        "os_insight": item.os_insight,
     }
 
 
@@ -369,6 +370,24 @@ def item_reason(item_id: int, db: Session = Depends(get_db)):
     item.why_it_matters = reason
     db.commit()
     return {"reason": reason, "generated": True}
+
+
+@router.post("/items/{item_id}/os-insight")
+def item_os_insight(item_id: int, db: Session = Depends(get_db)):
+    """Return the OS insight for an item, generating + caching it on first request."""
+    item = db.get(Item, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="not found")
+    if item.os_insight:
+        return {"os_insight": item.os_insight, "generated": False}
+    try:
+        insight = generate_os_insight(item)
+    except Exception:
+        fallback = item.summary or item.title_tldr or item.title
+        return {"os_insight": fallback, "generated": False}
+    item.os_insight = insight
+    db.commit()
+    return {"os_insight": insight, "generated": True}
 
 
 @router.get("/run-logs")

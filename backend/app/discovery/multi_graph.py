@@ -33,7 +33,7 @@ from app.discovery.naming import (
 logger = logging.getLogger(__name__)
 
 BranchKind = Literal["website", "wechat", "internal_mcp", "unsupported"]
-DEFAULT_WECHAT_SEARCH_MAX_PAGES = 2
+DEFAULT_WECHAT_SEARCH_MAX_PAGES = 6
 DEFAULT_WECHAT_HISTORY_LIMIT = 30
 
 

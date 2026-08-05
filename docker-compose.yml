@@ -23,7 +23,12 @@ services:
       - wechat_browser_data:/var/lib/os-news-tracker/wechat-browser
     environment:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
+      # Align with docker-compose.dev.yml scheduler knobs; leave ENABLE_SCHEDULER
+      # unset so entry.py default ("1") applies for traditional source cron.
+      ENABLE_MAIL_SCHEDULER: "1"
+      ENABLE_MORNING_CRAWL_SCHEDULER: "1"
       ENABLE_TREND_SCHEDULER: "1"
+      RUN_STARTUP_BACKFILL: "0"
       TRENDS_EMBEDDING_WORKER_BASE_URL: http://embedding-worker:8100
     depends_on:
       db:

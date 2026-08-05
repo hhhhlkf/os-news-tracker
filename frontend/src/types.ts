@@ -9,6 +9,7 @@ export interface ItemSummary {
   fetched_at: string | null;
   url: string;
   why_it_matters?: string | null;
+  os_insight?: string | null;
 }
 
 export interface ItemDetail extends ItemSummary {
@@ -428,6 +429,33 @@ export interface QueryRunUsageResponse {
   exact_since: string | null;
   total: number;
   runs: QueryRunTokenUsage[];
+}
+
+/** Same time grain as query-runs; each method segment is avg tokens per item. */
+export interface QueryItemAvgMethod extends TokenTotals {
+  method_id: number;
+  label: string;
+  item_count: number;
+  divisor: number;
+  avg_tokens_per_item: number;
+}
+
+export interface QueryItemAvgRun extends TokenTotals {
+  run_key: string;
+  run_id: number;
+  kind: "morning" | "method" | "batch";
+  trigger_type: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  avg_tokens_per_item: number;
+  methods: QueryItemAvgMethod[];
+}
+
+export interface QueryItemAvgResponse {
+  exact_since: string | null;
+  total: number;
+  runs: QueryItemAvgRun[];
 }
 
 export interface DiscoveryRunTokenUsage extends TokenTotals {
