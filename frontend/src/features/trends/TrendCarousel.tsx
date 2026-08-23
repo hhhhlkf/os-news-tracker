@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchTrendCarousel, fetchTrendCarouselTemplates } from "./api";
+import { trendCategoryColor, trendDirectionColor } from "./palette";
 import type { TrendCarouselItem, TrendResultSource } from "./types";
 
 const carouselTemplatesQueryKey = ["trends", "results", "carousel", "templates"] as const;
@@ -36,6 +37,7 @@ export function TrendCarousel({
   activeItemId = null,
 }: TrendCarouselProps) {
   const [templateId, setTemplateId] = useState<string | null>(null);
+  const [direction, setDirection] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   /** Track index into [cloneLast, ...pages, cloneFirst]; 1 == real page 1. */
   const [slideIndex, setSlideIndex] = useState(1);
@@ -50,15 +52,29 @@ export function TrendCarousel({
     retry: false,
   });
   const templates = templatesQuery.data ?? [];
+  const selectedTemplate = templates.find((template) => template.template_id === templateId);
+  // Direction choices are authored by the template currently selected above;
+  // a historical run can retain labels that were removed from that template.
+  const directions = selectedTemplate?.directions ?? [];
 
   useEffect(() => {
     if (templateId && templates.some((template) => template.template_id === templateId)) return;
     setTemplateId(templates[0]?.template_id ?? null);
   }, [templateId, templates]);
 
+  useEffect(() => {
+    setDirection(null);
+  }, [templateId]);
+
+  useEffect(() => {
+    if (direction !== null && !directions.includes(direction)) {
+      setDirection(null);
+    }
+  }, [direction, directions]);
+
   const carouselQuery = useQuery({
-    queryKey: [...carouselQueryKey, templateId] as const,
-    queryFn: () => fetchTrendCarousel(templateId!),
+    queryKey: [...carouselQueryKey, templateId, direction] as const,
+    queryFn: () => fetchTrendCarousel(templateId!, direction ?? undefined),
     enabled: Boolean(templateId),
     retry: false,
   });
@@ -85,7 +101,7 @@ export function TrendCarousel({
     setSlideIndex(count <= 1 ? 0 : 1);
     setTransitionOn(false);
     setIsSliding(false);
-  }, [templateId, carouselQuery.data?.run_id]);
+  }, [templateId, direction, carouselQuery.data?.run_id]);
   useEffect(() => {
     if (page <= pageCount) return;
     setPage(pageCount);
@@ -171,7 +187,16 @@ export function TrendCarousel({
           <select
             value={templateId ?? ""}
             onChange={(event) => setTemplateId(event.target.value || null)}
-            style={select}
+            style={{
+              ...select,
+              ...(direction
+                ? {
+                    borderColor: trendDirectionColor(direction).border,
+                    background: trendDirectionColor(direction).background,
+                    color: trendDirectionColor(direction).color,
+                  }
+                : {}),
+            }}
             aria-label="选择身份模板"
             disabled={templates.length === 0}
           >
@@ -179,6 +204,20 @@ export function TrendCarousel({
             {templates.map((template) => (
               <option key={template.template_id} value={template.template_id}>
                 {template.name}
+              </option>
+            ))}
+          </select>
+          <select
+            value={direction ?? ""}
+            onChange={(event) => setDirection(event.target.value || null)}
+            style={select}
+            aria-label="筛选趋势方向"
+            disabled={!templateId}
+          >
+            <option value="">全部方向</option>
+            {directions.map((item) => (
+              <option key={item} value={item}>
+                {item}
               </option>
             ))}
           </select>
@@ -271,6 +310,9 @@ function TrendCard({
   onSelectTrend: TrendCarouselProps["onSelectTrend"];
   onSelectSource: TrendCarouselProps["onSelectSource"];
 }) {
+  const categoryColor = trendCategoryColor(item.category);
+  const directionColor = trendDirectionColor(item.direction);
+
   return (
     <article
       style={isActive ? activeCard : card}
@@ -287,7 +329,10 @@ function TrendCard({
       aria-pressed={isActive}
     >
       <div style={cardHeader}>
-        <span style={categoryBadge}>{item.category_label}</span>
+        <div style={badges}>
+          <span style={{ ...categoryBadge, background: categoryColor.background, color: categoryColor.color, borderColor: categoryColor.border }}>{item.category_label}</span>
+          {item.direction && <span style={{ ...directionBadge, background: directionColor.background, color: directionColor.color, borderColor: directionColor.border }}>{item.direction}</span>}
+        </div>
         <span style={cardScore}>排序分 {item.trend_rank_score.toFixed(1)}</span>
       </div>
       <div style={cardTopic}>{item.topic}</div>
@@ -494,15 +539,16 @@ const activeCard: CSSProperties = {
   boxShadow: "0 0 0 2px rgba(23,92,211,.10)",
 };
 const cardHeader: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 };
+const badges: CSSProperties = { display: "flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" };
 const categoryBadge: CSSProperties = {
+  border: "1px solid",
   fontSize: 11,
   fontWeight: 700,
   borderRadius: 999,
   padding: "3px 8px",
-  background: "#eff6ff",
-  color: "#175cd3",
   whiteSpace: "nowrap",
 };
+const directionBadge: CSSProperties = { border: "1px solid", borderRadius: 999, padding: "3px 6px", fontSize: 10, fontWeight: 800 };
 const cardScore: CSSProperties = { fontSize: 11, color: "#98a2b3", whiteSpace: "nowrap" };
 const cardTopic: CSSProperties = { fontSize: 14, fontWeight: 800, color: "#101828", lineHeight: 1.4 };
 const cardSummary: CSSProperties = { fontSize: 12, color: "#475467", lineHeight: 1.6 };

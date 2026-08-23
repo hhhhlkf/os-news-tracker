@@ -18,9 +18,18 @@ services:
 
   backend:
     build: ./backend
+    command: sh -c 'chmod 700 /var/lib/os-news-tracker/discovery-attestation && exec uvicorn app.entry:app --host 0.0.0.0 --port 8000'
     env_file: .env
     volumes:
       - wechat_browser_data:/var/lib/os-news-tracker/wechat-browser
+      - discovery_attestation_keys:/var/lib/os-news-tracker/discovery-attestation
+      - discovery_connectors:/var/lib/os-news-tracker/connectors
+      - ./backend/connectors/sites:/var/lib/os-news-tracker/connectors/sites
+      - discovery_checkpoints:/var/lib/os-news-tracker/discovery-checkpoints
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/local/bin/runsc:/usr/local/bin/runsc:ro
+      - /usr/local/bin/gvisor-bin:/usr/local/bin/gvisor-bin:ro
+      - /etc/docker/daemon.json:/etc/docker/daemon.json:ro
     environment:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
       # Align with docker-compose.dev.yml scheduler knobs; leave ENABLE_SCHEDULER
@@ -69,6 +78,9 @@ services:
 volumes:
   pgdata:
   wechat_browser_data:
+  discovery_attestation_keys:
+  discovery_connectors:
+  discovery_checkpoints:
   # Model weights stay out of the image; the embedding worker downloads them
   # once into this volume and reloads them from there.
   embedding_model_cache:

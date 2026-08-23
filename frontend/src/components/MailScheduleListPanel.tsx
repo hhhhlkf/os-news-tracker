@@ -27,6 +27,7 @@ export interface ScheduleDraft {
   subject: string;
   recipients: string[];
   filter_snapshot: MailFilterSnapshot;
+  contentType?: "news" | "trend_distribution";
 }
 
 function formatMultiFilter(raw: string | null | undefined): string {
@@ -36,6 +37,8 @@ function formatMultiFilter(raw: string | null | undefined): string {
 
 function summarizeFilter(snapshot: MailFilterSnapshot): string {
   const segments: string[] = [];
+  if (snapshot.item_kind === "discussion") segments.push("技术讨论");
+  if (snapshot.item_kind === "news") segments.push("新闻");
   const mainCategory = formatMultiFilter(snapshot.main_category);
   const importance = formatMultiFilter(snapshot.importance);
   const subTag = formatMultiFilter(snapshot.sub_tag);
@@ -70,8 +73,26 @@ function formatDateTime(value: string | null): string {
   return timePart ? `${datePart} ${timePart}` : datePart;
 }
 
-function freqLabel(freq: MailFrequency): string {
-  return freq === "weekly" ? "每周" : "每日";
+const WEEKDAY_OPTIONS = [
+  { value: 0, label: "周一" },
+  { value: 1, label: "周二" },
+  { value: 2, label: "周三" },
+  { value: 3, label: "周四" },
+  { value: 4, label: "周五" },
+  { value: 5, label: "周六" },
+  { value: 6, label: "周日" },
+] as const;
+
+function defaultWeeklyDay(): number {
+  return (new Date().getDay() + 6) % 7;
+}
+
+function weeklyDayLabel(day: number | null | undefined): string {
+  return WEEKDAY_OPTIONS.find((option) => option.value === day)?.label ?? "未设置星期";
+}
+
+function freqLabel(freq: MailFrequency, weeklyDay?: number | null): string {
+  return freq === "weekly" ? `每周${weeklyDayLabel(weeklyDay)}` : "每日";
 }
 
 /** send_time 已是北京时间 HH:MM，直接展示。 */
@@ -147,23 +168,28 @@ export function MailScheduleListPanel(props: {
   const [editing, setEditing] = useState(false);
   const [editSendTime, setEditSendTime] = useState("09:00");
   const [editFrequency, setEditFrequency] = useState<MailFrequency>("daily");
+  const [editWeeklyDay, setEditWeeklyDay] = useState(defaultWeeklyDay);
 
   const [creating, setCreating] = useState(false);
   const [draftTemplateId, setDraftTemplateId] = useState<number | null>(null);
   const [draftFilter, setDraftFilter] = useState<MailFilterSnapshot>({});
+  const [draftContentType, setDraftContentType] = useState<"news" | "trend_distribution">("news");
   const [cName, setCName] = useState("");
   const [cSubject, setCSubject] = useState("");
   const [cRecipients, setCRecipients] = useState("");
   const [cFrequency, setCFrequency] = useState<MailFrequency>("daily");
+  const [cWeeklyDay, setCWeeklyDay] = useState(defaultWeeklyDay);
   const [cSendTime, setCSendTime] = useState("09:00");
 
   const openCreate = (draft: ScheduleDraft | null) => {
     setDraftTemplateId(draft?.templateId ?? null);
     setDraftFilter(draft?.filter_snapshot ?? {});
+    setDraftContentType(draft?.contentType ?? "news");
     setCName(draft?.name ?? "");
     setCSubject(draft?.subject ?? "");
     setCRecipients((draft?.recipients ?? []).join("\n"));
     setCFrequency("daily");
+    setCWeeklyDay(defaultWeeklyDay());
     setCSendTime("09:00");
     setCreating(true);
     setStatusMessage(null);
@@ -224,6 +250,7 @@ export function MailScheduleListPanel(props: {
         recipients: cRecipientList,
         filter_snapshot: draftFilter,
         frequency: cFrequency,
+        weekly_day: cFrequency === "weekly" ? cWeeklyDay : null,
         send_time: cSendTime,
         enabled: true,
         template_id: draftTemplateId,
@@ -255,7 +282,7 @@ export function MailScheduleListPanel(props: {
         data.status === "sent"
           ? `补发成功，共 ${data.item_count} 条。`
           : data.status === "查询空" || data.status === "skipped_empty"
-            ? "当前筛选没有匹配到新闻，未补发。"
+            ? "当前筛选没有匹配到条目，未补发。"
           : `补发失败（${mailProviderLabel(data.provider)}）：${data.error_message ?? "未知错误"}`,
       );
       invalidate();
@@ -265,9 +292,13 @@ export function MailScheduleListPanel(props: {
 
   const updateMutation = useMutation({
     mutationFn: async (scheduleId: number) =>
-      updateMailSchedule(scheduleId, { send_time: editSendTime, frequency: editFrequency }),
+      updateMailSchedule(scheduleId, {
+        send_time: editSendTime,
+        frequency: editFrequency,
+        weekly_day: editFrequency === "weekly" ? editWeeklyDay : null,
+      }),
     onSuccess: () => {
-      setStatusMessage("发送时间与频率已更新。");
+      setStatusMessage("发送计划已更新。");
       setEditing(false);
       invalidate();
     },
@@ -295,6 +326,7 @@ export function MailScheduleListPanel(props: {
     if (!selected) return;
     setEditSendTime(displaySendTime(selected.send_time) || "09:00");
     setEditFrequency(selected.frequency);
+    setEditWeeklyDay(selected.weekly_day ?? defaultWeeklyDay());
     setEditing(true);
     setStatusMessage(null);
   };
@@ -368,7 +400,7 @@ export function MailScheduleListPanel(props: {
                   : isSkippedStatus(schedule.last_result_status)
                     ? "跳过"
                     : isQueryEmptyStatus(schedule.last_result_status)
-                      ? "暂无新闻，待巡检"
+                    ? schedule.content_type === "trend_distribution" ? "暂无趋势，待巡检" : "暂无新闻，待巡检"
                       : "最近失败"
                 : "待发送";
             return (
@@ -390,7 +422,7 @@ export function MailScheduleListPanel(props: {
               >
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
                   <div style={{ fontWeight: 800, color: "#101828", fontSize: 14, wordBreak: "break-word" }}>
-                    {schedule.name} · {freqLabel(schedule.frequency)} {displaySendTime(schedule.send_time)}
+                    {schedule.name} · {freqLabel(schedule.frequency, schedule.weekly_day)} {displaySendTime(schedule.send_time)}
                   </div>
                   <DeleteIconButton
                     onClick={(e) => {
@@ -406,6 +438,7 @@ export function MailScheduleListPanel(props: {
                     ? `来源模板：${schedule.template_name ?? `#${schedule.template_id}`}`
                     : "独立预定（无模板）"}
                 </div>
+                <div style={{ fontSize: 12, color: "#667085" }}>{schedule.content_type === "trend_distribution" ? "内容：趋势与热点分发" : "内容：新闻筛选"}</div>
                 <div style={{ fontSize: 12, color: statusColor, fontWeight: 700 }}>{statusText}</div>
               </div>
             );
@@ -440,7 +473,7 @@ export function MailScheduleListPanel(props: {
                   <span style={{ fontSize: 12, color: "#b42318" }}>{createRecipientsError}</span>
                 )}
               </label>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: cFrequency === "weekly" ? "repeat(3, minmax(0,1fr))" : "repeat(2, minmax(0,1fr))", gap: 10 }}>
                 <label style={{ display: "grid", gap: 4 }}>
                   <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>发送时间 (北京时间)</span>
                   <input type="time" value={cSendTime} onChange={(e) => setCSendTime(e.target.value)} style={FIELD} />
@@ -452,8 +485,18 @@ export function MailScheduleListPanel(props: {
                     <option value="weekly">每周</option>
                   </select>
                 </label>
+                {cFrequency === "weekly" && (
+                  <label style={{ display: "grid", gap: 4 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>发送星期</span>
+                    <select value={cWeeklyDay} onChange={(e) => setCWeeklyDay(Number(e.target.value))} style={FIELD}>
+                      {WEEKDAY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </label>
+                )}
               </div>
-              <div style={{ fontSize: 12, color: "#667085" }}>筛选条件：{summarizeFilter(draftFilter)}</div>
+              <div style={{ fontSize: 12, color: "#667085" }}>
+                {draftContentType === "trend_distribution" ? "内容：趋势与热点分发（按保存模板的身份方向）" : `筛选条件：${summarizeFilter(draftFilter)}`}
+              </div>
               <div style={{ display: "flex", gap: 8 }}>
                 <button
                   onClick={() => createMutation.mutate()}
@@ -503,7 +546,7 @@ export function MailScheduleListPanel(props: {
               <div style={{ border: "1px solid #e1e7ef", borderRadius: 12, background: "#f8fafc", padding: "12px 14px" }}>
                 <div style={{ ...PANEL_TITLE, marginBottom: 6 }}>下次发送</div>
                 <div style={{ fontSize: 22, fontWeight: 800, color: "#101828" }}>{displaySendTime(selected.send_time)}</div>
-                <div style={{ fontSize: 12, color: "#667085" }}>{freqLabel(selected.frequency)} · {formatDateTime(selected.next_run_at)}</div>
+                <div style={{ fontSize: 12, color: "#667085" }}>{freqLabel(selected.frequency, selected.weekly_day)} · {formatDateTime(selected.next_run_at)}</div>
               </div>
               <div style={{ border: "1px solid #e1e7ef", borderRadius: 12, background: "#f8fafc", padding: "12px 14px" }}>
                 <div style={{ ...PANEL_TITLE, marginBottom: 6 }}>巡检状态</div>
@@ -517,10 +560,10 @@ export function MailScheduleListPanel(props: {
               <div style={{ display: "grid", gap: 8, fontSize: 13, color: "#475467", lineHeight: 1.6 }}>
                 <div><strong style={{ color: "#101828" }}>任务名：</strong>{selected.name}</div>
                 <div><strong style={{ color: "#101828" }}>来源模板：</strong>{selected.template_id ? (selected.template_name ?? `#${selected.template_id}`) : "独立预定"}</div>
-                <div><strong style={{ color: "#101828" }}>筛选条件：</strong>{summarizeFilter(selected.filter_snapshot)}</div>
+                <div><strong style={{ color: "#101828" }}>{selected.content_type === "trend_distribution" ? "内容类型：" : "筛选条件："}</strong>{selected.content_type === "trend_distribution" ? "趋势与热点分发（按保存模板的身份方向）" : summarizeFilter(selected.filter_snapshot)}</div>
                 <div><strong style={{ color: "#101828" }}>收件人：</strong>{(selected.recipients ?? []).length > 0 ? (selected.recipients ?? []).join("，") : "未设置"}</div>
                 <div><strong style={{ color: "#101828" }}>发送时间：</strong>{displaySendTime(selected.send_time)}（北京时间）</div>
-                <div><strong style={{ color: "#101828" }}>固定频率：</strong>{freqLabel(selected.frequency)}</div>
+                <div><strong style={{ color: "#101828" }}>固定频率：</strong>{freqLabel(selected.frequency, selected.weekly_day)}</div>
                 <div><strong style={{ color: "#101828" }}>当天标记：</strong>{selected.last_sent_marker_date ?? "未发送"}</div>
               </div>
             </section>
@@ -529,7 +572,7 @@ export function MailScheduleListPanel(props: {
               <div style={PANEL_TITLE}>任务操作</div>
               {editing ? (
                 <div style={{ display: "grid", gap: 10 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: editFrequency === "weekly" ? "repeat(3, minmax(0,1fr))" : "repeat(2, minmax(0,1fr))", gap: 10 }}>
                     <label style={{ display: "grid", gap: 4 }}>
                       <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>发送时间 (北京时间)</span>
                       <input type="time" value={editSendTime} onChange={(e) => setEditSendTime(e.target.value)} style={FIELD} />
@@ -541,6 +584,14 @@ export function MailScheduleListPanel(props: {
                         <option value="weekly">每周</option>
                       </select>
                     </label>
+                    {editFrequency === "weekly" && (
+                      <label style={{ display: "grid", gap: 4 }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>发送星期</span>
+                        <select value={editWeeklyDay} onChange={(e) => setEditWeeklyDay(Number(e.target.value))} style={FIELD}>
+                          {WEEKDAY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                        </select>
+                      </label>
+                    )}
                   </div>
                   <div style={{ display: "flex", gap: 8 }}>
                     <button onClick={() => updateMutation.mutate(selected.id)} disabled={updateMutation.isPending} style={solidBtn("#2563eb", updateMutation.isPending)}>
@@ -557,7 +608,7 @@ export function MailScheduleListPanel(props: {
                   <button onClick={() => sendNowMutation.mutate(selected.id)} disabled={sendNowMutation.isPending} style={solidBtn("#2563eb", sendNowMutation.isPending)}>
                     {sendNowMutation.isPending ? "补发中..." : "立即补发"}
                   </button>
-                  <button onClick={startEditing} style={softBtn("#ecfdf3", "#067647", "#bbe9cd")}>编辑时间与频率</button>
+                  <button onClick={startEditing} style={softBtn("#ecfdf3", "#067647", "#bbe9cd")}>编辑发送计划</button>
                 </div>
               )}
             </section>

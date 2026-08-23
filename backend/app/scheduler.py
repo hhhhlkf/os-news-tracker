@@ -7,7 +7,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.discovery.graph import (
+from app.discovery.recovery import (
     STALE_RUN_PATROL_INTERVAL_MINUTES,
     STALE_RUN_TIMEOUT_SECONDS,
     reclaim_stale_runs,
@@ -31,15 +31,11 @@ SUPPORTED_NEWS_SOURCE_TYPES = (
     SourceType.PAGE_MONITOR,
     SourceType.SEARCH,
     SourceType.API,
-    SourceType.AGENT_CRAWL,
 )
 
 
-def build_fetcher(source: Source, extractor, search, *, db=None, agent_time_window=None):
-    """根据源类型构建对应的 Fetcher 实例。
-
-    agent_crawl 类型需要 db 会话参数，其他类型忽略。
-    """
+def build_fetcher(source: Source, extractor, search):
+    """根据源类型构建对应的 Fetcher 实例。"""
     if source.type == SourceType.RSS:
         return RssFetcher()
     if source.type == SourceType.PAGE_MONITOR:
@@ -51,11 +47,6 @@ def build_fetcher(source: Source, extractor, search, *, db=None, agent_time_wind
             return ApiAdapterFetcher()
         if source.adapter == "generic_json_list":
             return GenericJsonApiFetcher()
-    if source.type == SourceType.AGENT_CRAWL:
-        from app.fetchers.agent_crawl import AgentCrawlFetcher
-        if db is None:
-            raise ValueError("agent_crawl fetcher requires a db session")
-        return AgentCrawlFetcher(db=db, time_window=agent_time_window)
     raise ValueError(f"unknown source type {source.type}")
 
 
@@ -74,7 +65,7 @@ def list_enabled_news_sources(session) -> list[Source]:
     )
 
 
-def run_source_job(source_id: int, agent_time_window=None):
+def run_source_job(source_id: int):
     session = SessionLocal()
     try:
         source = session.get(Source, source_id)
@@ -86,8 +77,6 @@ def run_source_job(source_id: int, agent_time_window=None):
             source,
             extractor,
             search,
-            db=session,
-            agent_time_window=agent_time_window,
         )
         pipeline = Pipeline(session=session, extractor=extractor, enricher=Enricher())
         count = pipeline.run_source(source, fetcher=fetcher)
@@ -198,7 +187,11 @@ def start_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler()
     session = SessionLocal()
     try:
-        for source in session.scalars(select(Source).where(Source.enabled.is_(True))):
+        for source in session.scalars(select(Source).where(
+            Source.enabled.is_(True),
+            Source.stream == Stream.NEWS.value,
+            Source.type.in_([value.value for value in SUPPORTED_NEWS_SOURCE_TYPES]),
+        )):
             cron = source.fetch_cron or "0 8 * * *"
             scheduler.add_job(
                 run_source_job,
@@ -262,11 +255,13 @@ MORNING_CRAWL_PATROL_INTERVAL_HOURS = 3
 
 
 def _run_system_morning_crawl(*, trigger_type: str, patrol: bool) -> None:
+    from app.api.discussion_routes import start_discussion_pipeline_run
     from app.morning_crawl.service import (
         beijing_now,
         execute_morning_crawl,
         get_or_create_config,
         is_running,
+        patrol_due_now,
         schedule_due_now,
     )
 
@@ -274,12 +269,23 @@ def _run_system_morning_crawl(*, trigger_type: str, patrol: bool) -> None:
     try:
         config = get_or_create_config(session)
         now = beijing_now()
-        today = now.date().isoformat()
-        if not schedule_due_now(config, now=now, today=today):
+        due = patrol_due_now(config, now=now) if patrol else schedule_due_now(config, now=now, today=now.date().isoformat())
+        if not due:
             return
         if is_running(session):
             return
         try:
+            # Technical discussions share the system schedule.  Run the
+            # existing mail + GitHub pipeline to completion before collecting
+            # papers and web sources, so the configured order is explicit.
+            # Patrol runs retry only unfinished crawl methods and must not
+            # repeatedly scan the discussion mailbox.
+            if not patrol:
+                start_discussion_pipeline_run(
+                    session,
+                    trigger_type="scheduled",
+                    run_in_background=False,
+                )
             execute_morning_crawl(session, trigger_type=trigger_type)
             logger.info("system morning crawl executed (%s)", trigger_type)
         except Exception:
@@ -298,7 +304,26 @@ def patrol_system_morning_crawl() -> None:
     _run_system_morning_crawl(trigger_type="patrol_resend", patrol=True)
 
 
+def coordinate_discovery_migration_shadow() -> None:
+    """Advance at most one no-ingestion site shadow per scheduler tick."""
+    from app.discovery.migration import coordinate_next_migration_shadow
+
+    try:
+        result = coordinate_next_migration_shadow()
+        if result is not None:
+            logger.info("Discovery migration shadow coordinated: %s", result)
+    except Exception:
+        logger.exception("Discovery migration shadow coordination failed")
+
+
 def register_morning_crawl_jobs(scheduler: BackgroundScheduler) -> None:
+    scheduler.add_job(
+        coordinate_discovery_migration_shadow,
+        IntervalTrigger(minutes=MORNING_CRAWL_TICK_INTERVAL_MINUTES),
+        id="discovery-migration-shadow-tick",
+        replace_existing=True,
+        max_instances=1,
+    )
     scheduler.add_job(
         run_system_morning_crawl,
         IntervalTrigger(minutes=MORNING_CRAWL_TICK_INTERVAL_MINUTES),

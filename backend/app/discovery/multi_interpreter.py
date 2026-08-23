@@ -19,6 +19,19 @@ class MultiDslInterpreter:
         *,
         progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> dict:
+        """执行一个 multi_dsl 配方，按来源类型分派到对应抓取逻辑。
+
+        功能：website 类型转成 DslRecipe 交给 DslInterpreter 执行；微信类型按顺序执行搜索/历史/抽取/补抓/去重等动作，
+        把每步结果放进上下文迭代，最终产出 items 与 stats。
+        谁会调用：execution.run_method、multi_graph 在执行已存配方时调用。
+        直接调用：
+        - DslInterpreter(...).run(...)：执行网站类型配方。
+        - DslRecipe(...)：构造网站类型配方。
+        - wechat_search_articles(...)/wechat_fetch_account_history(...)/wechat_enrich_articles(...)：微信抓取与补抓。
+        - _dedup(...)：按字段去重。
+        输入与结果：输入 MultiDslRecipe 与可选 progress_callback；返回含 items 与 stats 的 dict。
+        副作用：触发微信抓取/补抓（网络）或网站 DSL 执行（网络/浏览器）。
+        """
         if recipe.source_kind == "website":
             return DslInterpreter(progress_callback=progress_callback).run(
                 DslRecipe(
@@ -84,6 +97,14 @@ class MultiDslInterpreter:
 
 
 def _dedup(items: list[dict], field: str) -> list[dict]:
+    """按指定字段对条目去重，保留首次出现。
+
+    功能：用集合记录已见 key（字段值），跳过空值或重复项，输出去重后的列表。
+    谁会调用：MultiDslInterpreter.run 在执行 dedup_by 动作时调用。
+    直接调用：无（仅集合判重）。
+    输入与结果：输入条目列表与去重字段名；返回去重后的列表。
+    副作用：无。
+    """
     seen: set[str] = set()
     out: list[dict] = []
     for item in items:

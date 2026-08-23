@@ -20,6 +20,7 @@ from app.trends.schemas import (
     TrendClusterStageStatusResponse,
     TrendEmbeddingStatusResponse,
     TrendIdentityTemplateCreateRequest,
+    TrendIdentityTemplateUpdateRequest,
     TrendIdentityTemplateResponse,
     TrendLatestResultsResponse,
     TrendRunListResponse,
@@ -35,6 +36,7 @@ from app.trends.schemas import (
     TrendVectorBackfillRequest,
     TrendVectorStageStatusResponse,
 )
+from app.trends.directions import parse_template_directions
 from app.trends.service import (
     TrendIdentityTemplateNotFoundError,
     TrendRunNotFoundError,
@@ -49,6 +51,7 @@ def template_to_response(template: TrendIdentityTemplate) -> TrendIdentityTempla
         template_id=template.template_id,
         name=template.name,
         identity_text=template.identity_text,
+        directions=parse_template_directions(template.identity_text),
         created_at=template.created_at,
     )
 
@@ -83,6 +86,19 @@ def create_trend_identity_template(
     _access: dict = Depends(require_system_access),
 ) -> TrendIdentityTemplateResponse:
     return template_to_response(TrendService(db).create_identity_template(payload))
+
+
+@router.put("/templates/{template_id}")
+def update_trend_identity_template(
+    template_id: str,
+    payload: TrendIdentityTemplateUpdateRequest,
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+) -> TrendIdentityTemplateResponse:
+    try:
+        return template_to_response(TrendService(db).update_identity_template(template_id, payload))
+    except TrendIdentityTemplateNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.delete("/templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -362,10 +378,11 @@ def get_latest_trend_results(
 @router.get("/results/carousel")
 def get_trend_carousel(
     template_id: str = Query(min_length=1, max_length=36),
+    direction: str | None = Query(default=None, min_length=1, max_length=50),
     db: Session = Depends(get_db),
 ) -> TrendCarouselResponse:
     try:
-        return TrendService(db).get_trend_carousel(template_id=template_id)
+        return TrendService(db).get_trend_carousel(template_id=template_id, direction=direction)
     except TrendIdentityTemplateNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -378,7 +395,11 @@ def list_trend_carousel_templates(
 ) -> list[TrendCarouselTemplateResponse]:
     """List public template names without exposing their identity instructions."""
     return [
-        TrendCarouselTemplateResponse(template_id=template.template_id, name=template.name)
+        TrendCarouselTemplateResponse(
+            template_id=template.template_id,
+            name=template.name,
+            directions=parse_template_directions(template.identity_text),
+        )
         for template in TrendService(db).list_identity_templates()
     ]
 

@@ -20,7 +20,6 @@ export interface RouteInputState {
 const PREFIX_TO_ROUTE_TYPE: Record<string, DiscoveryRouteType> = {
   "网页": "website",
   "微信搜索": "wechat_search",
-  "微信公众号": "wechat_history",
   "司内论坛": "internal_forum",
 };
 
@@ -64,7 +63,7 @@ function splitDisplayInput(rawInput: string): {
 /**
  * Auto-infer route type from input content.
  * - [km] or [iwiki] markers → internal_forum
- * - URL with scheme → website (or wechat_history for mp.weixin.qq.com)
+ * - URL with scheme → website
  * - Plain text → wechat_search
  */
 function inferRouteType(rawInput: string): DiscoveryRouteType | null {
@@ -74,7 +73,6 @@ function inferRouteType(rawInput: string): DiscoveryRouteType | null {
   const lower = parsed.effectiveValue.toLowerCase();
   if (lower.includes("[km]") || lower.includes("[iwiki]")) return "internal_forum";
   if (lower.startsWith("http://") || lower.startsWith("https://")) {
-    if (lower.includes("mp.weixin.qq.com")) return "wechat_history";
     return "website";
   }
   return "wechat_search";

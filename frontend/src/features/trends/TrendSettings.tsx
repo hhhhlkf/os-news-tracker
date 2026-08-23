@@ -38,13 +38,20 @@ const scheduleTimes = Array.from({ length: 48 }, (_, index) => {
   return `${String(hour).padStart(2, "0")}:${minute}`;
 });
 
-function scheduleParts(rule: string | null): { weekday: string; time: string } {
-  const match = rule?.match(/^weekly_(monday|tuesday|wednesday|thursday|friday|saturday|sunday)_(\d{2}:\d{2})$/);
-  return match ? { weekday: match[1], time: match[2] } : { weekday: "monday", time: "09:00" };
+function scheduleParts(rule: string | null): { cadence: "daily" | "weekly"; weekday: string; time: string } {
+  const weeklyMatch = rule?.match(/^weekly_(monday|tuesday|wednesday|thursday|friday|saturday|sunday)_(\d{2}:\d{2})$/);
+  if (weeklyMatch) return { cadence: "weekly", weekday: weeklyMatch[1], time: weeklyMatch[2] };
+  const dailyMatch = rule?.match(/^daily_(\d{2}:\d{2})$/);
+  if (dailyMatch) return { cadence: "daily", weekday: "monday", time: dailyMatch[1] };
+  return { cadence: "weekly", weekday: "monday", time: "09:00" };
 }
 
 function weeklyScheduleRule(weekday: string, time: string): string {
   return `weekly_${weekday}_${time}`;
+}
+
+function scheduleRule(cadence: "daily" | "weekly", weekday: string, time: string): string {
+  return cadence === "daily" ? `daily_${time}` : weeklyScheduleRule(weekday, time);
 }
 
 export function TrendSettings({ settings, templates, isLoading, isSaving, error, onSave }: TrendSettingsProps) {
@@ -89,7 +96,7 @@ export function TrendSettings({ settings, templates, isLoading, isSaving, error,
     await onSave({
       ...form,
       schedule_rule: form.trigger_mode === "scheduled"
-        ? weeklyScheduleRule(schedule.weekday, schedule.time)
+        ? scheduleRule(schedule.cadence, schedule.weekday, schedule.time)
         : form.schedule_rule?.trim() || null,
       scheduled_template_id: form.scheduled_template_id || null,
     });
@@ -157,24 +164,35 @@ export function TrendSettings({ settings, templates, isLoading, isSaving, error,
           <span style={labelText}>定时规则</span>
           <div style={scheduleFields}>
             <select
-              value={schedule.weekday}
-              onChange={(event) => update("schedule_rule", weeklyScheduleRule(event.target.value, schedule.time))}
+              value={schedule.cadence}
+              onChange={(event) => update("schedule_rule", scheduleRule(event.target.value as "daily" | "weekly", schedule.weekday, schedule.time))}
               style={input}
               disabled={isLoading || form.trigger_mode !== "scheduled"}
             >
-              {weekdays.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}
+              <option value="daily">每日</option>
+              <option value="weekly">每周</option>
             </select>
             <select
               value={schedule.time}
-              onChange={(event) => update("schedule_rule", weeklyScheduleRule(schedule.weekday, event.target.value))}
+              onChange={(event) => update("schedule_rule", scheduleRule(schedule.cadence, schedule.weekday, event.target.value))}
               style={input}
               disabled={isLoading || form.trigger_mode !== "scheduled"}
             >
               {scheduleTimes.map((time) => <option key={time} value={time}>{time}</option>)}
             </select>
+            {schedule.cadence === "weekly" && (
+              <select
+                value={schedule.weekday}
+                onChange={(event) => update("schedule_rule", weeklyScheduleRule(event.target.value, schedule.time))}
+                style={input}
+                disabled={isLoading || form.trigger_mode !== "scheduled"}
+              >
+                {weekdays.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}
+              </select>
+            )}
           </div>
           <span style={hint}>
-            每周在所选星期和时刻按北京时间执行一次趋势分析：先复用或顺序补齐事实层，再运行当前定时模板；
+            每日或每周在所选时刻按北京时间执行一次趋势分析：先复用或顺序补齐事实层，再运行当前定时模板；
             同一计划时刻只会执行一次，执行结果可在第 4 步查看。
           </span>
         </label>

@@ -35,6 +35,8 @@ class CardGenerationCandidate:
     title: str
     content: str | None
     at: date
+    item_kind: str = "news"
+    content_revision: int = 1
     content_source: CardContentSource | None = "clean_content"
     key_points: list[str] | None = None
 
@@ -131,6 +133,7 @@ def generate_news_explanation_card(
     title: str,
     content: str | None,
     llm: LlmClient,
+    item_kind: str = "news",
     content_source: CardContentSource | None = "clean_content",
     key_points: list[str] | None = None,
 ) -> CardGenerationOutcome:
@@ -162,6 +165,7 @@ def generate_news_explanation_card(
         prompt = build_card_prompt(
             title=title,
             content=cleaned_content[:CARD_CONTENT_CHAR_LIMIT],
+            item_kind=item_kind,
             content_source=content_source,
             key_points=key_points,
             attempt=attempt,
@@ -312,6 +316,7 @@ class CardBackfillController:
                         generate_news_explanation_card,
                         title=candidate.title,
                         content=candidate.content,
+                        item_kind=candidate.item_kind,
                         content_source=candidate.content_source,
                         key_points=candidate.key_points,
                         llm=llm,

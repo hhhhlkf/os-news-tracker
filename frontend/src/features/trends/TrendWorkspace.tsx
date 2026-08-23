@@ -6,6 +6,7 @@ import {
   fetchTrendIdentityTemplates,
   fetchTrendSettings,
   updateTrendSettings,
+  updateTrendIdentityTemplate,
 } from "./api";
 import { TrendEmbeddingPanel } from "./TrendEmbeddingPanel";
 import { TrendFlow } from "./TrendFlow";
@@ -15,7 +16,7 @@ import type { TrendSettings as TrendSettingsData } from "./types";
 const templateQueryKey = ["trends", "identity-templates"] as const;
 const settingsQueryKey = ["trends", "settings"] as const;
 const defaultTemplateName = "新闻趋势分析师";
-const defaultIdentityText = "我是新闻趋势分析师，聚焦操作系统与人工智能领域的可验证技术变化。重点识别 Linux、云原生、系统软件、基础设施、芯片与开发工具，以及大模型、Agent、推理、训练、开源生态和 AI 落地的持续演进。基于跨来源、跨主体和时间窗口证据判断新兴趋势、热点、主线与降温信号；优先关注技术成熟度、生态影响、安全与成本、兼容性和实际部署。忽略单纯营销、缺少证据的预测及孤立新闻。";
+const defaultIdentityText = "我是新闻趋势分析师，聚焦操作系统与人工智能领域的可验证技术变化。重点识别 Linux、云原生、系统软件、基础设施、芯片与开发工具，以及大模型、Agent、推理、训练、开源生态和 AI 落地的持续演进。基于跨来源、跨主体和时间窗口证据判断新兴趋势、热点、主线与降温信号；优先关注技术成熟度、生态影响、安全与成本、兼容性和实际部署。忽略单纯营销、缺少证据的预测及孤立新闻。分类方向：{AI方向}、{OS方向}；每条趋势必须归入其中一个方向。";
 
 export function TrendWorkspace() {
   const queryClient = useQueryClient();
@@ -23,6 +24,7 @@ export function TrendWorkspace() {
   const [newTemplateName, setNewTemplateName] = useState(defaultTemplateName);
   const [newIdentityText, setNewIdentityText] = useState(defaultIdentityText);
   const [templateFormOpen, setTemplateFormOpen] = useState(false);
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [templateFormError, setTemplateFormError] = useState<string | null>(null);
 
   const templatesQuery = useQuery({ queryKey: templateQueryKey, queryFn: fetchTrendIdentityTemplates });
@@ -53,6 +55,16 @@ export function TrendWorkspace() {
       ]);
     },
   });
+  const updateTemplateMutation = useMutation({
+    mutationFn: ({ templateId, name, identityText }: { templateId: string; name: string; identityText: string }) =>
+      updateTrendIdentityTemplate(templateId, { name, identity_text: identityText }),
+    onSuccess: async () => {
+      setEditingTemplateId(null);
+      setTemplateFormOpen(false);
+      await queryClient.invalidateQueries({ queryKey: templateQueryKey });
+      await queryClient.invalidateQueries({ queryKey: ["trends", "results", "carousel"] });
+    },
+  });
   const saveSettingsMutation = useMutation({
     mutationFn: updateTrendSettings,
     onSuccess: async (settings) => {
@@ -63,7 +75,7 @@ export function TrendWorkspace() {
 
   const templates = templatesQuery.data ?? [];
   const selectedTemplate = templates.find((template) => template.template_id === selectedTemplateId) ?? null;
-  const templateError = templatesQuery.error ?? createTemplateMutation.error ?? deleteTemplateMutation.error;
+  const templateError = templatesQuery.error ?? createTemplateMutation.error ?? updateTemplateMutation.error ?? deleteTemplateMutation.error;
 
   async function handleCreateTemplate(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -74,6 +86,10 @@ export function TrendWorkspace() {
     }
     if (!newIdentityText.trim()) {
       setTemplateFormError("请填写身份文本。");
+      return;
+    }
+    if (editingTemplateId) {
+      await updateTemplateMutation.mutateAsync({ templateId: editingTemplateId, name: newTemplateName.trim(), identityText: newIdentityText.trim() });
       return;
     }
     await createTemplateMutation.mutateAsync({ name: newTemplateName.trim(), identity_text: newIdentityText.trim() });
@@ -104,9 +120,9 @@ export function TrendWorkspace() {
           <div style={panelHeader}>
             <div>
               <div style={sectionTitle}>身份模板</div>
-              <div style={sectionCopy}>模板创建后不可编辑；如需调整身份视角，请新建一个模板。</div>
+              <div style={sectionCopy}>在身份文本中用 {'{方向名称}'} 声明可选方向；例如 {'{AI方向}'}、{'{OS方向}'}。保存后每条趋势会精确归入一个方向。</div>
             </div>
-            <button type="button" style={secondaryButton} onClick={() => { setTemplateFormError(null); setTemplateFormOpen((open) => !open); }}>
+            <button type="button" style={secondaryButton} onClick={() => { setTemplateFormError(null); setEditingTemplateId(null); setNewTemplateName(defaultTemplateName); setNewIdentityText(defaultIdentityText); setTemplateFormOpen((open) => !open); }}>
               {templateFormOpen ? "收起新建" : "新建模板"}
             </button>
           </div>
@@ -115,7 +131,7 @@ export function TrendWorkspace() {
             <form onSubmit={(event) => void handleCreateTemplate(event)} style={createForm}>
               <label style={field}>
                 <span style={labelText}>模板名称</span>
-                <input value={newTemplateName} onChange={(event) => setNewTemplateName(event.target.value)} placeholder="例如：企业技术战略负责人" style={input} disabled={createTemplateMutation.isPending} />
+                <input value={newTemplateName} onChange={(event) => setNewTemplateName(event.target.value)} placeholder="例如：企业技术战略负责人" style={input} disabled={createTemplateMutation.isPending || updateTemplateMutation.isPending} />
               </label>
               <label style={field}>
                 <span style={labelText}>身份文本</span>
@@ -123,18 +139,18 @@ export function TrendWorkspace() {
                   value={newIdentityText}
                   onChange={(event) => setNewIdentityText(event.target.value)}
                   placeholder="描述身份、职责、关注方向、判断标准与希望规避的偏差。"
-                  maxLength={300}
+                  maxLength={500}
                   rows={5}
                   style={textarea}
-                  disabled={createTemplateMutation.isPending}
+                  disabled={createTemplateMutation.isPending || updateTemplateMutation.isPending}
                 />
-                <span style={counter}>{newIdentityText.length}/300</span>
+                <span style={counter}>{newIdentityText.length}/500</span>
               </label>
               {templateFormError && <div style={errorBox}>{templateFormError}</div>}
               {createTemplateMutation.error && <div style={errorBox}>{createTemplateMutation.error.message}</div>}
               <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                <button type="submit" style={primaryButton} disabled={createTemplateMutation.isPending}>
-                  {createTemplateMutation.isPending ? "创建中…" : "创建身份模板"}
+                <button type="submit" style={primaryButton} disabled={createTemplateMutation.isPending || updateTemplateMutation.isPending}>
+                  {createTemplateMutation.isPending || updateTemplateMutation.isPending ? "保存中…" : editingTemplateId ? "保存身份模板" : "创建身份模板"}
                 </button>
               </div>
             </form>
@@ -158,16 +174,27 @@ export function TrendWorkspace() {
                       <span style={templateName}>{template.name}</span>
                       <span style={templateDate}>创建于 {template.created_at}</span>
                       <span style={templateText}>{template.identity_text}</span>
+                      <span style={templateDirections}>方向：{template.directions.join(" / ") || "未声明"}</span>
                     </button>
-                    <button
-                      type="button"
-                      style={deleteButton}
-                      onClick={() => void handleDeleteTemplate(template.template_id)}
-                      disabled={deleteTemplateMutation.isPending}
-                      aria-label={`删除模板 ${template.name}`}
-                    >
-                      删除
-                    </button>
+                    <div style={templateActions}>
+                      <button
+                        type="button"
+                        style={deleteButton}
+                        onClick={() => void handleDeleteTemplate(template.template_id)}
+                        disabled={deleteTemplateMutation.isPending}
+                        aria-label={`删除模板 ${template.name}`}
+                      >
+                        删除
+                      </button>
+                      <button
+                        type="button"
+                        style={editButton}
+                        onClick={() => { setEditingTemplateId(template.template_id); setNewTemplateName(template.name); setNewIdentityText(template.identity_text); setTemplateFormError(null); setTemplateFormOpen(true); }}
+                        disabled={deleteTemplateMutation.isPending || updateTemplateMutation.isPending}
+                      >
+                        编辑
+                      </button>
+                    </div>
                   </article>
                 );
               })}
@@ -223,6 +250,9 @@ const templateSelectButton: CSSProperties = { border: 0, padding: 0, background:
 const templateName: CSSProperties = { color: "#101828", fontSize: 13, fontWeight: 800 };
 const templateDate: CSSProperties = { color: "#98a2b3", fontSize: 11 };
 const templateText: CSSProperties = { color: "#667085", fontSize: 12, lineHeight: 1.55, marginTop: 3 };
+const templateDirections: CSSProperties = { color: "#5925dc", fontSize: 11, fontWeight: 700, marginTop: 3 };
+const templateActions: CSSProperties = { alignSelf: "start", display: "flex", alignItems: "center", gap: 6 };
+const editButton: CSSProperties = { alignSelf: "start", border: 0, background: "transparent", color: "#175cd3", fontSize: 12, fontWeight: 700, padding: 3, cursor: "pointer" };
 const deleteButton: CSSProperties = { alignSelf: "start", border: 0, background: "transparent", color: "#b42318", fontSize: 12, fontWeight: 700, padding: 3, cursor: "pointer" };
 const empty: CSSProperties = { color: "#98a2b3", textAlign: "center", padding: 28, fontSize: 13 };
 const emptyState: CSSProperties = { border: "1px dashed #d0d5dd", borderRadius: 10, color: "#667085", textAlign: "center", padding: "28px 20px", fontSize: 13, lineHeight: 1.65 };

@@ -38,7 +38,8 @@ interface Props {
   /** True while the next page is loading but previous items may still be shown. */
   isFetching?: boolean;
   emptyMessage?: string;
-  sortBy?: "published_at" | "fetched_at";
+  sortBy?: "published_at" | "fetched_at" | "last_activity_at";
+  openId?: number | null;
   onOpen: (id: number) => void;
   onPageChange: (page: number) => void;
 }
@@ -52,6 +53,7 @@ export function ItemList({
   isFetching,
   emptyMessage,
   sortBy,
+  openId,
   onOpen,
   onPageChange,
 }: Props) {
@@ -151,7 +153,13 @@ export function ItemList({
           }}
         >
           {items.map((item) => (
-            <ItemCard key={item.id} item={item} onClick={() => onOpen(item.id)} sortBy={sortBy} />
+            <ItemCard
+              key={item.id}
+              item={item}
+              onClick={() => onOpen(item.id)}
+              selected={item.id === openId}
+              sortBy={sortBy}
+            />
           ))}
         </div>
       </div>

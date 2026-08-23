@@ -2,11 +2,22 @@ const TOKEN_KEY = "os_tracker_token";
 const configuredBase = import.meta.env.VITE_API_BASE?.trim();
 const BASE = configuredBase ? configuredBase.replace(/\/+$/, "") : "";
 
+type JwtPayload = {
+  role?: string;
+  exp?: number;
+};
+
 export function getToken(): string | null {
   if (typeof window === "undefined" || !window.localStorage) {
     return null;
   }
-  return localStorage.getItem(TOKEN_KEY);
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!token) return null;
+  if (isAccessTokenExpired(token)) {
+    logout();
+    return null;
+  }
+  return token;
 }
 
 export function setToken(token: string): void {
@@ -24,6 +35,18 @@ export function isSystemAuthenticated(): boolean {
   if (!token) return false;
   const payload = decodeJwtPayload(token);
   return payload?.role === "system_admin" || payload?.role === "admin";
+}
+
+/** Milliseconds since epoch when the current access token expires, or null. */
+export function getAccessTokenExpiresAtMs(): number | null {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return null;
+  }
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!token) return null;
+  const payload = decodeJwtPayload(token);
+  if (typeof payload?.exp !== "number") return null;
+  return payload.exp * 1000;
 }
 
 export function authHeaders(): Record<string, string> {
@@ -47,13 +70,19 @@ export async function systemLogin(password: string): Promise<void> {
   setToken(data.access_token);
 }
 
-function decodeJwtPayload(token: string): { role?: string } | null {
+function isAccessTokenExpired(token: string, nowMs: number = Date.now()): boolean {
+  const payload = decodeJwtPayload(token);
+  if (typeof payload?.exp !== "number") return true;
+  return payload.exp * 1000 <= nowMs;
+}
+
+function decodeJwtPayload(token: string): JwtPayload | null {
   try {
     const payload = token.split(".")[1];
     if (!payload) return null;
     const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
     const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-    return JSON.parse(window.atob(padded)) as { role?: string };
+    return JSON.parse(window.atob(padded)) as JwtPayload;
   } catch {
     return null;
   }

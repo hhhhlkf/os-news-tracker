@@ -32,6 +32,17 @@ def article_page_needs_content(
     *,
     min_existing_chars: int = 120,
 ) -> bool:
+    """判断单条条目是否还需要补抓详情页正文。
+
+    功能：若已有足够长的 content 或可信摘要（且不像聚合器摘要）则不需要；否则返回 True。
+    谁会调用：should_enrich_article_pages_for_exploration、enrich_article_pages、website/recipe_audit.py 在筛选待补抓条目时调用。
+    直接调用：
+    - _compact_text(...)：压缩空白以便比较长度。
+    - _strip_markup(...)：去除摘要里的 HTML 标记。
+    - _looks_like_aggregator_summary(...)：排除聚合器式摘要。
+    输入与结果：输入 item 字典与最小字符阈值；返回布尔。
+    副作用：无。
+    """
     content = _compact_text(item.get("content") or "")
     if len(content) >= min_existing_chars:
         return False
@@ -42,6 +53,18 @@ def article_page_needs_content(
 
 
 def should_enrich_article_pages_for_exploration(exploration: dict[str, Any]) -> bool:
+    """根据探查证据判断该来源是否应生成「补抓文章正文」动作。
+
+    功能：仅对 rss/atom/html/json_api 来源生效；对 HN 类来源直接开启，否则抽样若干 sample_items，
+    若过半样本正文不足且不像聚合器，则认为需要补抓。
+    谁会调用：website/recipe_writer.dsl_writer 在生成 DSL 时决定是否追加 enrich_article_pages 动作。
+    直接调用：
+    - urlparse(...)：取列表页 host。
+    - _sample_text(...)：从样本取字段文本。
+    - article_page_needs_content(...)：判断单条是否需要补抓。
+    输入与结果：输入 exploration 字典；返回布尔。
+    副作用：无。
+    """
     source_type = str(exploration.get("source_type") or "").lower()
     if source_type not in {"rss", "atom", "html", "json_api"}:
         return False
@@ -78,6 +101,18 @@ def enrich_article_pages(
     min_existing_chars: int = 120,
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
+    """批量补抓文章详情页，回填标题/摘要/正文/发布时间。
+
+    功能：先按 fill_missing_only 与 article_page_needs_content 筛出需要抓取的条目（受 max_items 限制），
+    逐条抓取并抽取字段回填，期间通过回调上报进度，单条失败不影响其他条目。
+    谁会调用：interpreter._enrich_article_pages 在执行 DSL 的 enrich_article_pages 动作时调用。
+    直接调用：
+    - article_page_needs_content(...)：筛选需要补抓的条目。
+    - fetch_article_page_content(...)：抓取并抽取单个文章页。
+    - _emit_progress(...)：上报补抓进度事件。
+    输入与结果：输入 items 列表与抓取选项；返回含 enriched items 与统计（status/attempted/enriched 等）的 dict。
+    副作用：对每条待补抓文章发起 HTTP 请求（网络副作用），并通过回调产出进度。
+    """
     next_items = [dict(item) for item in items]
     fetch_indices: list[int] = []
     for idx, item in enumerate(next_items):
@@ -195,6 +230,18 @@ def fetch_article_page_content(
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
     progress_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """抓取单个文章页并抽取结构化字段。
+
+    功能：用浏览器式请求头 GET 文章页，校验状态码与内容类型，解析出 title/summary/published_at/content，
+    并在请求前后通过回调上报进度；非 HTML 或 ≥400 时返回 unsupported。
+    谁会调用：enrich_article_pages 批量补抓时、tools.probe_article_content 探查时调用。
+    直接调用：
+    - httpx.Client.get(...)：发起文章页请求。
+    - extract_article_fields(...)：从 HTML 抽取字段。
+    - _emit_progress(...)：上报抓取进度。
+    输入与结果：输入 url 与选项；返回含 status、resolved_url、content/title/summary/published_at 的 dict。
+    副作用：发起一次 HTTP GET（网络请求）。
+    """
     context = dict(progress_context or {})
     started_at = time.monotonic()
     _emit_progress(progress_callback, "article_page_fetch_request_started", **context, url=url)
@@ -249,6 +296,19 @@ def fetch_article_page_content(
 
 
 def extract_article_fields(html_text: str, *, content_char_limit: int = 3000) -> dict[str, str | None]:
+    """从文章 HTML 解析出 title、summary、published_at 与正文主文本。
+
+    功能：用 lxml 解析页面，优先读 og/meta 与 <time datetime>，再用 _extract_main_text 抽取正文，统一压缩空白。
+    谁会调用：fetch_article_page_content 在拿到页面后调用。
+    直接调用：
+    - lxml_html.fromstring(...)：解析 HTML 为树。
+    - _first_meta(...)：读 meta 标签字段。
+    - _first_attr(...)：读 time 标签的 datetime 属性。
+    - _extract_main_text(...)：抽取正文主文本。
+    - _compact_text(...)：压缩字段空白。
+    输入与结果：输入 HTML 文本；返回含 content/title/summary/published_at 的字典。
+    副作用：无。
+    """
     try:
         tree = lxml_html.fromstring(html_text)
     except Exception:
@@ -278,6 +338,17 @@ def extract_article_fields(html_text: str, *, content_char_limit: int = 3000) ->
 
 
 def _extract_main_text(tree: Any, *, content_char_limit: int) -> str:
+    """从解析树抽取正文主文本（去掉脚本/样式/导航等噪声，取最长候选块）。
+
+    功能：删除脚本/样式/导航/页脚等节点，优先在 article/main/post/content 等容器里找最长文本块，截断到字符上限。
+    谁会调用：extract_article_fields 在抽取正文时调用。
+    直接调用：
+    - _compact_text(...)：压缩文本空白。
+    - html.unescape(...)：还原 HTML 实体。
+    - tree.xpath(...)：定位噪声节点与候选容器。
+    输入与结果：输入 lxml 树；返回正文文本（已截断）。
+    副作用：无。
+    """
     for node in tree.xpath("//script|//style|//noscript|//nav|//header|//footer|//aside|//form"):
         parent = node.getparent()
         if parent is not None:
@@ -300,6 +371,15 @@ def _extract_main_text(tree: Any, *, content_char_limit: int) -> str:
 
 
 def _first_meta(tree: Any, attr_name: str, attr_value: str) -> str | None:
+    """按 meta 标签的某属性值取 content。
+
+    功能：用大小写不敏感的 XPath 查找指定 meta 标签的 content 值，用于读 og:title、description、发布时间等。
+    谁会调用：extract_article_fields 在取标题/摘要/时间时调用。
+    直接调用：
+    - tree.xpath(...)：执行 meta 查询。
+    输入与结果：输入解析树、属性名与属性值；返回 content 字符串或 None。
+    副作用：无。
+    """
     values = tree.xpath(
         f"//meta[translate(@{attr_name}, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')="
         f"'{attr_value.lower()}']/@content"
@@ -308,11 +388,28 @@ def _first_meta(tree: Any, attr_name: str, attr_value: str) -> str | None:
 
 
 def _first_attr(tree: Any, xpath: str, attr_name: str) -> str | None:
+    """按 XPath 取某个节点的属性值。
+
+    功能：用于在 time 标签等位置取 datetime 等属性。
+    谁会调用：extract_article_fields 在取发布时间时调用。
+    直接调用：
+    - tree.xpath(...)：执行属性查询。
+    输入与结果：输入解析树、XPath 与属性名；返回属性字符串或 None。
+    副作用：无。
+    """
     values = tree.xpath(f"{xpath}/@{attr_name}")
     return str(values[0]).strip() if values else None
 
 
 def _sample_text(sample: dict[str, Any], *keys: str) -> str:
+    """从样本对象中按优先级取第一个非空文本字段。
+
+    功能：依次尝试给定的键，命中非空值即返回；样本内嵌 raw 字典时也尝试同样的键。
+    谁会调用：should_enrich_article_pages_for_exploration 在构造候选条目时调用。
+    直接调用：无（仅字典取值）。
+    输入与结果：输入样本字典与若干键名；返回首个非空文本或空串。
+    副作用：无。
+    """
     for key in keys:
         value = sample.get(key)
         if value:
@@ -327,15 +424,41 @@ def _sample_text(sample: dict[str, Any], *keys: str) -> str:
 
 
 def _looks_like_aggregator_summary(text: str) -> bool:
+    """判断摘要是否像聚合器（如 Hacker News）格式而非正文摘要。
+
+    功能：匹配 "article url:"、"points:"、"news.ycombinator.com" 等聚合器特有片段，避免把这类摘要误当正文。
+    谁会调用：article_page_needs_content 在判断已有摘要是否足够时调用。
+    直接调用：无（与常量模式匹配）。
+    输入与结果：输入文本；返回布尔。
+    副作用：无。
+    """
     lowered = text.lower()
     return any(pattern in lowered for pattern in AGGREGATOR_SUMMARY_PATTERNS)
 
 
 def _strip_markup(value: str) -> str:
+    """去除 HTML 标签与字符实体，得到纯文本。
+
+    功能：先把实体反转义，再用正则删掉所有标签，用于清理摘要文本做长度判断。
+    谁会调用：article_page_needs_content 在清理摘要时调用。
+    直接调用：
+    - re.sub(...)：删除标签。
+    - html.unescape(...)：反转义实体。
+    输入与结果：输入含 HTML 的字符串；返回纯文本。
+    副作用：无。
+    """
     return re.sub(r"<[^>]+>", " ", html.unescape(value or ""))
 
 
 def _compact_text(value: str) -> str:
+    """把任意空白（含换行/多空格）压缩成单空格并去掉首尾空白。
+
+    功能：统一文本空白，便于长度比较与展示。
+    谁会调用：article_page_needs_content、extract_article_fields、_extract_main_text、_strip_markup 等多处调用。
+    直接调用：无（仅字符串处理）。
+    输入与结果：输入字符串；返回压缩后的文本。
+    副作用：无。
+    """
     return " ".join(str(value or "").split())
 
 
@@ -344,6 +467,14 @@ def _emit_progress(
     event: str,
     **payload: Any,
 ) -> None:
+    """把进度事件透传给外部回调（无回调则跳过）。
+
+    功能：在文章补抓流程各阶段统一上报事件名与负载，供上层写日志/推送。
+    谁会调用：enrich_article_pages、fetch_article_page_content 在关键节点调用。
+    直接调用：无（仅调用传入的 callback）。
+    输入与结果：输入回调、事件名与任意负载；无返回值。
+    副作用：通过回调产生进度输出（无自身副作用）。
+    """
     if callback is None:
         return
     callback(event, payload)

@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from app.enums import Importance, InfoType, SourceType
 from app.models import Base, Source, Tag, TagAlias
 from app.repository import Repository
-from app.schemas import EnrichedFields, NormalizedItem, RawItem
+from app.schemas import EnrichedFields, NormalizedItem
 
 
 @pytest.fixture
@@ -110,79 +110,3 @@ def test_duplicate_canonical_url_merges_source_not_duplicate(session):
     merged = repo.merge_source_link("https://x/a", source_id=1, url="https://mirror/a")
     assert repo.count_items() == before
     assert merged is True
-
-
-def test_save_agent_enriched_uses_agent_sub_tags(session):
-    repo = Repository(session)
-    item = repo.save_agent_enriched(
-        RawItem(
-            source_id=1,
-            title="Agent item",
-            url="https://x/agent",
-            raw_content="summary",
-            extra={
-                "agent_item": True,
-                "main_category": "OS性能发展",
-                "importance": "中",
-                "info_type": "更新",
-                "key_points": ["__type:article", "[内核] 调度器改进"],
-                "sub_tags": ["Linux Kernel", "调度器"],
-            },
-        )
-    )
-
-    assert {tag.name for tag in item.tags} == {
-        "Linux Kernel",
-        "调度器",
-        "OS性能发展",
-    }
-
-
-def test_save_agent_enriched_falls_back_to_key_point_prefixes(session):
-    repo = Repository(session)
-    item = repo.save_agent_enriched(
-        RawItem(
-            source_id=1,
-            title="Agent item",
-            url="https://x/agent-fallback",
-            raw_content="summary",
-            extra={
-                "agent_item": True,
-                "main_category": "OS性能发展",
-                "importance": "中",
-                "info_type": "更新",
-                "key_points": ["__type:article", "[内核] 调度器改进"],
-            },
-        )
-    )
-
-    assert {tag.name for tag in item.tags} == {"Linux Kernel", "OS性能发展"}
-
-
-def test_save_agent_enriched_skips_merge_suggestion_with_null_child_tag_id(session):
-    """LLM 偶尔产出 child_tag_id=None 的 merge_suggestion；这种无效建议不应让整条 item 入库失败。"""
-    repo = Repository(session)
-    item = repo.save_agent_enriched(
-        RawItem(
-            source_id=1,
-            title="Agent item null merge",
-            url="https://x/agent-null-merge",
-            raw_content="summary",
-            extra={
-                "agent_item": True,
-                "main_category": "OS性能发展",
-                "importance": "中",
-                "info_type": "更新",
-                "key_points": ["__type:article"],
-                "sub_tags": ["Linux Kernel"],
-                "merge_suggestions": [
-                    {"child_tag_id": None, "parent_tag_name": "内核", "reason": "bad"},
-                    {"child_tag_id": "not-an-int", "parent_tag_name": "内核", "reason": "bad2"},
-                ],
-            },
-        )
-    )
-
-    # item 仍成功入库（没被坏 suggestion 打爆）
-    assert item.title == "Agent item null merge"
-    assert {tag.name for tag in item.tags} == {"Linux Kernel", "OS性能发展"}

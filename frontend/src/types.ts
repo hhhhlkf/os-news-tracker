@@ -7,7 +7,11 @@ export interface ItemSummary {
   importance: string | null;
   published_at: string | null;
   fetched_at: string | null;
-  url: string;
+  url: string | null;
+  item_kind?: "news" | "discussion";
+  last_activity_at?: string | null;
+  content_revision?: number;
+  heat_score?: number | null;
   why_it_matters?: string | null;
   os_insight?: string | null;
 }
@@ -18,6 +22,7 @@ export interface ItemDetail extends ItemSummary {
   llm_confidence: number | null;
   sub_tags: string[];
   source_links: { source_id: number; url: string }[];
+  original_title?: string | null;
 }
 
 export interface FacetValue { value: string; count: number; }
@@ -260,7 +265,7 @@ export interface DiscoveryNodeTraceEntry {
 export interface DiscoveryRun {
   id: number;
   site_url: string;
-  status: "running" | "completed" | "failed" | "cancelled";
+  status: "queued" | "running" | "repairing" | "interrupted" | "completed" | "failed" | "cancelled";
   resulting_method_id: number | null;
   llm_token_usage: number;
   node_trace: DiscoveryNodeTraceEntry[];
@@ -269,6 +274,29 @@ export interface DiscoveryRun {
   started_at: string | null;
   ended_at: string | null;
   error_message: string | null;
+  trigger_type?: string;
+  phase?: string | null;
+  round?: number;
+  queue_position?: number | null;
+  runtime_version?: string | null;
+  repair_method_id?: number | null;
+  source_kind?: "website" | "wechat" | string;
+  review_status?: "pending" | "approved" | "rejected" | null;
+  elapsed_seconds?: number;
+  remaining_seconds?: number;
+}
+
+export interface DiscoveryRunEvent {
+  id: number;
+  sequence: number;
+  run_id: number;
+  event_type: string;
+  phase: string | null;
+  round: number | null;
+  level: "info" | "warning" | "error" | string;
+  summary: string;
+  payload: Record<string, unknown> | null;
+  created_at: string | null;
 }
 
 export interface DiscoveryRunSummary {
@@ -313,6 +341,14 @@ export interface CrawlMethod {
 
 export interface CrawlMethodDetail extends CrawlMethod {
   dsl_recipe: Record<string, unknown>;
+  execution_steps?: CrawlExecutionStep[];
+}
+
+export interface CrawlExecutionStep {
+  icon: string;
+  title: string;
+  detail?: string;
+  tags?: string[];
 }
 
 export interface DiscoveryFetchResult {

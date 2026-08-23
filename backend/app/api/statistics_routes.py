@@ -129,16 +129,31 @@ _SOURCE_NAME_PREFIXES = (
 )
 
 
+def _strip_source_name_prefix(value: str) -> str:
+    for prefix in _SOURCE_NAME_PREFIXES:
+        if value.startswith(prefix):
+            short = value[len(prefix) :].strip()
+            return short or value
+    return value
+
+
 def _display_method_label(source_name: str | None, domain: str | None, method_id: int) -> str:
-    """Use the human name after prefixes like 网站：/公众号：; fall back to domain."""
+    """Human label for chart legend/segments.
+
+    Website prefixes are stripped for brevity. WeChat search vs account-history must
+    keep distinct prefixes — otherwise ``微信搜索：X`` and ``公众号：X`` both collapse
+    to ``X`` and appear twice in the same legend.
+    """
     raw = (source_name or domain or "").strip()
     if not raw:
         return f"方式 {method_id}"
-    for prefix in _SOURCE_NAME_PREFIXES:
-        if raw.startswith(prefix):
-            short = raw[len(prefix):].strip()
-            return short or raw
-    return raw
+    short = _strip_source_name_prefix(raw)
+    domain_text = (domain or "").strip()
+    if domain_text.startswith("wechat_search_"):
+        return f"{WECHAT_SEARCH_NAME_PREFIX}{short}"
+    if domain_text.startswith("wechat_mp_"):
+        return f"{WECHAT_HISTORY_NAME_PREFIX}{short}"
+    return short
 
 
 def _method_labels(db: Session, method_ids: set[int]) -> dict[int, str]:
@@ -317,12 +332,21 @@ def token_usage_query_runs(
     }
 
 
-def _avg_tokens_per_item(total_tokens: int, item_count: int) -> tuple[float, float]:
+def _avg_tokens_per_item(
+    total_tokens: int, item_count: int, *, fallback_count: int = 0
+) -> tuple[float, float]:
     """Average tokens per discovered item.
 
-    Zero items with positive spend uses divisor 0.2 (never divide by zero).
+    If discovered_count is 0 but the run still spent tokens (interrupted ingest),
+    fill the divisor with the LLM event count. 0.2 is only used when neither
+    count is available.
     """
-    divisor = 0.2 if item_count <= 0 else float(item_count)
+    if item_count > 0:
+        divisor = float(item_count)
+    elif fallback_count > 0:
+        divisor = float(fallback_count)
+    else:
+        divisor = 0.2
     return total_tokens / divisor, divisor
 
 
@@ -339,7 +363,7 @@ def token_usage_query_item_avg(
     """Same time grain as query-runs: one stacked bar per query, segment = per-source avg.
 
     - Denominator is ``discovered_count`` for that source within the query.
-    - If items == 0 but tokens > 0, divide by 0.2.
+    - If items == 0 but tokens > 0, fill with the LLM event count; 0.2 only if that is also 0.
     - Sources with zero token spend are omitted from the stack.
     """
     range_start, range_end = _range(start, end)
@@ -432,12 +456,14 @@ def token_usage_query_item_avg(
             if total_tokens <= 0:
                 continue
             item_count = _item_count_for_method(kind, group_id, method_id, run_events)
-            avg_tokens, divisor = _avg_tokens_per_item(total_tokens, item_count)
+            avg_tokens, divisor = _avg_tokens_per_item(
+                total_tokens, item_count, fallback_count=len(method_events)
+            )
             segments.append(
                 {
                     "method_id": method_id,
                     "label": labels.get(method_id, f"方式 {method_id}"),
-                    "item_count": item_count,
+                    "item_count": item_count if item_count > 0 else len(method_events),
                     "divisor": divisor,
                     "avg_tokens_per_item": round(avg_tokens, 2),
                     **totals,

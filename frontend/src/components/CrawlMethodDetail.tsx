@@ -1,11 +1,18 @@
 // frontend/src/components/CrawlMethodDetail.tsx
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CSSProperties } from "react";
-import { ApiError, deleteDiscoveryMethod, getDiscoveryMethod, patchDiscoveryMethod } from "../api/client";
+import { ApiError, deleteDiscoveryMethod, getDiscoveryMethod, getDiscoveryMethodSource, patchDiscoveryMethod } from "../api/client";
+import { CrawlRecipeFlow } from "./CrawlRecipeFlow";
 
 export function CrawlMethodDetail({ methodId, onClose, allowManage = false }: { methodId: number; onClose: () => void; allowManage?: boolean }) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["discovery-method", methodId], queryFn: () => getDiscoveryMethod(methodId) });
+  const isPythonConnector = q.data?.dsl_recipe.recipe_type === "python_plugin";
+  const sourceQuery = useQuery({
+    queryKey: ["discovery-method-source", methodId],
+    queryFn: () => getDiscoveryMethodSource(methodId),
+    enabled: allowManage && isPythonConnector,
+  });
   const patchMut = useMutation({
     mutationFn: (status: "active" | "disabled") => patchDiscoveryMethod(methodId, status),
     onSuccess: async () => {
@@ -49,13 +56,30 @@ export function CrawlMethodDetail({ methodId, onClose, allowManage = false }: { 
                   onClick={() => { if (confirm("删除该爬取方式？")) delMut.mutate(); }}>删除</button>
               </div>
             )}
-            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>DSL Recipe</div>
-            <pre
-              className="scrollbar-on-dark"
-              style={{ background: "#0b1220", color: "#d0d5dd", borderRadius: 8, padding: 12, fontSize: 12, overflow: "auto", fontFamily: "JetBrains Mono, monospace" }}
-            >
+            <CrawlRecipeFlow recipe={q.data.dsl_recipe} executionSteps={q.data.execution_steps} />
+            {allowManage && isPythonConnector && (
+              <details open style={{ marginBottom: 16 }}>
+                <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#344054", marginBottom: 8 }}>Python Connector 源码</summary>
+                  {sourceQuery.isLoading && <div style={infoBox}>加载并校验 crawler.py...</div>}
+                  {sourceQuery.isError && (
+                    <div style={{ ...infoBox, borderColor: "#fecdca", color: "#b42318" }}>源码校验或加载失败。</div>
+                  )}
+                  {sourceQuery.data && (
+                    <pre className="scrollbar-on-dark" style={sourceCode}>
+                      <code>{sourceQuery.data.source}</code>
+                    </pre>
+                  )}
+              </details>
+            )}
+            <details>
+              <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#344054", marginBottom: 8 }}>DSL Recipe（原始配置）</summary>
+              <pre
+                className="scrollbar-on-dark"
+                style={{ marginTop: 10, background: "#0b1220", color: "#d0d5dd", borderRadius: 8, padding: 12, fontSize: 12, overflow: "auto", fontFamily: "JetBrains Mono, monospace" }}
+              >
 {JSON.stringify(q.data.dsl_recipe, null, 2)}
-            </pre>
+              </pre>
+            </details>
           </>
         )}
       </div>
@@ -66,3 +90,4 @@ export function CrawlMethodDetail({ methodId, onClose, allowManage = false }: { 
 const btnPrimary: CSSProperties = { border: "none", borderRadius: 999, padding: "8px 16px", background: "#175cd3", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" };
 const btnDanger: CSSProperties = { border: "1px solid #fecdca", borderRadius: 999, padding: "8px 16px", background: "#fff", color: "#b42318", fontSize: 13, fontWeight: 700, cursor: "pointer" };
 const infoBox: CSSProperties = { border: "1px dashed #d0d5dd", borderRadius: 8, padding: 16, color: "#667085", fontSize: 13 };
+const sourceCode: CSSProperties = { margin: 0, maxHeight: 520, overflow: "auto", whiteSpace: "pre", background: "#0b1220", color: "#d0d5dd", borderRadius: 8, padding: 12, fontSize: 12, lineHeight: 1.55, fontFamily: "JetBrains Mono, ui-monospace, monospace" };

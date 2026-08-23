@@ -67,6 +67,14 @@ export async function runMorningCrawlNow(): Promise<MorningCrawlRunSummary> {
   return expectOk<MorningCrawlRunSummary>(r, "failed to trigger morning crawl");
 }
 
+export async function retryTodayFailedMorningCrawl(): Promise<MorningCrawlRunSummary> {
+  const r = await fetch(`${BASE}/system-morning-crawl/retry-today`, {
+    method: "POST",
+    headers: { ...authHeaders() },
+  });
+  return expectOk<MorningCrawlRunSummary>(r, "failed to retry unfinished morning crawl methods");
+}
+
 export async function stopMorningCrawl(): Promise<MorningCrawlDashboard> {
   const r = await fetch(`${BASE}/system-morning-crawl/stop`, {
     method: "POST",

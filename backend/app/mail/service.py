@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
+from urllib.parse import urljoin, urlparse
 
-from sqlalchemy import case, or_, select, update
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -17,6 +18,7 @@ from app.models import (
     Source,
     Tag,
 )
+from app.discussions.visibility import visible_item_clause
 from app.schemas import (
     MailFilterSnapshot,
     MailImmediatePreviewRequest,
@@ -27,6 +29,9 @@ from app.schemas import (
     MailImmediateSendResponse,
     MailPreviewItem,
     MailPreviewResponse,
+    MailTrendDirectionGroup,
+    MailTrendPreviewRequest,
+    MailTrendSummary,
     MailScheduleCreateRequest,
     MailScheduleResponse,
     MailScheduleUpdateRequest,
@@ -35,6 +40,9 @@ from app.schemas import (
     MailTemplateResponse,
     MailTemplateUpdateRequest,
 )
+from app.trends.service import TrendService
+from app.trends.models import TrendIdentityTemplate
+from app.trends.palette import trend_direction_sort_key
 
 
 class MailTemplateNotFoundError(Exception):
@@ -78,7 +86,9 @@ def with_send_date_suffix(subject: str, *, when: datetime | None = None) -> str:
     return f"{base}{suffix}" if base else suffix
 
 
-def _compute_next_run(*, send_time: str, frequency: str, reference: datetime) -> datetime | None:
+def _compute_next_run(
+    *, send_time: str, frequency: str, weekly_day: int | None, reference: datetime
+) -> datetime | None:
     """reference 应为北京时间墙钟值；返回的 next_run_at 同样是北京时间。"""
     try:
         hour_str, minute_str = send_time.split(":", 1)
@@ -91,12 +101,13 @@ def _compute_next_run(*, send_time: str, frequency: str, reference: datetime) ->
     if candidate <= reference:
         candidate = candidate + timedelta(days=1)
     if frequency == "weekly":
-        while candidate.weekday() != reference.weekday():
+        target_day = weekly_day if weekly_day is not None else reference.weekday()
+        while candidate.weekday() != target_day:
             candidate = candidate + timedelta(days=1)
     return candidate
 
 from .provider import MailProvider
-from .rendering import build_mail_preview_context, render_mail_html
+from .rendering import build_mail_preview_context, render_mail_html, render_trend_mail_html
 from .smtp_provider import SMTPConfig, SmtpMailProvider
 from .tof4_provider import Tof4Config, Tof4MailProvider
 
@@ -204,6 +215,38 @@ def _snapshot_notice_from_config(config: MailNoticeConfig, *, include: bool) -> 
     return _notice_payload(config.doc_text or "", config.website_url or "", include=include)
 
 
+def _website_url_for_item_links(
+    *,
+    stored_notice: dict | None,
+    apply_send_config: bool,
+    db: Session,
+) -> str:
+    """Return the site root used to turn in-mail relative links into URLs."""
+    if isinstance(stored_notice, dict):
+        return str(stored_notice.get("website_url") or "").strip()
+    if not apply_send_config:
+        return ""
+    return str(get_or_create_notice_config(db).website_url or "").strip()
+
+
+def _mail_item_source_url(*, item_url: str | None, item_id: int, website_url: str) -> str:
+    """Make an item link usable outside the site, including in email clients."""
+    candidate = (item_url or f"/?item={item_id}").strip()
+    parsed_item_url = urlparse(candidate)
+    if parsed_item_url.scheme or parsed_item_url.netloc:
+        return candidate
+
+    parsed_website_url = urlparse(website_url)
+    if parsed_website_url.scheme not in {"http", "https"} or not parsed_website_url.netloc:
+        return candidate
+
+    # Treat the configured website URL as the application root.  Stripping
+    # both boundaries prevents `//` when the setting and item path both carry
+    # a slash, while still retaining a configured deployment subpath.
+    website_root = f"{website_url.rstrip('/')}/"
+    return urljoin(website_root, candidate.lstrip("/"))
+
+
 class MailService:
     def __init__(self, db: Session, provider: MailProvider | None = None) -> None:
         self._db = db
@@ -252,11 +295,20 @@ class MailService:
     def create_template(self, payload: MailTemplateCreateRequest) -> MailTemplate:
         now = beijing_now()
         config = get_or_create_notice_config(self._db)
+        trend_identity_template_id: str | None = None
+        if payload.content_type == "trend_distribution":
+            trend_identity_template_id = payload.trend_identity_template_id
+            if not trend_identity_template_id:
+                raise ValueError("趋势分发模板必须选择身份模板")
+            if self._db.get(TrendIdentityTemplate, trend_identity_template_id) is None:
+                raise ValueError("趋势身份模板不存在")
         template = MailTemplate(
             name=payload.name.strip(),
             subject=payload.subject.strip(),
             recipients_json=list(payload.recipients),
             filter_snapshot_json=self.normalize_filter_snapshot(payload.filter_snapshot.model_dump()),
+            content_type=payload.content_type,
+            trend_identity_template_id=trend_identity_template_id,
             notice_json=_snapshot_notice_from_config(config, include=bool(config.include_on_template)),
             is_active=payload.is_active,
             created_at=now,
@@ -305,13 +357,27 @@ class MailService:
 
     def preview_template(self, template_id: int, provider: MailProviderKind | None = None) -> MailPreviewResponse:
         template = self.get_template(template_id)
+        stored_notice = template.notice_json if isinstance(template.notice_json, dict) else None
+        if template.content_type == "trend_distribution":
+            if not template.trend_identity_template_id:
+                raise ValueError("趋势分发模板缺少身份模板")
+            return self.preview_trend_distribution(
+                MailTrendPreviewRequest(
+                    template_id=template.trend_identity_template_id,
+                    subject=template.subject,
+                    recipients=list(template.recipients_json or []),
+                    provider=provider,
+                ),
+                stored_notice=stored_notice,
+                apply_send_config=False,
+            )
         snapshot = MailFilterSnapshot.model_validate(template.filter_snapshot_json or {})
         return self.preview_immediate_send(
             filter_snapshot=snapshot.model_dump(mode="json"),
             subject=template.subject,
             recipients=list(template.recipients_json or []),
             provider=provider,
-            stored_notice=template.notice_json if isinstance(template.notice_json, dict) else None,
+            stored_notice=stored_notice,
             apply_send_config=False,
         )
 
@@ -319,15 +385,7 @@ class MailService:
         self, template_id: int, provider: MailProviderKind | None = None
     ) -> MailImmediateSendResponse:
         template = self.get_template(template_id)
-        snapshot = MailFilterSnapshot.model_validate(template.filter_snapshot_json or {})
-        preview = self.preview_immediate_send(
-            filter_snapshot=snapshot.model_dump(mode="json"),
-            subject=template.subject,
-            recipients=list(template.recipients_json or []),
-            provider=provider,
-            stored_notice=template.notice_json if isinstance(template.notice_json, dict) else None,
-            apply_send_config=False,
-        )
+        preview = self.preview_template(template_id, provider=provider)
         delivery = self._dispatch_delivery(
             preview=preview,
             provider=provider,
@@ -404,7 +462,9 @@ class MailService:
         return values
 
     def _build_item_stmt(self, snapshot: MailFilterSnapshot):
-        stmt = select(Item)
+        stmt = select(Item).where(visible_item_clause())
+        if snapshot.item_kind:
+            stmt = stmt.where(Item.item_kind == snapshot.item_kind)
         main_categories = self._split_filter_values(snapshot.main_category)
         if main_categories:
             stmt = stmt.where(Item.main_category.in_(main_categories))
@@ -470,9 +530,13 @@ class MailService:
 
     def _fetch_items_for_snapshot(self, snapshot: MailFilterSnapshot, *, limit: int = 100) -> list[Item]:
         stmt = self._build_item_stmt(snapshot)
-        sort_col = Item.published_at if snapshot.sort_by == "published_at" else Item.fetched_at
+        sort_col = {
+            "published_at": Item.published_at,
+            "fetched_at": Item.fetched_at,
+            "last_activity_at": func.coalesce(Item.last_activity_at, Item.published_at),
+        }[snapshot.sort_by]
         time_order_clause = sort_col.desc() if snapshot.sort_dir == "desc" else sort_col.asc()
-        if snapshot.sort_by == "published_at":
+        if snapshot.sort_by in {"published_at", "last_activity_at"}:
             time_order_clause = time_order_clause.nullslast()
         importance_order_clause = case(
             (Item.importance == "高", 0),
@@ -531,7 +595,7 @@ class MailService:
             "source_quality_status": method.quality_audit_status if method is not None else None,
         }
 
-    def _build_preview_items(self, items: list[Item]) -> list[MailPreviewItem]:
+    def _build_preview_items(self, items: list[Item], *, website_url: str = "") -> list[MailPreviewItem]:
         preview_items: list[MailPreviewItem] = []
         for item in items:
             source_quality = self._source_quality_for_item(item)
@@ -539,12 +603,18 @@ class MailService:
                 MailPreviewItem(
                     # 与主界面 ItemCard 一致：优先展示中文标题 title_tldr，缺失时回退原文 title
                     title=item.title_tldr or item.title,
+                    item_kind=item.item_kind,
+                    main_category=item.main_category,
                     reason=item.why_it_matters or item.summary or item.title_tldr,
                     summary=item.summary,
                     importance=item.importance,
                     key_points=[str(point) for point in (item.key_points or [])],
                     hotspots=self._extract_hotspots(item),
-                    source_url=item.url,
+                    source_url=_mail_item_source_url(
+                        item_url=item.url,
+                        item_id=item.id,
+                        website_url=website_url,
+                    ),
                     published_at=item.published_at.isoformat() if item.published_at else None,
                     **source_quality,
                 )
@@ -563,7 +633,12 @@ class MailService:
     ) -> MailPreviewResponse:
         normalized = MailFilterSnapshot.model_validate(filter_snapshot or {})
         items = self._fetch_items_for_snapshot(normalized)
-        preview_items = self._build_preview_items(items)
+        website_url = _website_url_for_item_links(
+            stored_notice=stored_notice,
+            apply_send_config=apply_send_config,
+            db=self._db,
+        )
+        preview_items = self._build_preview_items(items, website_url=website_url)
         dated_subject = with_send_date_suffix(subject)
         notice = self._resolve_notice(stored=stored_notice, apply_send_config=apply_send_config)
         notice_dict = notice.model_dump() if notice is not None else None
@@ -583,6 +658,72 @@ class MailService:
             items=preview_items,
             rendered_html=rendered_html,
             notice=notice,
+        )
+
+    def preview_trend_distribution(
+        self,
+        payload: MailTrendPreviewRequest,
+        *,
+        stored_notice: dict | None = None,
+        apply_send_config: bool = True,
+    ) -> MailPreviewResponse:
+        """Build one mail from the same per-direction result sets as the carousel."""
+
+        trend_service = TrendService(self._db)
+        all_results = trend_service.get_trend_carousel(template_id=payload.template_id)
+        website_url = _website_url_for_item_links(
+            stored_notice=stored_notice,
+            apply_send_config=apply_send_config,
+            db=self._db,
+        )
+        groups: list[MailTrendDirectionGroup] = []
+        flattened_sources: list[MailPreviewItem] = []
+        for direction in sorted(all_results.directions, key=trend_direction_sort_key):
+            direction_results = trend_service.get_trend_carousel(
+                template_id=payload.template_id,
+                direction=direction,
+            )
+            trends: list[MailTrendSummary] = []
+            for result in direction_results.items:
+                source_items = list(
+                    self._db.scalars(select(Item).where(Item.id.in_(result.item_ids)))
+                )
+                source_by_id = {item.id: item for item in source_items}
+                sources = self._build_preview_items(
+                    [source_by_id[item_id] for item_id in result.item_ids if item_id in source_by_id],
+                    website_url=website_url,
+                )
+                flattened_sources.extend(sources)
+                trends.append(
+                    MailTrendSummary(
+                        result_id=result.result_id,
+                        title=result.topic,
+                        summary=result.trend_summary,
+                        category=result.category,
+                        category_label=result.category_label,
+                        sources=sources,
+                    )
+                )
+            if trends:
+                groups.append(MailTrendDirectionGroup(direction=direction, trends=trends))
+        dated_subject = with_send_date_suffix(payload.subject)
+        notice = self._resolve_notice(stored=stored_notice, apply_send_config=apply_send_config)
+        notice_dict = notice.model_dump() if notice is not None else None
+        rendered_html = render_trend_mail_html(
+            subject=dated_subject,
+            trend_groups=[group.model_dump(mode="json") for group in groups],
+            notice=notice_dict,
+        )
+        return MailPreviewResponse(
+            subject=dated_subject,
+            filter_snapshot=MailFilterSnapshot(),
+            recipients=payload.recipients,
+            provider=resolve_mail_provider_name(payload.provider),
+            item_count=sum(len(group.trends) for group in groups),
+            items=flattened_sources,
+            rendered_html=rendered_html,
+            notice=notice,
+            trend_groups=groups,
         )
 
     def _dispatch_delivery(
@@ -610,7 +751,7 @@ class MailService:
 
         if preview.item_count <= 0:
             delivery.status = "查询空"
-            delivery.error_message = "当前筛选没有匹配到新闻，未发送邮件。"
+            delivery.error_message = "当前筛选没有匹配到条目，未发送邮件。"
             delivery.finished_at = beijing_now()
             return delivery
 
@@ -656,6 +797,25 @@ class MailService:
             error_message=delivery.error_message,
         )
 
+    def send_trend_distribution(self, payload: MailTrendPreviewRequest) -> MailImmediateSendResponse:
+        preview = self.preview_trend_distribution(payload)
+        delivery = self._dispatch_delivery(
+            preview=preview,
+            provider=payload.provider,
+            trigger_type="trend_distribution",
+            template_id=None,
+            schedule_id=None,
+        )
+        self._db.commit()
+        self._db.refresh(delivery)
+        return MailImmediateSendResponse(
+            delivery_id=delivery.id,
+            provider=preview.provider,
+            status=delivery.status,
+            item_count=delivery.item_count,
+            error_message=delivery.error_message,
+        )
+
     # --- Schedules ---
 
     def list_schedules(self) -> list[MailSchedule]:
@@ -683,9 +843,13 @@ class MailService:
     def create_schedule(self, payload: MailScheduleCreateRequest) -> MailSchedule:
         now = beijing_now()
         notice_json: dict | None = None
+        content_type = "news"
+        trend_identity_template_id: str | None = None
         if payload.template_id is not None:
             template = self.get_template(payload.template_id)
             notice_json = template.notice_json if isinstance(template.notice_json, dict) else None
+            content_type = template.content_type
+            trend_identity_template_id = template.trend_identity_template_id
         else:
             config = get_or_create_notice_config(self._db)
             notice_json = _snapshot_notice_from_config(config, include=bool(config.include_on_send))
@@ -695,11 +859,19 @@ class MailService:
             subject=payload.subject.strip() or "未命名预定",
             recipients_json=list(payload.recipients),
             filter_snapshot_json=self.normalize_filter_snapshot(payload.filter_snapshot.model_dump()),
+            content_type=content_type,
+            trend_identity_template_id=trend_identity_template_id,
             notice_json=notice_json,
             frequency=payload.frequency,
+            weekly_day=payload.weekly_day if payload.frequency == "weekly" else None,
             send_time=payload.send_time,
             enabled=payload.enabled,
-            next_run_at=_compute_next_run(send_time=payload.send_time, frequency=payload.frequency, reference=now),
+            next_run_at=_compute_next_run(
+                send_time=payload.send_time,
+                frequency=payload.frequency,
+                weekly_day=payload.weekly_day,
+                reference=now,
+            ),
             last_sent_marker_date=now.date().isoformat() if payload.enabled else None,
             last_result_status="跳过" if payload.enabled else None,
             last_result_count=0 if payload.enabled else None,
@@ -724,13 +896,22 @@ class MailService:
             schedule.filter_snapshot_json = self.normalize_filter_snapshot(payload.filter_snapshot.model_dump())
         if payload.frequency is not None:
             schedule.frequency = payload.frequency
+        if payload.weekly_day is not None:
+            schedule.weekly_day = payload.weekly_day
+        if schedule.frequency == "weekly" and schedule.weekly_day is None:
+            raise ValueError("每周预定必须选择发送星期")
+        if schedule.frequency != "weekly":
+            schedule.weekly_day = None
         if payload.send_time is not None:
             schedule.send_time = payload.send_time
         if payload.enabled is not None:
             schedule.enabled = payload.enabled
         schedule.updated_at = beijing_now()
         schedule.next_run_at = _compute_next_run(
-            send_time=schedule.send_time, frequency=schedule.frequency, reference=beijing_now()
+            send_time=schedule.send_time,
+            frequency=schedule.frequency,
+            weekly_day=schedule.weekly_day,
+            reference=beijing_now(),
         )
         self._db.commit()
         self._db.refresh(schedule)
@@ -742,7 +923,10 @@ class MailService:
         schedule.updated_at = beijing_now()
         if enabled:
             schedule.next_run_at = _compute_next_run(
-                send_time=schedule.send_time, frequency=schedule.frequency, reference=beijing_now()
+                send_time=schedule.send_time,
+                frequency=schedule.frequency,
+                weekly_day=schedule.weekly_day,
+                reference=beijing_now(),
             )
         self._db.commit()
         self._db.refresh(schedule)
@@ -758,16 +942,30 @@ class MailService:
         self._db.commit()
 
     def run_schedule(self, schedule: MailSchedule, *, trigger_type: str, mark_today: bool) -> MailDelivery:
-        snapshot = MailFilterSnapshot.model_validate(schedule.filter_snapshot_json or {})
         stored_notice = schedule.notice_json if isinstance(schedule.notice_json, dict) else None
-        preview = self.preview_immediate_send(
-            filter_snapshot=snapshot.model_dump(mode="json"),
-            subject=schedule.subject,
-            recipients=list(schedule.recipients_json or []),
-            provider=None,
-            stored_notice=stored_notice,
-            apply_send_config=stored_notice is None,
-        )
+        if schedule.content_type == "trend_distribution":
+            if not schedule.trend_identity_template_id:
+                raise ValueError("趋势分发预定缺少身份模板")
+            preview = self.preview_trend_distribution(
+                MailTrendPreviewRequest(
+                    template_id=schedule.trend_identity_template_id,
+                    subject=schedule.subject,
+                    recipients=list(schedule.recipients_json or []),
+                    provider=None,
+                ),
+                stored_notice=stored_notice,
+                apply_send_config=stored_notice is None,
+            )
+        else:
+            snapshot = MailFilterSnapshot.model_validate(schedule.filter_snapshot_json or {})
+            preview = self.preview_immediate_send(
+                filter_snapshot=snapshot.model_dump(mode="json"),
+                subject=schedule.subject,
+                recipients=list(schedule.recipients_json or []),
+                provider=None,
+                stored_notice=stored_notice,
+                apply_send_config=stored_notice is None,
+            )
         delivery = self._dispatch_delivery(
             preview=preview,
             provider=None,
@@ -787,7 +985,10 @@ class MailService:
             schedule.next_run_at = now + EMPTY_SCHEDULE_RETRY_DELAY
         else:
             schedule.next_run_at = _compute_next_run(
-                send_time=schedule.send_time, frequency=schedule.frequency, reference=now
+                send_time=schedule.send_time,
+                frequency=schedule.frequency,
+                weekly_day=schedule.weekly_day,
+                reference=now,
             )
         self._db.commit()
         self._db.refresh(delivery)
@@ -823,6 +1024,8 @@ def template_to_response(template: MailTemplate) -> MailTemplateResponse:
         subject=template.subject,
         recipients=list(template.recipients_json or []),
         filter_snapshot=MailFilterSnapshot.model_validate(template.filter_snapshot_json or {}),
+        content_type="trend_distribution" if template.content_type == "trend_distribution" else "news",
+        trend_identity_template_id=template.trend_identity_template_id,
         notice=_active_notice_block(template.notice_json if isinstance(template.notice_json, dict) else None),
         is_active=template.is_active,
         last_send_at=template.last_send_at,
@@ -842,7 +1045,10 @@ def schedule_to_response(schedule: MailSchedule) -> MailScheduleResponse:
         subject=schedule.subject,
         recipients=list(schedule.recipients_json or []),
         filter_snapshot=MailFilterSnapshot.model_validate(schedule.filter_snapshot_json or {}),
+        content_type="trend_distribution" if schedule.content_type == "trend_distribution" else "news",
+        trend_identity_template_id=schedule.trend_identity_template_id,
         frequency=schedule.frequency if schedule.frequency in ("daily", "weekly") else "daily",
+        weekly_day=schedule.weekly_day,
         send_time=schedule.send_time,
         enabled=schedule.enabled,
         last_sent_at=schedule.last_sent_at,

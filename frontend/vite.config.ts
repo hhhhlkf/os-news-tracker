@@ -6,6 +6,7 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     port: 5173,
+    allowedHosts: ["news.tencentos.woa.com"],
     watch: {
       usePolling: true,
     },
@@ -35,6 +36,10 @@ export default defineConfig({
         changeOrigin: true,
       },
       "/discovery": {
+        target: "http://backend:8000",
+        changeOrigin: true,
+      },
+      "/discussions": {
         target: "http://backend:8000",
         changeOrigin: true,
       },

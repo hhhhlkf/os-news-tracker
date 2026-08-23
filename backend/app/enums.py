@@ -6,13 +6,13 @@ class SourceType(StrEnum):
     API = "api"
     PAGE_MONITOR = "page_monitor"
     SEARCH = "search"
-    AGENT_CRAWL = "agent_crawl"
-    DISCOVERY = "discovery"   # LangGraph discovery agent（和 agent_crawl 并存，后者保留给 Handoff Chain）
+    DISCOVERY = "discovery"
 
 
 class Stream(StrEnum):
     NEWS = "news"
     STRUCTURED = "structured"
+    DISCUSSION = "discussion"
 
 
 class ItemStatus(StrEnum):
@@ -20,7 +20,6 @@ class ItemStatus(StrEnum):
     ENRICHED = "enriched"
     ENRICH_FAILED = "enrich_failed"
     NEEDS_REVIEW = "needs_review"
-    AGENT_ENRICHED = "agent_enriched"
 
 
 class InfoType(StrEnum):

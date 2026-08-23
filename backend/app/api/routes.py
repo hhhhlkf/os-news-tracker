@@ -6,13 +6,14 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.models import Item, ItemSource, ItemTag, Tag, TagAlias
+from app.discussions.visibility import visible_item_clause
+from app.models import DiscussionGroup, DiscussionGroupThread, DiscussionMessage, Item, ItemSource, ItemTag, Tag, TagAlias
 from app.processing.reason import generate_os_insight, generate_recommendation_reason
-from app.run_logs import list_run_logs
+from app.run_logs import get_run_log_epoch, list_run_logs
 
 router = APIRouter()
 
-SortBy = Literal["published_at", "fetched_at"]
+SortBy = Literal["published_at", "fetched_at", "last_activity_at"]
 SortDir = Literal["desc", "asc"]
 BoundaryMode = Literal["none", "absolute", "relative"]
 RelativeRange = Literal["24h", "7d", "30d"]
@@ -28,6 +29,10 @@ def _item_summary(item: Item) -> dict:
         "importance": item.importance,
         "published_at": item.published_at.isoformat() if item.published_at else None,
         "fetched_at": item.fetched_at.isoformat() if item.fetched_at else None,
+        "item_kind": item.item_kind,
+        "last_activity_at": item.last_activity_at.isoformat() if item.last_activity_at else None,
+        "content_revision": item.content_revision,
+        "heat_score": item.heat_score,
         "url": item.url,
         "why_it_matters": item.why_it_matters,
         "os_insight": item.os_insight,
@@ -152,6 +157,7 @@ def list_items(
     main_category: str | None = None,
     info_type: str | None = None,
     importance: str | None = None,
+    item_kind: Literal["news", "discussion"] | None = None,
     sub_tag: str | None = None,
     source_id: str | None = None,
     item_ids: str | None = None,
@@ -173,7 +179,7 @@ def list_items(
     fetched_before_value: RelativeRange | None = None,
     fetched_before: str | None = None,
 ):
-    stmt = select(Item)
+    stmt = select(Item).where(visible_item_clause())
     # Exact primary-key filter used by the trend carousel; titles never take part.
     exact_item_ids = _parse_item_ids(item_ids)
     if exact_item_ids:
@@ -186,6 +192,8 @@ def list_items(
     importances = _split_filter_values(importance)
     if importances:
         stmt = stmt.where(Item.importance.in_(importances))
+    if item_kind:
+        stmt = stmt.where(Item.item_kind == item_kind)
     sub_tags = _split_filter_values(sub_tag)
     if sub_tags:
         tag_ids = _tag_ids_for_root_names(db, sub_tags)
@@ -261,16 +269,26 @@ def list_items(
     if fetched_before_boundary is not None:
         stmt = stmt.where(Item.fetched_at < fetched_before_boundary)
 
-    sort_col = Item.published_at if sort_by == "published_at" else Item.fetched_at
+    sort_col = {
+        "published_at": Item.published_at,
+        "fetched_at": Item.fetched_at,
+        "last_activity_at": func.coalesce(Item.last_activity_at, Item.published_at),
+    }[sort_by]
     if sort_dir == "desc":
         order_clause = sort_col.desc()
     else:
         order_clause = sort_col.asc()
-    if sort_by == "published_at":
+    if sort_by in {"published_at", "last_activity_at"}:
         order_clause = order_clause.nullslast()
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    rows = db.scalars(stmt.order_by(order_clause).limit(limit).offset(offset)).all()
+    # Pagination must have a total order.  Many items share a publication time
+    # (notably arXiv batch entries), and PostgreSQL may otherwise choose a
+    # different order for each OFFSET query, letting one item appear on two
+    # adjacent pages.  Keep the tie-break direction aligned with the requested
+    # primary sort so the list remains intuitive as well as stable.
+    tie_breaker = Item.id.desc() if sort_dir == "desc" else Item.id.asc()
+    rows = db.scalars(stmt.order_by(order_clause, tie_breaker).limit(limit).offset(offset)).all()
     return {"total": total, "items": [_item_summary(item) for item in rows]}
 
 
@@ -281,7 +299,7 @@ _IMPORTANCE_ORDER = {"高": 0, "中": 1, "低": 2}
 @router.get("/facets")
 def facets(db: Session = Depends(get_db)):
     def _counts(column):
-        rows = db.execute(select(column, func.count()).group_by(column)).all()
+        rows = db.execute(select(column, func.count()).where(visible_item_clause()).group_by(column)).all()
         return [{"value": value, "count": count} for value, count in rows if value is not None]
 
     parent_by_child = _approved_parent_map(db)
@@ -289,6 +307,8 @@ def facets(db: Session = Depends(get_db)):
     raw_sub_tag_rows = db.execute(
         select(Tag.id, Tag.name, func.count(func.distinct(ItemTag.item_id)))
         .join(ItemTag, Tag.id == ItemTag.tag_id)
+        .join(Item, Item.id == ItemTag.item_id)
+        .where(visible_item_clause())
         .where(Tag.kind == "sub_tag")
         .group_by(Tag.id, Tag.name)
         .order_by(func.count(func.distinct(ItemTag.item_id)).desc())
@@ -320,6 +340,8 @@ def item_detail(item_id: int, db: Session = Depends(get_db)):
     item = db.get(Item, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="not found")
+    if item.merged_into_item_id:
+        item = db.get(Item, item.merged_into_item_id) or item
     sources = db.scalars(
         select(ItemSource)
         .where(ItemSource.item_id == item_id)
@@ -328,6 +350,8 @@ def item_detail(item_id: int, db: Session = Depends(get_db)):
     seen: set[tuple[int, str]] = set()
     unique_links: list[dict] = []
     for src in sources:
+        if item.item_kind == "discussion" and src.url.startswith("discussion://"):
+            continue
         key = (src.source_id, src.url)
         if key not in seen:
             seen.add(key)
@@ -341,6 +365,16 @@ def item_detail(item_id: int, db: Session = Depends(get_db)):
             if tag.kind == "sub_tag"
         )
     )
+    original_title = None
+    if item.item_kind == "discussion":
+        original_title = db.scalar(
+            select(DiscussionMessage.subject)
+            .join(DiscussionGroupThread, DiscussionGroupThread.thread_id == DiscussionMessage.thread_id)
+            .join(DiscussionGroup, DiscussionGroup.id == DiscussionGroupThread.group_id)
+            .where(DiscussionGroup.item_id == item.id)
+            .order_by(DiscussionMessage.sent_at, DiscussionMessage.id)
+            .limit(1)
+        )
     return {
         **_item_summary(item),
         "summary": item.summary,
@@ -350,6 +384,7 @@ def item_detail(item_id: int, db: Session = Depends(get_db)):
         "sub_tags": sub_tags,
         "entities": [{"type": entity.type, "name": entity.name} for entity in item.entities],
         "source_links": unique_links,
+        "original_title": original_title,
     }
 
 
@@ -395,4 +430,4 @@ def get_run_logs(
     after_id: int | None = None,
     limit: int = Query(200, le=300),
 ):
-    return {"logs": list_run_logs(after_id=after_id, limit=limit)}
+    return {"epoch": get_run_log_epoch(), "logs": list_run_logs(after_id=after_id, limit=limit)}

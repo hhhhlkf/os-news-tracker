@@ -43,6 +43,7 @@ class EnrichedFields(BaseModel):
     confidence: float = 0.0
     should_store: bool = True
     reject_reason: str | None = None
+    should_fetch_full_text: bool = False
 
 
 
@@ -87,7 +88,7 @@ class ManualNewsRunRequest(BaseModel):
         return self
 
 
-class AgentCrawlRunRequest(BaseModel):
+class TimeWindowRequest(BaseModel):
     time_mode: TimeMode = "relative"
     relative_range: RelativeRange | None = "7d"
     start_at: datetime | None = None
@@ -112,7 +113,7 @@ class AgentCrawlRunRequest(BaseModel):
 
 
 MailRelativeRange = Literal["24h", "7d", "30d"]
-MailSortBy = Literal["published_at", "fetched_at"]
+MailSortBy = Literal["published_at", "fetched_at", "last_activity_at"]
 MailSortDir = Literal["desc", "asc"]
 MailBoundaryMode = Literal["none", "absolute", "relative"]
 MailProviderKind = Literal["tof4", "smtp"]
@@ -125,6 +126,7 @@ class MailFilterSnapshot(BaseModel):
     importance: str | None = None
     sub_tag: str | None = None
     source_id: str | None = None
+    item_kind: Literal["news", "discussion"] | None = None
     sort_by: MailSortBy = "published_at"
     sort_dir: MailSortDir = "desc"
     published_after_mode: MailBoundaryMode = "none"
@@ -160,11 +162,16 @@ class MailNoticeConfigUpdateRequest(BaseModel):
     include_on_template: bool | None = None
 
 
+MailContentType = Literal["news", "trend_distribution"]
+
+
 class MailTemplateCreateRequest(BaseModel):
     name: str
     subject: str
     recipients: list[str] = Field(default_factory=list)
     filter_snapshot: MailFilterSnapshot = Field(default_factory=MailFilterSnapshot)
+    content_type: MailContentType = "news"
+    trend_identity_template_id: str | None = Field(default=None, max_length=36)
     is_active: bool = True
 
     @field_validator("recipients", mode="before")
@@ -179,6 +186,8 @@ class MailTemplateResponse(BaseModel):
     subject: str
     recipients: list[str] = Field(default_factory=list)
     filter_snapshot: MailFilterSnapshot
+    content_type: MailContentType = "news"
+    trend_identity_template_id: str | None = None
     notice: MailNoticeBlock | None = None
     is_active: bool
     last_send_at: datetime | None = None
@@ -221,6 +230,8 @@ class MailImmediatePreviewRequest(BaseModel):
 
 class MailPreviewItem(BaseModel):
     title: str
+    item_kind: Literal["news", "discussion"] = "news"
+    main_category: str | None = None
     reason: str | None = None
     summary: str | None = None
     importance: str | None = None
@@ -234,6 +245,20 @@ class MailPreviewItem(BaseModel):
     source_quality_status: str | None = None
 
 
+class MailTrendSummary(BaseModel):
+    result_id: str
+    title: str
+    summary: str
+    category: str
+    category_label: str
+    sources: list[MailPreviewItem] = Field(default_factory=list)
+
+
+class MailTrendDirectionGroup(BaseModel):
+    direction: str
+    trends: list[MailTrendSummary] = Field(default_factory=list)
+
+
 class MailPreviewResponse(BaseModel):
     subject: str
     filter_snapshot: MailFilterSnapshot
@@ -243,6 +268,19 @@ class MailPreviewResponse(BaseModel):
     items: list[MailPreviewItem] = Field(default_factory=list)
     rendered_html: str
     notice: MailNoticeBlock | None = None
+    trend_groups: list[MailTrendDirectionGroup] = Field(default_factory=list)
+
+
+class MailTrendPreviewRequest(BaseModel):
+    template_id: str = Field(min_length=1, max_length=36)
+    subject: str
+    recipients: list[str] = Field(default_factory=list)
+    provider: MailProviderKind | None = None
+
+    @field_validator("recipients", mode="before")
+    @classmethod
+    def _validate_recipients(cls, value: object) -> list[str]:
+        return normalize_recipients(value if isinstance(value, list) else [])
 
 
 class MailImmediateSendResponse(BaseModel):
@@ -262,6 +300,7 @@ class MailScheduleCreateRequest(BaseModel):
     recipients: list[str] = Field(default_factory=list)
     filter_snapshot: MailFilterSnapshot = Field(default_factory=MailFilterSnapshot)
     frequency: MailFrequency = "daily"
+    weekly_day: int | None = Field(default=None, ge=0, le=6)
     send_time: str = "09:00"
     enabled: bool = True
     template_id: int | None = None
@@ -271,6 +310,12 @@ class MailScheduleCreateRequest(BaseModel):
     def _validate_recipients(cls, value: object) -> list[str]:
         return normalize_recipients(value if isinstance(value, list) else [])
 
+    @model_validator(mode="after")
+    def _validate_weekly_day(self) -> "MailScheduleCreateRequest":
+        if self.frequency == "weekly" and self.weekly_day is None:
+            raise ValueError("每周预定必须选择发送星期")
+        return self
+
 
 class MailScheduleUpdateRequest(BaseModel):
     name: str | None = None
@@ -278,6 +323,7 @@ class MailScheduleUpdateRequest(BaseModel):
     recipients: list[str] | None = None
     filter_snapshot: MailFilterSnapshot | None = None
     frequency: MailFrequency | None = None
+    weekly_day: int | None = Field(default=None, ge=0, le=6)
     send_time: str | None = None
     enabled: bool | None = None
 
@@ -288,6 +334,12 @@ class MailScheduleUpdateRequest(BaseModel):
             return None
         return normalize_recipients(value if isinstance(value, list) else [])
 
+    @model_validator(mode="after")
+    def _validate_weekly_day(self) -> "MailScheduleUpdateRequest":
+        if self.frequency == "weekly" and self.weekly_day is None:
+            raise ValueError("切换为每周预定时必须选择发送星期")
+        return self
+
 
 class MailScheduleResponse(BaseModel):
     id: int
@@ -297,7 +349,10 @@ class MailScheduleResponse(BaseModel):
     subject: str
     recipients: list[str] = Field(default_factory=list)
     filter_snapshot: MailFilterSnapshot
+    content_type: MailContentType = "news"
+    trend_identity_template_id: str | None = None
     frequency: MailFrequency
+    weekly_day: int | None = None
     send_time: str
     enabled: bool
     last_sent_at: datetime | None = None
@@ -323,7 +378,7 @@ class MailDeliveryLog(BaseModel):
 
 # --- System morning crawl ---
 
-MorningCrawlFrequency = Literal["daily", "weekdays", "weekly"]
+MorningCrawlFrequency = Literal["hourly", "daily", "weekdays", "weekly"]
 MorningCrawlLookback = Literal["24h", "7d", "30d", "all"]
 
 
@@ -331,6 +386,7 @@ class MorningCrawlConfigResponse(BaseModel):
     enabled: bool
     run_time: str
     frequency: MorningCrawlFrequency
+    interval_hours: int
     lookback_window: MorningCrawlLookback
     patrol_interval_hours: int
     last_run_at: datetime | None = None
@@ -343,6 +399,7 @@ class MorningCrawlConfigUpdateRequest(BaseModel):
     enabled: bool | None = None
     run_time: str | None = None
     frequency: MorningCrawlFrequency | None = None
+    interval_hours: int | None = Field(default=None, ge=1, le=24)
     lookback_window: MorningCrawlLookback | None = None
     patrol_interval_hours: int | None = Field(default=None, ge=1, le=24)
 
@@ -364,6 +421,7 @@ class MorningCrawlRunSummary(BaseModel):
 class MorningCrawlDashboardResponse(BaseModel):
     config: MorningCrawlConfigResponse
     active_method_count: int
+    retryable_method_count: int = 0
     today_status: str          # not_run | running | success | partial | failed
     today_run: MorningCrawlRunSummary | None = None
     recent_runs: list[MorningCrawlRunSummary] = Field(default_factory=list)

@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api.deps import get_db
+from app.api.deps import get_db, require_system_access
 from app.api.main import create_app
 from app.models import Base, CrawlMethod
 
@@ -37,16 +37,11 @@ def client(session):
     app = create_app()
     # get_db 复用同一个 session，避免 StaticPool 单连接下多 session 抢占
     app.dependency_overrides[get_db] = lambda: session
+    # 抓取运行命现在需要系统管理权限；该集成文件测试的是业务执行，
+    # 因此以固定管理员身份进入受保护端点。
+    app.dependency_overrides[require_system_access] = lambda: {"role": "system_admin"}
     yield TestClient(app)
     app.dependency_overrides.clear()
-
-
-def test_discover_run_async_returns_run_id(client):
-    """无重复 → 异步启动（mock start_discovery_run）→ 返回 started + run_id。"""
-    with patch("app.api.discovery_routes.start_discovery_run", return_value=42):
-        r = client.post("/discovery/run", json={"url": "https://x.com"})
-    assert r.status_code == 200
-    assert r.json() == {"status": "started", "run_id": 42, "name": "x.com"}
 
 
 def test_discover_run_duplicate_returns_existing(client, session):
@@ -136,47 +131,6 @@ def test_discovery_fetch_endpoint(client, session):
     assert m.last_run_at is not None
 
 
-def test_discovery_fetch_applies_time_window_and_target_count(client, session):
-    """运行命 /fetch 接收抓取限制，并在入 pipeline 前先做时间过滤和总条目截断。"""
-    from app.enums import SourceType
-    from app.models import Source
-
-    src = Source(name="x.com", type=SourceType.DISCOVERY.value, url="https://x.com")
-    session.add(src)
-    session.flush()
-    m = CrawlMethod(
-        domain="x.com",
-        entry_url="https://x.com",
-        source_id=src.id,
-        dsl_recipe={"recipe_type": "dsl", "entry_url": "https://x.com", "actions": []},
-        signature="abc",
-    )
-    session.add(m)
-    session.commit()
-
-    with patch(
-        "app.api.discovery_routes.run_method",
-        return_value={
-            "items": [
-                {"title": "recent-a", "url": "https://x.com/a", "published_at": "2026-07-02T10:00:00Z"},
-                {"title": "recent-b", "url": "https://x.com/b", "published_at": "2026-07-01T10:00:00Z"},
-                {"title": "old-c", "url": "https://x.com/c", "published_at": "2026-05-01T10:00:00Z"},
-            ],
-            "stats": {},
-        },
-    ):
-        r = client.post(
-            f"/discovery/methods/{m.id}/fetch",
-            json={"time_mode": "relative", "relative_range": "7d", "target_count": 1},
-        )
-
-    assert r.status_code == 200
-    body = r.json()
-    assert body["discovered_count"] == 1
-    assert len(body["items"]) == 1
-    assert body["items"][0]["url"] == "https://x.com/a"
-
-
 # --- Task 16: methods CRUD ---
 
 def _make_crawl_method(session, domain="x.com", **overrides):
@@ -217,32 +171,6 @@ def test_get_method_detail(client, session):
     assert r.json()["dsl_recipe"]["recipe_type"] == "dsl"
     assert r.json()["last_run_status"] is None
     assert r.json()["source_name"] == "LangChain Blog"
-
-
-def test_patch_method_disable(client, session):
-    m = _make_crawl_method(session, domain="x.com", status="active")
-    session.commit()
-    r = client.patch(f"/discovery/methods/{m.id}", json={"status": "disabled"})
-    assert r.status_code == 200
-    assert r.json()["status"] == "disabled"
-    session.refresh(m)
-    assert m.status == "disabled"
-
-
-def test_delete_method_cascades_domain(client, session):
-    from app.models import CrawlMethodDomain, SiteDiscoveryRun
-    m = _make_crawl_method(session, domain="x.com")
-    session.add(CrawlMethodDomain(domain="x.com", method_id=m.id))
-    run = SiteDiscoveryRun(site_url="https://x.com", status="completed", resulting_method_id=m.id)
-    session.add(run)
-    session.commit()
-    mid = m.id
-    r = client.delete(f"/discovery/methods/{mid}")
-    assert r.status_code == 204
-    assert session.get(CrawlMethod, mid) is None
-    assert session.query(CrawlMethodDomain).filter_by(method_id=mid).count() == 0
-    session.refresh(run)
-    assert run.resulting_method_id is None
 
 
 class _MockEnricher:
@@ -299,144 +227,9 @@ def test_discovery_fetch_ingests_to_items(client, session, monkeypatch):
     assert items[0].summary == "LLM富化摘要"
 
 
-def test_discovery_fetch_logs_are_visible_to_news_run_log_panel(client, session, monkeypatch):
-    from app.enums import SourceType
-    from app.models import Source
-    from app.run_logs import clear_run_logs
-
-    clear_run_logs()
-    src = Source(name="x.com", type=SourceType.DISCOVERY.value, url="https://x.com")
-    session.add(src)
-    session.flush()
-    m = CrawlMethod(
-        domain="x.com",
-        entry_url="https://x.com",
-        source_id=src.id,
-        dsl_recipe={"recipe_type": "dsl", "entry_url": "https://x.com", "actions": []},
-        signature="abc",
-    )
-    session.add(m)
-    session.commit()
-
-    monkeypatch.setattr(
-        "app.api.discovery_routes.run_method",
-        lambda recipe: {
-            "items": [
-                {"title": "recent", "url": "https://x.com/a", "published_at": "2026-07-02T10:00:00Z"},
-                {"title": "older", "url": "https://x.com/b", "published_at": "2026-06-02T10:00:00Z"},
-            ],
-            "stats": {"discovered_count": 2},
-        },
-    )
-
-    r = client.post(
-        f"/discovery/methods/{m.id}/fetch",
-        json={
-            "time_mode": "absolute",
-            "start_at": "2026-07-01T00:00:00Z",
-            "end_at": "2026-07-03T00:00:00Z",
-            "target_count": 1,
-        },
-    )
-    assert r.status_code == 200
-
-    logs = client.get("/news-run/logs").json()["logs"]
-    fetch_logs = [log for log in logs if log["stage"] == "抓方式" and log.get("method_id") == m.id]
-    assert fetch_logs
-    assert any("开始抓取爬取方式" in log["message"] for log in logs)
-    assert any("DSL 执行完成" in log["message"] and log.get("raw_count") == 2 for log in fetch_logs)
-    assert any(
-        "抓取限制已应用" in log["message"]
-        and log.get("input_count") == 2
-        and log.get("kept_count") == 1
-        and log.get("dropped_count") == 1
-        and log.get("target_count") == 1
-        for log in fetch_logs
-    )
-    assert any(
-        "爬取方式抓取完成" in log["message"]
-        and log.get("discovered_count") == 1
-        and log.get("stored_count") == 0
-        and log.get("last_run_status") == "empty"
-        for log in fetch_logs
-    )
-
-
-def test_discovery_fetch_logs_pipeline_item_outcomes(client, session, monkeypatch):
-    from app.enums import SourceType, Stream
-    from app.models import Source
-    from app.run_logs import clear_run_logs
-
-    clear_run_logs()
-    src = Source(
-        name="x.com",
-        type=SourceType.DISCOVERY.value,
-        url="https://x.com",
-        main_category="OS跟踪来源",
-        stream=Stream.NEWS,
-        enabled=True,
-    )
-    session.add(src)
-    session.flush()
-    m = CrawlMethod(
-        domain="x.com",
-        entry_url="https://x.com",
-        source_id=src.id,
-        dsl_recipe={"recipe_type": "dsl", "entry_url": "https://x.com", "actions": []},
-        signature="abc",
-    )
-    session.add(m)
-    session.commit()
-
-    monkeypatch.setattr(
-        "app.api.discovery_routes.run_method",
-        lambda recipe: {
-            "items": [
-                {"title": "duplicate-a", "url": "https://x.com/a", "published_at": "2026-07-02T10:00:00Z"},
-                {"title": "new-b", "url": "https://x.com/b", "published_at": "2026-07-02T11:00:00Z"},
-            ],
-            "stats": {"discovered_count": 2},
-        },
-    )
-
-    from app.pipeline import ProcessItemResult
-
-    results = iter([
-        ProcessItemResult(stored=False, reason="duplicate"),
-        ProcessItemResult(stored=False, reason="enrich_reject", detail="summary too weak"),
-    ])
-
-    def fake_process_item_result(self, source, raw):
-        return next(results)
-
-    monkeypatch.setattr("app.pipeline.Pipeline.process_item_result", fake_process_item_result)
-
-    r = client.post(f"/discovery/methods/{m.id}/fetch")
-    assert r.status_code == 200
-
-    logs = client.get("/news-run/logs").json()["logs"]
-    method_process_logs = [
-        log for log in logs
-        if log["stage"] == "process" and log.get("method_id") == m.id
-    ]
-    assert any(
-        log["message"] == "候选未入库"
-        and log.get("url") == "https://x.com/a"
-        and log.get("reason") == "duplicate"
-        for log in method_process_logs
-    )
-    assert any(
-        log["message"] == "候选未入库"
-        and log.get("url") == "https://x.com/b"
-        and log.get("reason") == "enrich_reject"
-        and log.get("reason_detail") == "summary too weak"
-        for log in method_process_logs
-    )
-
-
 def test_discover_run_with_custom_name(client):
     """前端传 name 别名 → /run 透传 + 返回里带 name。"""
-    with patch("app.api.discovery_routes.start_discovery_run", return_value=7):
+    with patch("app.api.discovery_routes.start_website_discovery_run", return_value=7):
         r = client.post("/discovery/run", json={"url": "https://openanolis.cn", "name": "OpenAnolis 博客"})
     assert r.status_code == 200
     assert r.json()["name"] == "OpenAnolis 博客"

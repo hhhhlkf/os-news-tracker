@@ -19,7 +19,8 @@ import { clampInput, INPUT_LIMITS } from "../inputLimits";
 import { emailListError, parseEmailList } from "../mail/emailValidation";
 import { DeleteIconButton } from "./DeleteIconButton";
 import { MailNoticeBox } from "./MailNoticeBox";
-import { MailPreviewItemCard } from "./MailPreviewItemCard";
+import { MailPreviewItemGroups } from "./MailPreviewItemGroups";
+import { MailTrendPreviewGroups } from "./MailTrendPreviewGroups";
 
 function formatMultiFilter(raw: string | null | undefined): string {
   if (!raw) return "";
@@ -28,6 +29,8 @@ function formatMultiFilter(raw: string | null | undefined): string {
 
 function summarizeFilter(snapshot: MailFilterSnapshot): string {
   const segments: string[] = [];
+  if (snapshot.item_kind === "discussion") segments.push("技术讨论");
+  if (snapshot.item_kind === "news") segments.push("新闻");
   const mainCategory = formatMultiFilter(snapshot.main_category);
   const importance = formatMultiFilter(snapshot.importance);
   const subTag = formatMultiFilter(snapshot.sub_tag);
@@ -54,6 +57,10 @@ function summarizeFilter(snapshot: MailFilterSnapshot): string {
   }
 
   return segments.length > 0 ? segments.join(" · ") : "全部时间 · 无附加筛选";
+}
+
+function templateContentLabel(template: MailTemplate): string {
+  return template.content_type === "trend_distribution" ? "趋势与热点分发" : summarizeFilter(template.filter_snapshot);
 }
 
 // 后端时间均为北京时间墙钟值，原样展示，不做时区换算。
@@ -176,7 +183,7 @@ export function MailTemplateListPanel(props: {
         data.status === "sent"
           ? `发送成功，共 ${data.item_count} 条，通道：${mailProviderLabel(data.provider)}。`
           : data.status === "查询空" || data.status === "skipped_empty"
-            ? "当前筛选没有匹配到新闻，未发送。"
+            ? "当前筛选没有匹配到条目，未发送。"
           : `发送失败（${mailProviderLabel(data.provider)}）：${data.error_message ?? "未知错误"}`,
       );
       void queryClient.invalidateQueries({ queryKey: ["mail-templates"] });
@@ -272,14 +279,14 @@ export function MailTemplateListPanel(props: {
             </div>
             <div style={{ overflowY: "auto", minHeight: 0, display: "grid", gap: 10, alignContent: "start" }}>
               <MailNoticeBox notice={previewData.notice} />
-              {previewData.items.length === 0 ? (
+              {previewData.item_count === 0 ? (
                 <div style={{ border: "1px dashed #d0d5dd", color: "#667085", borderRadius: 12, padding: 14, fontSize: 13 }}>
-                  当前筛选没有匹配到新闻。
+                    {selected?.content_type === "trend_distribution" ? "当前模板最近成功发布中没有可分发趋势。" : "当前筛选没有匹配到条目。"}
                 </div>
+              ) : selected?.content_type === "trend_distribution" ? (
+                <MailTrendPreviewGroups groups={previewData.trend_groups} />
               ) : (
-                previewData.items.map((item, index) => (
-                  <MailPreviewItemCard key={`${item.source_url}-${index}`} item={item} compact />
-                ))
+                <MailPreviewItemGroups items={previewData.items} compact />
               )}
             </div>
           </>
@@ -320,7 +327,7 @@ export function MailTemplateListPanel(props: {
                         title="删除模板"
                       />
                     </div>
-                    <div style={{ fontSize: 12, color: "#667085", lineHeight: 1.45 }}>{summarizeFilter(template.filter_snapshot)}</div>
+                    <div style={{ fontSize: 12, color: "#667085", lineHeight: 1.45 }}>{templateContentLabel(template)}</div>
                     <div style={{ fontSize: 12, color: "#667085" }}>
                       收件人 {(template.recipients ?? []).length} 个 · <span style={{ color: result.color, fontWeight: 700 }}>{result.text}</span>
                     </div>
@@ -354,7 +361,7 @@ export function MailTemplateListPanel(props: {
                 <div style={{ ...PANEL_TITLE, marginBottom: 6 }}>最近结果</div>
                 <div style={{ fontSize: 15, fontWeight: 800, color: lastResultText(selected).color }}>{lastResultText(selected).text}</div>
                 <div style={{ fontSize: 12, color: "#667085" }}>
-                  {selected.last_send_count != null ? `${selected.last_send_count} 条新闻` : formatDateTime(selected.last_send_at)}
+                  {selected.last_send_count != null ? `${selected.last_send_count} 条${selected.content_type === "trend_distribution" ? "趋势" : "新闻"}` : formatDateTime(selected.last_send_at)}
                 </div>
               </div>
             </div>
@@ -399,7 +406,11 @@ export function MailTemplateListPanel(props: {
                     <input type="checkbox" checked={editActive} onChange={(e) => setEditActive(e.target.checked)} />
                     启用该模板
                   </label>
-                  <div style={{ fontSize: 11, color: "#98a2b3" }}>筛选条件沿用保存时的快照，如需修改请在「立即发送」页重新保存。</div>
+                  <div style={{ fontSize: 11, color: "#98a2b3" }}>
+                    {selected.content_type === "trend_distribution"
+                      ? "趋势方向由保存时选择的身份模板决定；如需更换身份模板，请重新保存一个趋势模板。"
+                      : "筛选条件沿用保存时的快照，如需修改请在「立即发送」页重新保存。"}
+                  </div>
                   <div style={{ display: "flex", gap: 8 }}>
                     <button
                       onClick={() => updateMutation.mutate(selected.id)}
@@ -419,7 +430,7 @@ export function MailTemplateListPanel(props: {
               ) : (
                 <div style={{ display: "grid", gap: 8, fontSize: 13, color: "#475467", lineHeight: 1.6 }}>
                   <div><strong style={{ color: "#101828" }}>模板名：</strong>{selected.name}</div>
-                  <div><strong style={{ color: "#101828" }}>筛选条件：</strong>{summarizeFilter(selected.filter_snapshot)}</div>
+                  <div><strong style={{ color: "#101828" }}>{selected.content_type === "trend_distribution" ? "内容类型：" : "筛选条件："}</strong>{templateContentLabel(selected)}</div>
                   <div>
                     <strong style={{ color: "#101828" }}>收件人：</strong>
                     {(selected.recipients ?? []).length > 0 ? (selected.recipients ?? []).join("，") : "未设置"}

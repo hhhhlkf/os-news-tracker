@@ -21,7 +21,6 @@ type RowState =
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50];
 const STORAGE_KEY = "crawl-method-list-state:v1";
-const EXPANDED_STORAGE_KEY = "discovery.crawl-method-list.expanded";
 
 type SummaryState = { text: string; tone: "success" | "danger"; showItemsLink: boolean } | null;
 
@@ -102,21 +101,16 @@ function writePersistedViewState(state: PersistedViewState) {
   window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
-function readExpandedState() {
-  if (typeof window === "undefined") return true;
-  const raw = window.localStorage.getItem(EXPANDED_STORAGE_KEY);
-  return raw == null ? true : raw === "true";
-}
-
-export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState, allowDelete = true }: {
+export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState, allowDelete = true, readOnly = false }: {
   onOpenMethod?: (id: number) => void;
   highlightId?: number | null;
   runLimitState: NewsRunFormState;
   allowDelete?: boolean;
+  /** 只允许查看已批准的方式和详情，不允许启动、取消、选择或删除。 */
+  readOnly?: boolean;
 }) {
   const qc = useQueryClient();
   const [viewState, setViewState] = useState<PersistedViewState>(() => readPersistedViewState());
-  const [expanded, setExpanded] = useState(readExpandedState);
   const abortRef = useRef<AbortController | null>(null);
   const activeMethodIdRef = useRef<number | null>(null);
   const cancelledRef = useRef(false);
@@ -202,11 +196,6 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState, allo
   useEffect(() => {
     viewStateRef.current = viewState;
   }, [viewState]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(EXPANDED_STORAGE_KEY, String(expanded));
-  }, [expanded]);
 
   useEffect(() => {
     if (page > totalPages) {
@@ -460,53 +449,45 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState, allo
     <section style={{ background: "#fff", border: "1px solid #d0d5dd", borderRadius: 10, padding: 16, marginTop: 14 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "#101828" }}>抓取模块 · 爬取方式库</div>
-          <div style={{ fontSize: 12, color: "#667085", marginTop: 2 }}>按顺序抓取已选方式，可随时取消当前批次。结果会进入新闻流和运行日志。</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#101828" }}>抓取模块 · 爬取方式库</div>
+          <div style={{ fontSize: 11, color: "#667085", marginTop: 2 }}>按顺序抓取已选方式，可随时取消当前批次。结果会进入新闻流和运行日志。</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {!expanded ? null : (
-            <>
-              <span style={{ fontSize: 12, color: "#475467" }}>已选 <b style={{ color: "#101828" }}>{selected.size}</b> 个</span>
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "#475467", cursor: selectablePageIds.length === 0 ? "not-allowed" : "pointer" }}>
-                <input
-                  type="checkbox"
-                  aria-label="全选当前页爬取方式"
-                  checked={allPageSelected}
-                  disabled={selectablePageIds.length === 0 || batchRunning || batchDeleting}
-                  onChange={(e) => toggleCurrentPage(e.target.checked)}
-                />
-                全选本页
-              </label>
-              <button
-                type="button"
-                style={batchRunning ? btnDanger : btnPrimary}
-                disabled={batchRunning ? batchCancelling : selected.size === 0 || batchDeleting}
-                onClick={batchRunning ? cancelBatch : batchFetch}
-              >
-                {batchRunning ? (batchCancelling ? "取消中…" : "取消抓取") : "抓取选中"}
-              </button>
-              {allowDelete && (
-                <button
-                  type="button"
-                  style={selected.size === 0 || batchRunning || batchDeleting ? btnDangerDisabled : btnDangerGhost}
-                  disabled={selected.size === 0 || batchRunning || batchDeleting}
-                  onClick={batchDelete}
-                >
-                  {batchDeleting ? "删除中…" : "批量删除链接"}
-                </button>
-              )}
-            </>
+          {!readOnly && <span style={{ fontSize: 11, color: "#475467" }}>已选 <b style={{ color: "#101828" }}>{selected.size}</b> 个</span>}
+          {!readOnly && <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "#475467", cursor: selectablePageIds.length === 0 ? "not-allowed" : "pointer" }}>
+            <input
+              type="checkbox"
+              aria-label="全选当前页爬取方式"
+              checked={allPageSelected}
+              disabled={readOnly || selectablePageIds.length === 0 || batchRunning || batchDeleting}
+              onChange={(e) => toggleCurrentPage(e.target.checked)}
+            />
+            全选本页
+          </label>}
+          {!readOnly && <button
+            type="button"
+            style={readOnly || (batchRunning && batchCancelling) ? btnDangerDisabled : batchRunning ? btnDanger : btnPrimary}
+            disabled={readOnly || (batchRunning ? batchCancelling : selected.size === 0 || batchDeleting)}
+            onClick={readOnly ? undefined : batchRunning ? cancelBatch : batchFetch}
+          >
+            {batchRunning ? (batchCancelling ? "取消中…" : "取消抓取") : "抓取选中"}
+          </button>}
+          {allowDelete && !readOnly && (
+            <button
+              type="button"
+              style={selected.size === 0 || batchRunning || batchDeleting ? btnDangerDisabled : btnDangerGhost}
+              disabled={selected.size === 0 || batchRunning || batchDeleting}
+              onClick={batchDelete}
+            >
+              {batchDeleting ? "删除中…" : "批量删除链接"}
+            </button>
           )}
-          <button type="button" style={btnGhost} onClick={() => setExpanded((value) => !value)}>
-            {expanded ? "收起" : "展开"}
-          </button>
         </div>
       </div>
 
-      {!expanded ? null : (
-        <>
-          {summary && (
-            <div style={{ fontSize: 13, color: summary.tone === "danger" ? "#b42318" : "#059669", marginBottom: 10 }}>
+      <>
+        {summary && (
+            <div style={{ fontSize: 12, color: summary.tone === "danger" ? "#b42318" : "#059669", marginBottom: 10 }}>
               {summary.text}
               {summary.showItemsLink ? <> · <a style={{ color: "#175cd3", cursor: "pointer" }} onClick={() => (window.location.href = "/")}>查看入库条目 →</a></> : null}
             </div>
@@ -525,10 +506,10 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState, allo
             )}
             {pageMethods.map((m) => (
               <MethodRow key={m.id} m={m} selected={selected.has(m.id)} state={rowStates[m.id]}
-                onToggle={(en) => toggle(m.id, en)} onOpen={() => onOpenMethod?.(m.id)} highlight={highlightId === m.id} busy={batchRunning || batchDeleting} batchCancelling={batchCancelling} />
+                onToggle={(en) => toggle(m.id, en)} onOpen={() => onOpenMethod?.(m.id)} highlight={highlightId === m.id} busy={batchRunning || batchDeleting} batchCancelling={batchCancelling} readOnly={readOnly} />
             ))}
             {list.data && methods.length === 0 && (
-              <div style={{ border: "1px dashed #d0d5dd", borderRadius: 8, padding: 16, color: "#667085", fontSize: 13 }}>
+              <div style={{ border: "1px dashed #d0d5dd", borderRadius: 8, padding: 16, color: "#667085", fontSize: 12 }}>
                 还没有爬取方式。用上方"智能探查"为一个网站生成爬取方式。
               </div>
             )}
@@ -572,8 +553,7 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState, allo
               </div>
             </div>
           )}
-        </>
-      )}
+      </>
     </section>
   );
 }
@@ -594,9 +574,9 @@ function formatRowStatus(state: RowState | undefined, method: CrawlMethod, batch
   return { text: formatIdleStatus(method), color: "#475467" };
 }
 
-function MethodRow({ m, selected, state, onToggle, onOpen, highlight, busy, batchCancelling }: {
+function MethodRow({ m, selected, state, onToggle, onOpen, highlight, busy, batchCancelling, readOnly }: {
   m: CrawlMethod; selected: boolean; state?: RowState;
-  onToggle: (enabled: boolean) => void; onOpen: () => void; highlight: boolean; busy: boolean; batchCancelling: boolean;
+  onToggle: (enabled: boolean) => void; onOpen: () => void; highlight: boolean; busy: boolean; batchCancelling: boolean; readOnly: boolean;
 }) {
   const disabled = m.status === "disabled";
   const primaryLabel = m.source_name?.trim() || m.domain;
@@ -604,17 +584,17 @@ function MethodRow({ m, selected, state, onToggle, onOpen, highlight, busy, batc
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12, border: `1px solid ${selected ? "#b9d4ff" : highlight ? "#175cd3" : "#eaecf0"}`,
       borderRadius: 9, padding: "9px 11px", background: selected ? "#f8fbff" : highlight ? "#eff6ff" : "#fff" }}>
-      <input type="checkbox" aria-label={`选择 ${primaryLabel}`} checked={selected} disabled={disabled || busy} onChange={(e) => onToggle(e.target.checked)} />
+      {!readOnly && <input type="checkbox" aria-label={`选择 ${primaryLabel}`} checked={selected} disabled={disabled || busy} onChange={(e) => onToggle(e.target.checked)} />}
       <QualityBadge method={m} />
       <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={onOpen}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: disabled ? "#98a2b3" : "#101828" }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: disabled ? "#98a2b3" : "#101828" }}>
           {primaryLabel} <span style={badge(m.status)}>{m.status}</span>
         </div>
-        <div style={{ fontSize: 12, color: "#667085", wordBreak: "break-all" }}>
+        <div style={{ fontSize: 11, color: "#667085", wordBreak: "break-all" }}>
           {m.domain !== primaryLabel ? `${m.domain} · ` : ""}{m.entry_url}
         </div>
       </div>
-      <div style={{ fontSize: 12, color: status.color, textAlign: "right", minWidth: 180 }}>
+      <div style={{ fontSize: 11, color: status.color, textAlign: "right", minWidth: 180 }}>
         {status.text}
       </div>
     </div>
@@ -690,12 +670,11 @@ function qualityBadgeStyle(score: number | null | undefined, status: string | nu
   return { ...base, border: "1px solid #abefc6", color: "#027a48", background: "#ecfdf3" };
 }
 
-const btnPrimary: CSSProperties = { border: "none", borderRadius: 999, padding: "8px 16px", background: "#175cd3", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" };
-const btnGhost: CSSProperties = { border: "1px solid #d0d5dd", borderRadius: 999, padding: "8px 14px", background: "#fff", color: "#344054", fontSize: 13, fontWeight: 700, cursor: "pointer" };
+const btnPrimary: CSSProperties = { border: "none", borderRadius: 999, padding: "8px 16px", background: "#175cd3", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" };
 const btnDanger: CSSProperties = { ...btnPrimary, background: "#dc2626" };
-const btnDangerGhost: CSSProperties = { border: "1px solid #fecdca", borderRadius: 999, padding: "8px 16px", background: "#fff", color: "#b42318", fontSize: 13, fontWeight: 700, cursor: "pointer" };
+const btnDangerGhost: CSSProperties = { border: "1px solid #fecdca", borderRadius: 999, padding: "8px 16px", background: "#fff", color: "#b42318", fontSize: 12, fontWeight: 700, cursor: "pointer" };
 const btnDangerDisabled: CSSProperties = { ...btnDangerGhost, color: "#98a2b3", border: "1px solid #eaecf0", cursor: "not-allowed" };
-const infoBox: CSSProperties = { border: "1px dashed #d0d5dd", borderRadius: 8, padding: 16, color: "#667085", fontSize: 13 };
+const infoBox: CSSProperties = { border: "1px dashed #d0d5dd", borderRadius: 8, padding: 16, color: "#667085", fontSize: 12 };
 const pagerBar: CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -705,7 +684,7 @@ const pagerBar: CSSProperties = {
   marginTop: 12,
   paddingTop: 12,
   borderTop: "1px solid #eaecf0",
-  fontSize: 12,
+  fontSize: 11,
 };
 const pagerButton: CSSProperties = {
   border: "1px solid #d0d5dd",
@@ -713,7 +692,7 @@ const pagerButton: CSSProperties = {
   padding: "6px 10px",
   background: "#fff",
   color: "#344054",
-  fontSize: 12,
+  fontSize: 11,
   fontWeight: 700,
   cursor: "pointer",
 };
@@ -729,5 +708,5 @@ const selectStyle: CSSProperties = {
   padding: "5px 8px",
   background: "#fff",
   color: "#344054",
-  fontSize: 12,
+  fontSize: 11,
 };

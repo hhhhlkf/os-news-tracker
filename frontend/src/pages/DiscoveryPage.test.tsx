@@ -50,7 +50,7 @@ describe("DiscoveryPage", () => {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
-          <DiscoveryPage />
+          <DiscoveryPage hasSystemAccess />
         </QueryClientProvider>,
       );
     });

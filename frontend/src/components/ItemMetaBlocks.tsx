@@ -25,6 +25,7 @@ export function formatDateYmd(value: string | null | undefined): string {
   return value.slice(0, 10);
 }
 
+
 export function SourceCta({ url, size = "default" }: { url: string; size?: "default" | "sm" }) {
   const domain = domainFromUrl(url);
   const compact = size === "sm";
@@ -131,7 +132,7 @@ export function SourceQualityMeta(props: {
 }) {
   const { sourceName, score, status, size = "default" } = props;
   const compact = size === "sm";
-  const label = typeof score === "number" ? `${props.grade ?? gradeForScore(score)} ${score}` : "未审计";
+  const label = typeof score === "number" ? `${props.grade ?? gradeForScore(score)} ${score}` : null;
   return (
     <div
       title={sourceName || "来源未标注"}
@@ -165,7 +166,7 @@ export function SourceQualityMeta(props: {
       >
         {sourceName || "来源未标注"}
       </span>
-      <span style={qualityBadgeStyle(score, status, compact)}>{label}</span>
+      {label && <span style={qualityBadgeStyle(score, status, compact)}>{label}</span>}
     </div>
   );
 }

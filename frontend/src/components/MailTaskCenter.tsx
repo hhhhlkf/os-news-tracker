@@ -1,14 +1,14 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ItemQueryParams } from "../api/client";
-import { MailImmediateSendPanel } from "./MailImmediateSendPanel";
+import { MailDistributionPanel } from "./MailDistributionPanel";
 import { MailTemplateListPanel } from "./MailTemplateListPanel";
 import { MailScheduleListPanel, type ScheduleDraft } from "./MailScheduleListPanel";
 
 type MailTab = "immediate" | "templates" | "schedules";
 
 const tabMeta: Array<{ key: MailTab; label: string; description: string; icon: string }> = [
-  { key: "immediate", label: "立即发送", description: "基于当前筛选发一封", icon: "✉" },
+  { key: "immediate", label: "发送内容", description: "新闻或趋势发送", icon: "✉" },
   { key: "templates", label: "模板列表", description: "保存并复用筛选和收件人", icon: "▤" },
   { key: "schedules", label: "已预定发送", description: "查看定时发送任务", icon: "◷" },
 ];
@@ -142,10 +142,11 @@ export function MailTaskCenter(props: {
 
           <div style={{ padding: 14, overflowY: "auto", background: "#fff" }}>
             {activeTab === "immediate" && (
-              <MailImmediateSendPanel
+              <MailDistributionPanel
                 homeFilters={homeFilters}
-                onTemplateSaved={() => {
+                onTemplateSaved={(_template, kind) => {
                   void queryClient.invalidateQueries({ queryKey: ["mail-templates"] });
+                  if (kind === "trend") setActiveTab("templates");
                 }}
               />
             )}
@@ -160,6 +161,7 @@ export function MailTaskCenter(props: {
                     subject: template.subject,
                     recipients: template.recipients ?? [],
                     filter_snapshot: template.filter_snapshot,
+                    contentType: template.content_type,
                   });
                   setActiveTab("schedules");
                 }}

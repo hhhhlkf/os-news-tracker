@@ -75,6 +75,7 @@ class WindowScoredStoryline:
     cohesion_score: float
     decision: str
     agent_review: str
+    verified_members: list[WindowMemberEvidence]
     window_members: list[WindowMemberEvidence]
     window_start_date: date
     window_end_date: date
@@ -94,6 +95,7 @@ class PreparedTrendResult:
     template_relevance_score: float
     trend_rank_score: float
     category: str
+    direction: str
     topic: str | None
     trend_summary: str | None
     agent_review: str
@@ -151,10 +153,16 @@ def _parse_evaluation(raw: str) -> TrendEvaluationOutput:
     return TrendEvaluationOutput.model_validate(parsed)
 
 
-def _validate_against_allowed(output: TrendEvaluationOutput, *, allowed: list[str]) -> None:
+def _validate_against_allowed(
+    output: TrendEvaluationOutput, *, allowed: list[str], allowed_directions: list[str]
+) -> None:
     if output.category not in allowed:
         raise ValueError(
             f"category={output.category} 不在当前窗口允许列表中：{', '.join(allowed)}"
+        )
+    if output.direction not in allowed_directions:
+        raise ValueError(
+            f"direction={output.direction} 不在身份模板允许方向中：{', '.join(allowed_directions)}"
         )
 
 
@@ -206,32 +214,33 @@ def score_storylines_for_window(
 
     scored: list[WindowScoredStoryline] = []
     for storyline in storylines:
+        verified_members: list[WindowMemberEvidence] = []
         window_members: list[WindowMemberEvidence] = []
         for member, card, item in members_by_storyline.get(storyline.storyline_id, []):
             if member.membership == "duplicate":
                 continue
+            evidence = WindowMemberEvidence(
+                card_id=member.card_id,
+                item_id=item.id,
+                at=member.at,
+                membership=member.membership,
+                importance=item.importance,
+                title=(item.title_tldr or item.title or "").strip(),
+                news_actor=card.news_actor,
+                action=card.action,
+                result=card.result,
+                potential_impact=card.potential_impact,
+                cause=card.cause,
+                content="",
+            )
+            verified_members.append(evidence)
             if member.at < window_start or member.at > window_end:
                 continue
             content, _source = select_card_content(
                 clean_content=item.clean_content,
                 summary=item.summary,
             )
-            window_members.append(
-                WindowMemberEvidence(
-                    card_id=member.card_id,
-                    item_id=item.id,
-                    at=member.at,
-                    membership=member.membership,
-                    importance=item.importance,
-                    title=(item.title_tldr or item.title or "").strip(),
-                    news_actor=card.news_actor,
-                    action=card.action,
-                    result=card.result,
-                    potential_impact=card.potential_impact,
-                    cause=card.cause,
-                    content=(content or "").strip()[:3000],
-                )
-            )
+            window_members.append(replace(evidence, content=(content or "").strip()[:3000]))
         if not window_members:
             storyline.window_start_date = None
             storyline.window_end_date = None
@@ -265,6 +274,7 @@ def score_storylines_for_window(
                 cohesion_score=storyline.cohesion_score,
                 decision=storyline.decision,
                 agent_review=storyline.agent_review,
+                verified_members=verified_members,
                 window_members=window_members,
                 window_start_date=local_start,
                 window_end_date=local_end,
@@ -299,6 +309,20 @@ def _storyline_payload(candidate: WindowScoredStoryline) -> dict[str, object]:
         "window_influence_score": candidate.window_influence_score,
         "decision": candidate.decision,
         "agent_review": candidate.agent_review,
+        "verified_evidence": [
+            {
+                "card_id": member.card_id,
+                "at": member.at.isoformat(),
+                "membership": member.membership,
+                "title": member.title,
+                "news_actor": member.news_actor,
+                "action": member.action,
+                "result": member.result,
+                "potential_impact": member.potential_impact,
+                "cause": member.cause,
+            }
+            for member in candidate.verified_members
+        ],
         "timeline": [
             {
                 "card_id": member.card_id,
@@ -348,6 +372,7 @@ def evaluate_candidate(
     *,
     candidate: WindowScoredStoryline,
     analysis_identity: str,
+    allowed_directions: list[str],
     window_start: date,
     window_end: date,
     llm: LlmClient,
@@ -361,6 +386,7 @@ def evaluate_candidate(
     for attempt in range(1, MAX_TREND_EVALUATION_ATTEMPTS + 1):
         prompt = build_trend_evaluation_prompt(
             analysis_identity=analysis_identity,
+            allowed_directions=allowed_directions,
             window_start_date=window_start.isoformat(),
             window_end_date=window_end.isoformat(),
             window_days=window_days,
@@ -375,7 +401,11 @@ def evaluate_candidate(
         )
         try:
             output = _parse_evaluation(llm.complete(prompt, response_format={"type": "json_object"}))
-            _validate_against_allowed(output, allowed=allowed)
+            _validate_against_allowed(
+                output,
+                allowed=allowed,
+                allowed_directions=allowed_directions,
+            )
             return PreparedTrendResult(
                 storyline_id=candidate.storyline_id,
                 overall_start_date=candidate.overall_start_date,
@@ -390,6 +420,7 @@ def evaluate_candidate(
                     template_relevance_score=float(output.template_relevance_score),
                 ),
                 category=output.category,
+                direction=output.direction,
                 topic=output.topic,
                 trend_summary=output.trend_summary,
                 agent_review=output.agent_review,
@@ -423,6 +454,7 @@ def publish_results(db: Session, *, run: TrendRun, prepared: list[PreparedTrendR
             template_relevance_score=item.template_relevance_score,
             trend_rank_score=item.trend_rank_score,
             category=item.category,
+            direction=item.direction,
             topic=item.topic,
             trend_summary=item.trend_summary,
             agent_review=item.agent_review,
@@ -440,7 +472,6 @@ def publish_results(db: Session, *, run: TrendRun, prepared: list[PreparedTrendR
 def execute_trend_run(
     *,
     run_id: str,
-    analysis_identity: str,
     session_factory: Callable[[], Session],
     llm: LlmClient | None = None,
     on_progress: Callable[[int, int], None] | None = None,
@@ -452,6 +483,8 @@ def execute_trend_run(
     candidates: list[WindowScoredStoryline] = []
     window_start: date
     window_end: date
+    analysis_identity: str
+    allowed_directions: list[str]
     try:
         run = db.get(TrendRun, run_id)
         if run is None:
@@ -461,6 +494,10 @@ def execute_trend_run(
         run.error_message = None
         window_start = run.window_start_date
         window_end = run.window_end_date
+        analysis_identity = run.analysis_identity_snapshot
+        allowed_directions = list(run.direction_labels)
+        if not allowed_directions:
+            raise ValueError("该趋势运行未保存可用方向，无法执行评估。")
         scored = score_storylines_for_window(
             db,
             window_start=window_start,
@@ -491,6 +528,7 @@ def execute_trend_run(
                 evaluate_candidate(
                     candidate=candidate,
                     analysis_identity=analysis_identity,
+                    allowed_directions=allowed_directions,
                     window_start=window_start,
                     window_end=window_end,
                     llm=client,
@@ -554,7 +592,6 @@ class TrendEvaluationController:
         self,
         *,
         run: TrendRun,
-        analysis_identity: str,
         session_factory: Callable[[], Session],
         llm_factory: Callable[[], LlmClient] | None = None,
     ) -> TrendEvaluationRuntimeState:
@@ -588,7 +625,6 @@ class TrendEvaluationController:
                 kwargs={
                     "run_id": run.run_id,
                     "template_id": run.template_id,
-                    "analysis_identity": analysis_identity,
                     "session_factory": session_factory,
                     "llm_factory": llm_factory or LlmClient,
                 },
@@ -602,7 +638,6 @@ class TrendEvaluationController:
         *,
         run_id: str,
         template_id: str,
-        analysis_identity: str,
         session_factory: Callable[[], Session],
         llm_factory: Callable[[], LlmClient],
     ) -> None:
@@ -627,7 +662,6 @@ class TrendEvaluationController:
 
             execute_trend_run(
                 run_id=run_id,
-                analysis_identity=analysis_identity,
                 session_factory=session_factory,
                 llm=llm_factory(),
                 on_progress=on_progress,
@@ -743,6 +777,8 @@ def build_trend_run(
     window_end: date,
     trend_count: int,
     storyline_candidate_goal: int,
+    analysis_identity_snapshot: str,
+    direction_labels: list[str],
 ) -> TrendRun:
     settings = get_settings()
     return TrendRun(
@@ -755,6 +791,8 @@ def build_trend_run(
         card_prompt_version=CARD_PROMPT_VERSION,
         trend_prompt_version=TREND_EVALUATION_PROMPT_VERSION,
         model_version=settings.llm_model,
+        analysis_identity_snapshot=analysis_identity_snapshot,
+        direction_labels=direction_labels,
         candidate_storyline_ids=[],
         status="pending",
         candidate_count=0,

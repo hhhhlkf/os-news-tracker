@@ -109,6 +109,8 @@ class NewsExplanationCard(Base):
         unique=True,
         index=True,
     )
+    item_kind: Mapped[str] = mapped_column(String(20), nullable=False, default="news")
+    input_content_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     news_actor: Mapped[str | None] = mapped_column(String(100), nullable=True)
     action: Mapped[str | None] = mapped_column(String(100), nullable=True)
     result: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -319,6 +321,10 @@ class TrendRun(Base):
     card_prompt_version: Mapped[str] = mapped_column(String(100), nullable=False)
     trend_prompt_version: Mapped[str] = mapped_column(String(100), nullable=False)
     model_version: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Immutable evaluation contract captured when the run is created.  Template
+    # edits must not change an in-flight run's allowed direction labels.
+    analysis_identity_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
+    direction_labels: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     candidate_storyline_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -359,6 +365,8 @@ class TrendResult(Base):
     template_relevance_score: Mapped[float] = mapped_column(Float, nullable=False)
     trend_rank_score: Mapped[float] = mapped_column(Float, nullable=False)
     category: Mapped[str] = mapped_column(String(40), nullable=False)
+    # Nullable only for results published before direction classification.
+    direction: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     topic: Mapped[str | None] = mapped_column(String(300), nullable=True)
     trend_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     agent_review: Mapped[str] = mapped_column(Text, nullable=False)

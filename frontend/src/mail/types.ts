@@ -1,8 +1,9 @@
-export type MailSortBy = "published_at" | "fetched_at";
+export type MailSortBy = "published_at" | "fetched_at" | "last_activity_at";
 export type MailSortDir = "desc" | "asc";
 export type MailBoundaryMode = "none" | "absolute" | "relative";
 export type MailRelativeRange = "24h" | "7d" | "30d";
 export type MailProviderKind = "tof4" | "smtp";
+export type MailContentType = "news" | "trend_distribution";
 
 /** User-facing channel name; API values stay `tof4` / `smtp`. */
 export function mailProviderLabel(provider: MailProviderKind): string {
@@ -16,6 +17,7 @@ export interface MailFilterSnapshot {
   importance?: string | null;
   sub_tag?: string | null;
   source_id?: string | null;
+  item_kind?: "news" | "discussion" | null;
   sort_by?: MailSortBy;
   sort_dir?: MailSortDir;
   published_after_mode?: MailBoundaryMode;
@@ -57,6 +59,8 @@ export interface MailTemplate {
   subject: string;
   recipients: string[];
   filter_snapshot: MailFilterSnapshot;
+  content_type: MailContentType;
+  trend_identity_template_id: string | null;
   notice?: MailNoticeBlock | null;
   is_active: boolean;
   last_send_at: string | null;
@@ -71,6 +75,8 @@ export interface MailTemplateCreateRequest {
   subject: string;
   recipients: string[];
   filter_snapshot: MailFilterSnapshot;
+  content_type?: MailContentType;
+  trend_identity_template_id?: string | null;
   is_active?: boolean;
 }
 
@@ -88,6 +94,8 @@ export interface MailTemplateActionRequest {
 
 export interface MailPreviewItem {
   title: string;
+  item_kind?: "news" | "discussion";
+  main_category?: string | null;
   reason: string | null;
   summary: string | null;
   importance: string | null;
@@ -101,6 +109,20 @@ export interface MailPreviewItem {
   source_quality_status?: string | null;
 }
 
+export interface MailTrendSummary {
+  result_id: string;
+  title: string;
+  summary: string;
+  category: string;
+  category_label: string;
+  sources: MailPreviewItem[];
+}
+
+export interface MailTrendDirectionGroup {
+  direction: string;
+  trends: MailTrendSummary[];
+}
+
 export interface MailPreviewResponse {
   subject: string;
   filter_snapshot: MailFilterSnapshot;
@@ -110,12 +132,20 @@ export interface MailPreviewResponse {
   items: MailPreviewItem[];
   rendered_html: string;
   notice?: MailNoticeBlock | null;
+  trend_groups: MailTrendDirectionGroup[];
 }
 
 export interface MailImmediateSendRequest {
   subject: string;
   recipients: string[];
   filter_snapshot: MailFilterSnapshot;
+  provider?: MailProviderKind | null;
+}
+
+export interface MailTrendPreviewRequest {
+  template_id: string;
+  subject: string;
+  recipients: string[];
   provider?: MailProviderKind | null;
 }
 
@@ -137,7 +167,10 @@ export interface MailSchedule {
   subject: string;
   recipients: string[];
   filter_snapshot: MailFilterSnapshot;
+  content_type: MailContentType;
+  trend_identity_template_id: string | null;
   frequency: MailFrequency;
+  weekly_day: number | null;
   send_time: string;
   enabled: boolean;
   last_sent_at: string | null;
@@ -156,6 +189,7 @@ export interface MailScheduleCreateRequest {
   recipients: string[];
   filter_snapshot: MailFilterSnapshot;
   frequency: MailFrequency;
+  weekly_day?: number | null;
   send_time: string;
   enabled?: boolean;
   template_id?: number | null;
@@ -167,6 +201,7 @@ export interface MailScheduleUpdateRequest {
   recipients?: string[];
   filter_snapshot?: MailFilterSnapshot;
   frequency?: MailFrequency;
+  weekly_day?: number | null;
   send_time?: string;
   enabled?: boolean;
 }

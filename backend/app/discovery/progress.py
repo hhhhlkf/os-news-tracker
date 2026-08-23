@@ -195,13 +195,33 @@ def log_discovery_progress(
     stage: str,
     source: str,
     method_id: int,
+    extra_fields: dict[str, Any] | None = None,
 ) -> None:
+    """统一上报一次 discovery 进度事件。
+
+    功能：根据事件名翻译出中文提示语、挑选出该事件关心的字段，再调用外部传入的 emit 回调输出进度。
+    谁会调用：morning_crawl/service.py、discovery/runner.py 在抓取与文章补抓流程中调用，用于实时日志。
+    直接调用：
+    - _select_fields(...)：按事件名选出要上报的字段。
+    - emit(...)：外部传入的进度回调（用于写日志/推送 SSE）。
+    输入与结果：输入事件名、payload 字典、emit 回调、stage/source/method_id；无返回值。
+    副作用：通过 emit 回调产生日志/进度输出，不写数据库。
+    """
     message = _WECHAT_PROGRESS_MESSAGES.get(event, event)
     fields = _select_fields(event, payload)
+    fields.update(extra_fields or {})
     emit(stage, message, source=source, method_id=method_id, **fields)
 
 
 def _select_fields(event: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """按事件名挑选出需要上报的进度字段。
+
+    功能：已知事件从预设字段表取对应字段；未知事件则透传除 stage/message/source/level 外的全部字段。
+    谁会调用：log_discovery_progress 在组装进度事件时调用。
+    直接调用：无（仅查表与字典推导）。
+    输入与结果：输入事件名与 payload；返回字段名到值的字典。
+    副作用：无。
+    """
     if event not in _FETCH_PROGRESS_FIELDS:
         return {k: v for k, v in payload.items() if k not in {"stage", "message", "source", "level"}}
     return {field: payload.get(field) for field in _FETCH_PROGRESS_FIELDS[event]}

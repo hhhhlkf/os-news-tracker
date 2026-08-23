@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.trends.directions import require_template_directions
+
 
 TrendTriggerMode = Literal["manual", "scheduled"]
 TrendWindowMode = Literal["date_range", "relative"]
@@ -24,9 +26,9 @@ StorylineReviewDecision = Literal["accept", "split", "reject"]
 StorylineReviewStatus = Literal["pending", "running", "accepted", "split", "rejected", "failed"]
 
 
-class TrendIdentityTemplateCreateRequest(BaseModel):
+class TrendIdentityTemplateWriteRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    identity_text: str = Field(min_length=1, max_length=300)
+    identity_text: str = Field(min_length=1, max_length=500)
 
     @field_validator("name", "identity_text")
     @classmethod
@@ -36,11 +38,25 @@ class TrendIdentityTemplateCreateRequest(BaseModel):
             raise ValueError("value must not be blank")
         return value
 
+    @model_validator(mode="after")
+    def validate_directions(self) -> "TrendIdentityTemplateWriteRequest":
+        require_template_directions(self.identity_text)
+        return self
+
+
+class TrendIdentityTemplateCreateRequest(TrendIdentityTemplateWriteRequest):
+    pass
+
+
+class TrendIdentityTemplateUpdateRequest(TrendIdentityTemplateWriteRequest):
+    pass
+
 
 class TrendIdentityTemplateResponse(BaseModel):
     template_id: str
     name: str
     identity_text: str
+    directions: list[str]
     created_at: date
 
 
@@ -49,6 +65,7 @@ class TrendCarouselTemplateResponse(BaseModel):
 
     template_id: str
     name: str
+    directions: list[str]
 
 
 class TrendSettingsUpdateRequest(BaseModel):
@@ -352,8 +369,11 @@ class TrendCardStageStatusResponse(BaseModel):
 class TrendCardListItemResponse(BaseModel):
     item_id: int
     title: str
+    item_kind: Literal["news", "discussion"]
+    content_revision: int
     published_at: datetime | None
     fetched_at: datetime
+    last_activity_at: datetime | None
     status: TrendCardListStatus
     news_actor: str | None
     action: str | None
@@ -364,6 +384,7 @@ class TrendCardListItemResponse(BaseModel):
     error_message: str | None
     attempt_count: int
     card_updated_at: datetime | None
+    discussion_result: dict | None = None
 
 
 class TrendCardListResponse(BaseModel):
@@ -399,6 +420,7 @@ class TrendEvaluationOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     category: TrendCategory
+    direction: str = Field(min_length=1, max_length=50)
     topic: str | None = Field(default=None, max_length=300)
     trend_summary: str | None = None
     template_relevance_score: float = Field(ge=0, le=100)
@@ -418,6 +440,14 @@ class TrendEvaluationOutput(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("agent_review 不能为空")
+        return value
+
+    @field_validator("direction")
+    @classmethod
+    def validate_direction(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("direction 不能为空")
         return value
 
     @model_validator(mode="after")
@@ -500,6 +530,7 @@ class TrendResultResponse(BaseModel):
     template_relevance_score: float
     trend_rank_score: float
     category: TrendCategory
+    direction: str | None
     topic: str | None
     trend_summary: str | None
     agent_review: str
@@ -510,6 +541,8 @@ class TrendResultResponse(BaseModel):
 class TrendLatestResultsResponse(BaseModel):
     template_id: str
     run_id: str | None
+    run_direction_labels: list[str]
+    current_template_directions: list[str]
     window_start_date: date | None
     window_end_date: date | None
     trend_count: int | None
@@ -526,6 +559,7 @@ class TrendCarouselItemResponse(BaseModel):
     storyline_id: str
     category: TrendCategory
     category_label: str
+    direction: str | None
     topic: str
     trend_summary: str
     trend_rank_score: float
@@ -542,6 +576,7 @@ class TrendCarouselResponse(BaseModel):
     window_start_date: date | None
     window_end_date: date | None
     trend_count: int
+    directions: list[str]
     finished_at: datetime | None
     items: list[TrendCarouselItemResponse]
     message: str | None = None

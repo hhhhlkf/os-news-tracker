@@ -4,11 +4,13 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db, require_system_access
 from app.morning_crawl.service import (
     MorningCrawlRunNotFoundError,
+    MorningCrawlRetryNotAvailableError,
     config_to_response,
     get_morning_crawl_dashboard,
     get_run_detail,
     list_runs,
     resolve_default_run_id,
+    retry_today_failed_methods_async,
     run_to_summary,
     stop_morning_crawl,
     trigger_morning_crawl_async,
@@ -48,6 +50,17 @@ def run_system_morning_crawl_now(
     _access: dict = Depends(require_system_access),
 ) -> MorningCrawlRunSummary:
     return run_to_summary(trigger_morning_crawl_async(db, trigger_type="manual"))
+
+
+@router.post("/retry-today", status_code=202)
+def retry_system_morning_crawl_today(
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+) -> MorningCrawlRunSummary:
+    try:
+        return run_to_summary(retry_today_failed_methods_async(db))
+    except MorningCrawlRetryNotAvailableError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.post("/stop")

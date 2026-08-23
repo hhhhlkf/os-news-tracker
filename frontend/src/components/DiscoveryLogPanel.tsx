@@ -1,5 +1,5 @@
 // frontend/src/components/DiscoveryLogPanel.tsx
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { NewsRunLogEntry } from "../types";
 
 function ts(t: string) {
@@ -18,6 +18,12 @@ const stageLabels: Record<string, string> = {
   "审计": "审计",
   "存库": "存库",
   "抓方式": "抓方式",
+  prepare: "准备",
+  connector_sandbox: "沙箱执行",
+  output_filter: "结果筛选",
+  pipeline: "入库处理",
+  complete: "完成",
+  failed: "失败",
   run: "任务",
   fetch: "抓取",
   time_filter: "时间过滤",
@@ -28,30 +34,94 @@ const stageLabels: Record<string, string> = {
 };
 
 type LogView = "all" | "discovery" | "method";
+type TechnicalLogView = "email" | "github" | "organizer";
 
 function classifyLog(log: NewsRunLogEntry): LogView {
-  return log.stage === "抓方式" || (log.stage === "process" && typeof log.method_id === "number")
+  return typeof log.method_id === "number"
     ? "method"
     : "discovery";
 }
 
 function compactFields(log: NewsRunLogEntry) {
-  const skip = new Set(["id", "ts", "level", "stage", "source", "message"]);
+  const skip = new Set(["id", "ts", "level", "stage", "phase", "source", "message", "provider", "source_provider", "payload", "run_id", "sequence"]);
   return Object.entries(log)
     .filter(([key, value]) => !skip.has(key) && value !== null && value !== undefined && value !== "")
-    .map(([key, value]) => `${key}=${String(value)}`)
+    .map(([key, value]) => `${key}=${formatFieldValue(value)}`)
     .join(" · ");
 }
 
-export function DiscoveryLogPanel({ logs }: { logs: NewsRunLogEntry[] }) {
+function formatFieldValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function visibleErrorDetails(log: NewsRunLogEntry): Array<[string, unknown]> {
+  const payload = log.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
+  const record = payload as Record<string, unknown>;
+  return [
+    ["错误", record.error_summary],
+    ["容器错误", record.container_error_summary],
+    ["错误码", record.error_code],
+    ["阶段", record.error_stage],
+    ["容器退出码", record.returncode],
+    ["运行详情", record.stderr_summary],
+    ["失败检查", record.failures],
+  ].filter((entry): entry is [string, unknown] => entry[1] !== null && entry[1] !== undefined && entry[1] !== "");
+}
+
+function technicalLogView(log: NewsRunLogEntry): TechnicalLogView {
+  const provider = String(log.provider ?? log.source_provider ?? log.source ?? "").toLowerCase();
+  if (provider.includes("github")) return "github";
+  if (/整理|建树|归并|筛选|价值|发布/.test(log.stage)) return "organizer";
+  return "email";
+}
+
+type TechnicalLogLabels = Partial<Record<TechnicalLogView, string>>;
+
+export function DiscoveryLogPanel({
+  logs,
+  variant = "discovery",
+  technicalProviders = ["email", "github", "organizer"],
+  technicalLabels,
+}: {
+  logs: NewsRunLogEntry[];
+  variant?: "discovery" | "discussion" | "technical";
+  /** Restrict the provider tabs when embedding the shared technical log elsewhere. */
+  technicalProviders?: readonly TechnicalLogView[];
+  /** Override provider tab labels while retaining the shared log classification. */
+  technicalLabels?: TechnicalLogLabels;
+}) {
   const [expanded, setExpanded] = useState(true);
   const [view, setView] = useState<LogView>("all");
-  const recent = logs
-    .filter((log) => view === "all" || classifyLog(log) === view)
-    .slice(-80)
-    .reverse();
+  const [technicalView, setTechnicalView] = useState<TechnicalLogView | "all">("all");
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const followTailRef = useRef(true);
+  const [autoScrollPaused, setAutoScrollPaused] = useState(false);
+  const isTechnical = variant === "technical";
+  const recent = useMemo(() => logs
+    .filter((log) => isTechnical
+      ? technicalView === "all" || technicalLogView(log) === technicalView
+      : view === "all" || classifyLog(log) === view), [isTechnical, logs, technicalView, view]);
+  const rowHeight = 28;
+  useEffect(() => {
+    if (!followTailRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      const viewport = viewportRef.current;
+      if (viewport) viewport.scrollTop = viewport.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [recent.length]);
   const discoveryCount = logs.filter((log) => classifyLog(log) === "discovery").length;
   const methodCount = logs.filter((log) => classifyLog(log) === "method").length;
+  const isDiscussion = variant === "discussion";
+  const primaryLabel = isDiscussion ? "邮件探查" : "智能探查";
+  const label = (provider: TechnicalLogView) => technicalLabels?.[provider] ?? ({ email: "邮件探查", github: "GitHub 探查", organizer: "讨论整理" }[provider]);
+  const providerCount = (provider: TechnicalLogView) => logs.filter((log) => technicalLogView(log) === provider).length;
   return (
     <div
       className="scrollbar-on-dark"
@@ -60,22 +130,32 @@ export function DiscoveryLogPanel({ logs }: { logs: NewsRunLogEntry[] }) {
       display: "flex", flexDirection: "column", minHeight: 280, width: "100%", minWidth: 0, height: "100%" }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
         <div style={{ display: "grid", gap: 8 }}>
-          <span style={{ color: "#f8fafc", fontWeight: 700, fontSize: 13 }}>运行日志</span>
+          <span style={{ color: "#f8fafc", fontWeight: 700, fontSize: 13 }}>{isTechnical ? "技术探查运行日志" : "运行日志"}</span>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button type="button" onClick={() => setView("all")} style={viewButton(view === "all")}>
+            <button type="button" onClick={() => isTechnical ? setTechnicalView("all") : setView("all")} style={viewButton(isTechnical ? technicalView === "all" : view === "all")}>
               全部
             </button>
-            <button type="button" onClick={() => setView("discovery")} style={viewButton(view === "discovery")}>
-              智能探查 {discoveryCount > 0 ? discoveryCount : ""}
-            </button>
-            <button type="button" onClick={() => setView("method")} style={viewButton(view === "method")}>
+            {isTechnical ? technicalProviders.map((provider) => <button key={provider} type="button" onClick={() => setTechnicalView(provider)} style={viewButton(technicalView === provider)}>
+              {label(provider)} {providerCount(provider) > 0 ? providerCount(provider) : ""}
+            </button>) : <>
+              <button type="button" onClick={() => setView("discovery")} style={viewButton(view === "discovery")}>
+                {primaryLabel} {discoveryCount > 0 ? discoveryCount : ""}
+              </button>
+              {!isDiscussion && <button type="button" onClick={() => setView("method")} style={viewButton(view === "method")}>
               抓方式 {methodCount > 0 ? methodCount : ""}
-            </button>
+              </button>}
+            </>}
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {autoScrollPaused && <button type="button" onClick={() => {
+            followTailRef.current = true;
+            setAutoScrollPaused(false);
+            const viewport = viewportRef.current;
+            if (viewport) viewport.scrollTop = viewport.scrollHeight;
+          }} style={viewButton(true)}>回到最新</button>}
           <span style={{ color: "#98a2b3", fontSize: 11 }}>{logs.length} 条</span>
-          <button
+          {!isTechnical && <button
             type="button"
             onClick={() => setExpanded((value) => !value)}
             style={{
@@ -89,27 +169,58 @@ export function DiscoveryLogPanel({ logs }: { logs: NewsRunLogEntry[] }) {
             }}
           >
             {expanded ? "收起" : "展开"}
-          </button>
+          </button>}
         </div>
       </div>
-      <div style={{ overflowY: "auto", flex: 1, maxHeight: expanded ? undefined : "4vh" }}>
+      <div
+        ref={viewportRef}
+        onScroll={(event) => {
+          const viewport = event.currentTarget;
+          const atTail = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < rowHeight * 2;
+          followTailRef.current = atTail;
+          setAutoScrollPaused(!atTail);
+        }}
+        style={{ overflowY: "auto", flex: 1, maxHeight: expanded ? undefined : "4vh", position: "relative" }}
+      >
         {recent.length === 0 ? (
           <div style={{ color: "#98a2b3" }}>
-            {view === "method"
+            {isTechnical
+              ? technicalView === "github"
+                ? "暂无 GitHub 探查日志。GitHub 同步接入后，Issue 与 Discussion 的同步进展会显示在这里。"
+                : technicalView === "organizer"
+                  ? "暂无讨论整理日志。候选通过筛选后，建树、归并和条目修订进展会显示在这里。"
+                  : technicalView === "email"
+                    ? "暂无邮件探查日志。启动收取后，这里会显示邮箱扫描与候选入库进展。"
+                    : "暂无技术探查日志。邮件、GitHub 与讨论整理会共用这一运行日志。"
+              : view === "method"
               ? "暂无抓方式日志。开始批量抓取后，这里会显示 DSL 执行、限制应用和入库结果。"
               : view === "discovery"
-                ? "暂无智能探查日志。开始探查后，这里会显示各节点进展。"
-                : "暂无运行日志。智能探查和爬取方式相关日志都会显示在这里。"}
+                ? isDiscussion
+                  ? "暂无邮件探查日志。启动收取后，这里会显示邮箱扫描、建树和讨论整理进展。"
+                  : "暂无智能探查日志。开始探查后，这里会显示各节点进展。"
+                : isDiscussion
+                  ? "暂无运行日志。启动邮件探查后，这里会显示完整处理过程。"
+                  : "暂无运行日志。智能探查和爬取方式相关日志都会显示在这里。"}
           </div>
-        ) : recent.map((l) => (
-          <div key={l.id} style={{ color: l.level === "error" ? "#fda29b" : l.level === "warning" ? "#fedf89" : "#d0d5dd" }}>
-            <span style={{ color: "#7cd4fd" }}>{ts(l.ts)}</span>{" "}
-            <span style={{ color: "#a6f4c5" }}>[{stageLabels[l.stage] ?? l.stage}]</span>{" "}
-            {l.source && <span style={{ color: "#fdb022" }}>{l.source}</span>}{" "}
-            <span>{l.message}</span>
-            {compactFields(l) && <span style={{ color: "#98a2b3" }}> · {compactFields(l)}</span>}
-          </div>
-        ))}
+        ) : <div>
+          {recent.map((l) => {
+            const errorDetails = visibleErrorDetails(l);
+            return <div key={l.id} style={{ minHeight: rowHeight, padding: "2px 0", whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "break-word", contentVisibility: "auto", color: l.level === "error" ? "#fda29b" : l.level === "warning" ? "#fedf89" : "#d0d5dd" }}>
+              <div>
+                <span style={{ color: "#7cd4fd" }}>{ts(l.ts)}</span>{" "}
+                <span style={{ color: "#a6f4c5" }}>[{stageLabels[String(l.phase ?? l.stage)] ?? String(l.phase ?? l.stage)}]</span>{" "}
+                {l.source && <span style={{ color: "#fdb022" }}>{l.source}</span>}{" "}
+                <span>{l.message}</span>
+                {compactFields(l) && <span style={{ color: "#98a2b3" }}> · {compactFields(l)}</span>}
+              </div>
+              {errorDetails.length > 0 && <div style={{ margin: "4px 0 7px 4px", padding: "7px 9px", borderLeft: "3px solid #f04438", borderRadius: 4, background: "#1d2939", color: "#fecdca" }}>
+                {errorDetails.map(([label, value]) => <div key={label}>
+                  <strong>{label}：</strong>{formatFieldValue(value)}
+                </div>)}
+              </div>}
+            </div>;
+          })}
+        </div>}
       </div>
     </div>
   );

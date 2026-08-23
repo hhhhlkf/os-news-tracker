@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import get_db, require_system_access
 from app.mail.service import (
     MailScheduleNotFoundError,
     MailService,
@@ -11,6 +11,7 @@ from app.mail.service import (
     schedule_to_response,
     template_to_response,
 )
+from app.trends.service import TrendIdentityTemplateNotFoundError
 from app.schemas import (
     MailDeliveryLog,
     MailImmediatePreviewRequest,
@@ -25,6 +26,7 @@ from app.schemas import (
     MailTemplateCreateRequest,
     MailTemplateResponse,
     MailTemplateUpdateRequest,
+    MailTrendPreviewRequest,
 )
 
 router = APIRouter(prefix="/mail", tags=["mail"])
@@ -56,9 +58,11 @@ def create_mail_template(
     request: MailTemplateCreateRequest,
     db: Session = Depends(get_db),
 ) -> MailTemplateResponse:
-    service = MailService(db)
-    template = service.create_template(request)
-    return template_to_response(template)
+    try:
+        template = MailService(db).create_template(request)
+        return template_to_response(template)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/templates/{template_id}")
@@ -104,6 +108,10 @@ def preview_mail_template(
         return service.preview_template(template_id, provider=provider)
     except MailTemplateNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except TrendIdentityTemplateNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/templates/{template_id}/send")
@@ -118,6 +126,10 @@ def send_mail_template(
         return service.send_template_once(template_id, provider=provider)
     except MailTemplateNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except TrendIdentityTemplateNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/templates/{template_id}/schedules")
@@ -203,6 +215,10 @@ def send_now_mail_schedule(schedule_id: int, db: Session = Depends(get_db)) -> M
         return service.send_schedule_now(schedule_id)
     except MailScheduleNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except TrendIdentityTemplateNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/schedules/{schedule_id}/logs")
@@ -235,3 +251,31 @@ def send_mail_immediate(
 ) -> MailImmediateSendResponse:
     service = MailService(db)
     return service.send_immediate(request)
+
+
+@router.post("/trends/preview")
+def preview_mail_trend_distribution(
+    request: MailTrendPreviewRequest,
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+) -> MailPreviewResponse:
+    try:
+        return MailService(db).preview_trend_distribution(request)
+    except TrendIdentityTemplateNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/trends/send")
+def send_mail_trend_distribution(
+    request: MailTrendPreviewRequest,
+    db: Session = Depends(get_db),
+    _access: dict = Depends(require_system_access),
+) -> MailImmediateSendResponse:
+    try:
+        return MailService(db).send_trend_distribution(request)
+    except TrendIdentityTemplateNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc

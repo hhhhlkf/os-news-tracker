@@ -21,10 +21,18 @@ services:
       context: ./backend
       dockerfile: Dockerfile.dev
     working_dir: /app
-    command: uvicorn app.entry:app --host 0.0.0.0 --port 8000 --reload
+    command: sh -c 'chmod 700 /var/lib/os-news-tracker/discovery-attestation && exec uvicorn app.entry:app --host 0.0.0.0 --port 8000 --reload'
     volumes:
       - ./backend:/app
       - wechat_browser_data_dev:/var/lib/os-news-tracker/wechat-browser
+      - discovery_attestation_keys_dev:/var/lib/os-news-tracker/discovery-attestation
+      - discovery_connectors_dev:/var/lib/os-news-tracker/connectors
+      - ./backend/connectors/sites:/var/lib/os-news-tracker/connectors/sites
+      - discovery_checkpoints_dev:/var/lib/os-news-tracker/discovery-checkpoints
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/local/bin/runsc:/usr/local/bin/runsc:ro
+      - /usr/local/bin/gvisor-bin:/usr/local/bin/gvisor-bin:ro
+      - /etc/docker/daemon.json:/etc/docker/daemon.json:ro
     env_file: .env
     environment:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
@@ -80,10 +88,13 @@ services:
     depends_on:
       - backend
     ports:
-      - "5173:5173"
+      - "80:5173"
 
 volumes:
   pgdata_dev:
   frontend_node_modules:
   wechat_browser_data_dev:
+  discovery_attestation_keys_dev:
+  discovery_connectors_dev:
+  discovery_checkpoints_dev:
   embedding_model_cache_dev:

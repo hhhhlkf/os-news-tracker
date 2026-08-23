@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchItemDetail, ApiError } from "../api/client";
 import type { ItemDetail as ItemDetailRecord } from "../types";
+import { fetchDiscussionDetail } from "../discussions/api";
+import { DiscussionTopology } from "./DiscussionTopology";
 import { ImportanceBadge } from "./ImportanceBadge";
 import { InfoTypeBadge } from "./InfoTypeBadge";
 import { HotspotTags, SourceCta, TechHighlightsList } from "./ItemMetaBlocks";
@@ -9,6 +11,9 @@ function ItemDetailBody({ data }: { data: ItemDetailRecord }) {
   const dedupedSourceLinks = Array.from(
     new Map(data.source_links.map((s) => [`${s.source_id}:${s.url}`, s])).values(),
   );
+  const isDiscussion = data.item_kind === "discussion";
+  const discussionQuery = useQuery({ queryKey: ["discussion-detail", data.id], queryFn: () => fetchDiscussionDetail(data.id), enabled: isDiscussion, retry: false });
+  const secondaryTitle = isDiscussion ? data.original_title : data.title;
   return (
     <div style={{ padding: 20 }}>
       <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
@@ -20,7 +25,11 @@ function ItemDetailBody({ data }: { data: ItemDetailRecord }) {
       {data.title_tldr ? (
         <>
           <h2 style={{ margin: "4px 0 4px" }}>{data.title_tldr}</h2>
-          <div style={{ fontSize: 13, color: "#667085", marginBottom: 12 }}>{data.title}</div>
+          {secondaryTitle && secondaryTitle !== data.title_tldr && (
+            <div style={{ fontSize: 13, color: "#667085", marginBottom: 12 }}>
+              {isDiscussion ? `原始讨论主题：${secondaryTitle}` : secondaryTitle}
+            </div>
+          )}
         </>
       ) : (
         <h2 style={{ margin: "4px 0 12px" }}>{data.title}</h2>
@@ -39,6 +48,8 @@ function ItemDetailBody({ data }: { data: ItemDetailRecord }) {
           <TechHighlightsList items={data.key_points} />
         </section>
       )}
+
+      {isDiscussion && discussionQuery.data && <DiscussionTopology discussion={discussionQuery.data} />}
 
       {(data.sub_tags.length > 0 || dedupedSourceLinks.length > 0) && (
         <section
