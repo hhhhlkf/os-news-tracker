@@ -57,7 +57,7 @@ export function MorningCrawlModal(props: { open: boolean; onClose: () => void })
         >
           <div>
             <div style={{ fontSize: 24, fontWeight: 800, color: "#101828" }}>系统定时抓取</div>
-            <div style={{ fontSize: 13, color: "#667085", marginTop: 6 }}>按北京时间定时运行全部启用中的爬取方式，查看今日状态与执行明细。</div>
+            <div style={{ fontSize: 13, color: "#667085", marginTop: 6 }}>定时运行启用爬取方式；同时展示由技术讨论定时任务处理的邮件与 GitHub 探查状态。</div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <button

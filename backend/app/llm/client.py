@@ -2,6 +2,7 @@ import hashlib
 import json as jsonlib
 import logging
 import time
+from threading import Event
 
 from app.config import get_settings
 
@@ -38,12 +39,38 @@ class LlmClient:
         temperature: float = 0.2,
         response_format: dict | None = None,
         timeout: float | None = None,
+        _cancel_event: Event | None = None,
     ) -> str:
-        key = self._key(prompt, temperature=temperature, response_format=response_format)
+        return self.complete_messages(
+            [{"role": "user", "content": prompt}],
+            temperature=temperature,
+            response_format=response_format,
+            timeout=timeout,
+            _cancel_event=_cancel_event,
+        )
+
+    def complete_messages(
+        self,
+        messages: list[dict],
+        *,
+        temperature: float = 0.2,
+        response_format: dict | None = None,
+        timeout: float | None = None,
+        _cancel_event: Event | None = None,
+    ) -> str:
+        """Complete one stateful chat turn while callers own conversation history."""
+        self._raise_if_cancelled(_cancel_event)
+        normalized_messages = [
+            {"role": str(message["role"]), "content": str(message["content"])}
+            for message in messages
+        ]
+        conversation = jsonlib.dumps(normalized_messages, ensure_ascii=False, separators=(",", ":"))
+        key = self._key(conversation, temperature=temperature, response_format=response_format)
         if key in self._cache:
             content = self._cache[key]
+            self._raise_if_cancelled(_cancel_event)
             self._record_usage(
-                prompt=prompt,
+                prompt=conversation,
                 content=content,
                 usage={},
                 model=self._model,
@@ -52,36 +79,115 @@ class LlmClient:
         payload = {
             "model": self._model,
             "temperature": temperature,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": normalized_messages,
         }
         if response_format is not None:
             payload["response_format"] = response_format
+        deadline = time.monotonic() + timeout if timeout is not None else None
         try:
-            content = self._retry_post_complete(payload, timeout=timeout)
+            content = self._retry_post_complete(payload, deadline=deadline, cancel_event=_cancel_event)
         except Exception as exc:
             if response_format is not None and self._should_retry_without_response_format(exc):
                 retry_payload = dict(payload)
                 retry_payload.pop("response_format", None)
-                content = self._retry_post_complete(retry_payload, timeout=timeout)
+                content = self._retry_post_complete(retry_payload, deadline=deadline, cancel_event=_cancel_event)
             else:
                 raise
+        self._raise_if_cancelled(_cancel_event)
         self._cache[key] = content
         return content
 
-    def _retry_post_complete(self, payload: dict, *, timeout: float | None = None) -> str:
+    def complete_tool_messages(
+        self,
+        messages: list[dict],
+        *,
+        tools: list[dict],
+        temperature: float = 0.1,
+        timeout: float | None = None,
+        _cancel_event: Event | None = None,
+    ) -> dict:
+        """Return one native assistant message containing a function tool call."""
+        self._raise_if_cancelled(_cancel_event)
+        payload = {
+            "model": self._model,
+            "temperature": temperature,
+            "messages": messages,
+            "tools": tools,
+        }
+        deadline = time.monotonic() + timeout if timeout is not None else None
         last_exc: Exception | None = None
         for attempt in range(4):
+            self._raise_if_cancelled(_cancel_event)
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                raise TimeoutError("LLM tool call exceeded its total deadline") from last_exc
             try:
-                return self._post_complete(payload, timeout=timeout)
+                return self._post_tool_complete(
+                    payload,
+                    timeout=remaining,
+                    cancel_event=_cancel_event,
+                )
             except Exception as exc:
                 last_exc = exc
                 if not self._is_retryable_transient_error(exc) or attempt == 3:
                     raise
-                time.sleep(1.0 * (attempt + 1))
+                delay = min(float(attempt + 1), max(0.0, remaining or float(attempt + 1)))
+                if delay <= 0:
+                    raise TimeoutError("LLM tool call exceeded its total deadline") from exc
+                time.sleep(delay)
         assert last_exc is not None
         raise last_exc
 
-    def _post_complete(self, payload: dict, *, timeout: float | None = None) -> str:
+    def _retry_post_complete(
+        self,
+        payload: dict,
+        *,
+        timeout: float | None = None,
+        deadline: float | None = None,
+        cancel_event: Event | None = None,
+    ) -> str:
+        if deadline is None and timeout is not None:
+            deadline = time.monotonic() + timeout
+        last_exc: Exception | None = None
+        for attempt in range(4):
+            self._raise_if_cancelled(cancel_event)
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                raise TimeoutError("LLM call exceeded its total deadline") from last_exc
+            try:
+                content = self._post_complete(payload, timeout=remaining, cancel_event=cancel_event)
+                self._raise_if_cancelled(cancel_event)
+                return content
+            except Exception as exc:
+                last_exc = exc
+                if not self._is_retryable_transient_error(exc) or attempt == 3:
+                    raise
+                delay = 1.0 * (attempt + 1)
+                if deadline is not None:
+                    delay = min(delay, max(0.0, deadline - time.monotonic()))
+                if delay <= 0:
+                    raise TimeoutError("LLM call exceeded its total deadline") from exc
+                time.sleep(delay)
+        assert last_exc is not None
+        raise last_exc
+
+    @staticmethod
+    def _raise_if_cancelled(cancel_event: Event | None = None) -> None:
+        from app.discovery.cancel import is_cancelled
+
+        if (cancel_event is not None and cancel_event.is_set()) or is_cancelled():
+            raise RuntimeError("LLM call cancelled")
+
+    def cancel_inflight(self) -> None:
+        """Cancellation is per-call; never close the shared transport."""
+
+    def _post_complete(
+        self,
+        payload: dict,
+        *,
+        timeout: float | None = None,
+        cancel_event: Event | None = None,
+    ) -> str:
         import httpx
 
         try:
@@ -105,8 +211,13 @@ class LlmClient:
         content = response_payload["choices"][0]["message"]["content"]
         prompt = ""
         messages = payload.get("messages") or []
-        if messages and isinstance(messages[0], dict):
-            prompt = str(messages[0].get("content") or "")
+        if messages:
+            prompt = "\n".join(
+                str(message.get("content") or "")
+                for message in messages
+                if isinstance(message, dict)
+            )
+        self._raise_if_cancelled(cancel_event)
         self._record_usage(
             prompt=prompt,
             content=content,
@@ -114,6 +225,76 @@ class LlmClient:
             model=response_payload.get("model") or payload.get("model"),
         )
         return content
+
+    def _post_tool_complete(
+        self,
+        payload: dict,
+        *,
+        timeout: float | None = None,
+        cancel_event: Event | None = None,
+    ) -> dict:
+        import httpx
+
+        try:
+            request_kwargs = {
+                "headers": {"Authorization": f"Bearer {self._settings.llm_api_key}"},
+                "json": payload,
+            }
+            if timeout is not None:
+                request_kwargs["timeout"] = timeout
+            response = self._http.post(
+                f"{self._settings.llm_base_url}/chat/completions",
+                **request_kwargs,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = self._response_error_text(getattr(exc, "response", None))
+            if detail:
+                raise RuntimeError(f"{exc} · response_body={detail}") from exc
+            raise
+        response_payload = response.json()
+        raw_message = response_payload["choices"][0]["message"]
+        if not isinstance(raw_message, dict):
+            raise ValueError("LLM tool response message must be an object")
+        raw_calls = raw_message.get("tool_calls") or []
+        tool_calls: list[dict] = []
+        if isinstance(raw_calls, list):
+            for raw_call in raw_calls:
+                function = raw_call.get("function") if isinstance(raw_call, dict) else None
+                if not isinstance(function, dict):
+                    continue
+                tool_calls.append({
+                    "id": str(raw_call.get("id") or ""),
+                    "type": "function",
+                    "function": {
+                        "name": str(function.get("name") or ""),
+                        "arguments": str(function.get("arguments") or "{}"),
+                    },
+                })
+        # Never retain gateway-specific reasoning fields in the Agent conversation.
+        message = {
+            "role": "assistant",
+            "content": str(raw_message.get("content") or ""),
+            "tool_calls": tool_calls,
+        }
+        self._raise_if_cancelled(cancel_event)
+        prompt = "\n".join(
+            str(item.get("content") or "")
+            for item in payload.get("messages") or []
+            if isinstance(item, dict)
+        )
+        completion = jsonlib.dumps(
+            message.get("tool_calls") or message.get("content") or "",
+            ensure_ascii=False,
+            default=str,
+        )
+        self._record_usage(
+            prompt=prompt,
+            content=completion,
+            usage=response_payload.get("usage") or {},
+            model=response_payload.get("model") or payload.get("model"),
+        )
+        return message
 
     def _record_usage(
         self,

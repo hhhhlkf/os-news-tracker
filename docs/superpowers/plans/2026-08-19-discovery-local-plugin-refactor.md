@@ -1,0 +1,468 @@
+# Discovery 单 Agent Loop 与本地插件重构计划
+
+## 1. 目标与范围
+
+重构 OS News Tracker 最核心的智能探查能力：Agent 不再受固定抓取 Tool 和 DSL 表达能力限制，而是在受控沙箱中自主探查网站、编写 Python 采集器、执行验证并修复，最终沉淀为可审核、可版本化、可正式运行的本地插件制品。
+
+本轮范围：
+
+- **普通网站**：每个网站生成一个独立采集器制品。
+- **微信公众号**：使用一个共享的无登录搜狗采集器，不为每个公众号复制 `crawler.py`。
+- **内部论坛**：仅保留现有接口和分流位置，不参与本轮实现。
+- **`agent_crawl`**：已经废弃，不修改、不复用，也不作为本方案参考架构。
+
+正式抓取继续复用现有新闻处理链路：
+
+```text
+插件统一 JSON
+→ CrawlOutputIngester
+→ normalize
+→ relevance-filter
+→ dedup
+→ enrich
+→ store
+```
+
+正式**插件执行阶段**不调用 Agent、RAG 或 LLM；插件结果进入现有 Pipeline 后，Enricher 是否调用 LLM 保持当前行为不变。
+
+## 2. 核心架构决策
+
+采用一个项目内自建的 **Single Agent Loop Engine**，不采用 Agent Graph、Graph Engineering 或 LangGraph 状态图。
+
+```text
+主程序 OS News Tracker
+├── Discovery Loop Engine（LLM、状态、RAG、调度）
+├── Sandbox Runtime（Docker + gVisor/runsc）
+├── Connector Registry（插件版本与 Manifest）
+├── Crawl Runtime（固定镜像中的通用 Runner）
+└── 现有审核、抓取、Ingester 与新闻 Pipeline
+```
+
+Loop Engine 位于主程序中。LLM 调用、RAG 检索、状态持久化和审核编排都在主程序完成；Agent 的 Bash、浏览器和文件操作只能发生在 gVisor 容器内。
+
+这不是简单 ReAct：循环边界、阶段、状态、轮次、时间预算、工具权限、确定性验收、检查点和发布门槛全部由程序控制，模型只负责需要判断与编写代码的部分。
+
+## 3. Agent 阶段与职责
+
+整个流程只有一个 Agent，各阶段由 Loop Engine 驱动，不拆成多个 Agent：
+
+| 阶段 | 责任主体 | 职责 |
+|---|---|---|
+| Context | Loop Engine + Agent | 识别网站/微信类型，读取目标、约束和 RAG 经验 |
+| Explore | Agent | 使用 HTTP、浏览器和 Bash 探查列表、分页、详情页、字段与时间格式 |
+| Build | Agent | 生成或修改 `crawler.py`、`manifest.json`，声明允许域名和 Runtime 版本 |
+| Execute | Sandbox Runtime | 在 gVisor 中真实执行插件，不接受 Agent 自报的执行结果 |
+| Evaluate | 确定性校验器 | 校验 JSON 契约、数量、字段、正文、去重、URL 可访问性和分页 |
+| Repair | Agent | 只根据真实错误、工具证据和校验结果修改插件 |
+| Package | Loop Engine | 固化制品版本、校验和、依赖和审计证据，生成待审核方式 |
+| Publish | 现有审核流程 | 人工批准后启用，未批准制品不得参加正式抓取 |
+
+硬限制：
+
+- 单次 Discovery 最多 5 分钟。
+- 最多 5 轮“编写/执行/修复”。
+- 排队时间不计入 5 分钟，从获得沙箱容量后开始计时。
+- 超限后保留最近检查点和诊断，不继续无限尝试。
+
+## 4. RAG：仅用于探查经验复用
+
+RAG 只服务 Discovery，不进入正式抓取。
+
+允许进入经验库的内容：
+
+- 已审核通过的插件、网站技术特征和适用模式。
+- 已确认的失败原因、修复办法和适用条件。
+- 分页、时间解析、详情补抓、API/HTML/嵌入 JSON 等可复用模式。
+
+禁止进入经验库的内容：
+
+- 未验证的插件草稿和模型猜测。
+- 未确认的失败结论。
+- 网页新闻正文。
+- Cookie、Token、Authorization、请求头等敏感数据。
+
+首版采用轻量混合检索：
+
+```text
+域名与技术特征过滤
+→ 关键词检索
+→ Embedding 相似度
+→ Top-K 经验交给 Agent
+```
+
+复用现有独立 Embedding Worker 和统一 Provider 能力，新增 Discovery 自己的经验表。首版数据规模较小，向量以 JSON 保存并在应用内计算相似度，不新增 pgvector；达到数万条经验后再评估迁移。
+
+## 5. 插件制品
+
+### 5.1 普通网站
+
+每个网站一个版本化制品：
+
+```text
+backend/connectors/sites/<connector_key>/v<version>/
+├── manifest.json
+└── crawler.py
+```
+
+示例 Manifest：
+
+```json
+{
+  "recipe_type": "python_plugin",
+  "connector_key": "kernel_org",
+  "version": 1,
+  "entry": "https://www.kernel.org/",
+  "entrypoint": "crawler:crawl",
+  "runtime_version": "crawler-runtime:1",
+  "checksum": "...",
+  "allowed_domains": ["kernel.org", "www.kernel.org"]
+}
+```
+
+### 5.2 微信公众号
+
+微信公众号采用一个共享制品：
+
+```text
+backend/connectors/shared/wechat_sogou/v<version>/
+├── manifest.json
+└── crawler.py
+```
+
+每个公众号的 `CrawlMethod` 只保存公众号名称、关键词、分页等配置，统一调用共享 `crawler.py`：
+
+```text
+公众号名称/关键词
+→ 搜狗微信公开搜索
+→ 获取公开文章链接
+→ 抓取公开正文
+→ 返回统一 JSON
+```
+
+新流程不需要微信 Cookie/Token。现有微信后台登录历史链路标记为废弃，接口和代码暂时保留，但不参与新探查、正式抓取和依赖注入；未来需要时另行评估启用。
+
+### 5.3 保存与签名
+
+- `CrawlMethod`、`Source`、`CrawlMethodDomain` 和现有审核字段继续复用。
+- `crawl_methods.dsl_recipe` 在迁移期继续作为执行入口，保存规范化插件 Manifest，不再保存新 DSL。
+- `signature` 根据规范化 Manifest 与插件内容校验和生成。
+- 数据库保存执行入口和元数据，版本目录保存代码实体。
+- 路径越界、文件缺失、入口不匹配或校验和不一致时直接拒绝执行。
+- 新版本写入新目录，不覆盖旧版本。
+
+## 6. 插件执行协议
+
+插件入口：
+
+```python
+async def crawl(request, context) -> dict:
+    ...
+```
+
+插件返回结构必须与当前 `run_method()` 一致：
+
+```json
+{
+  "items": [
+    {
+      "title": "...",
+      "url": "https://...",
+      "published_at": "2026-08-21T08:00:00Z",
+      "summary": "...",
+      "content": "..."
+    }
+  ],
+  "stats": {
+    "discovered_count": 1
+  }
+}
+```
+
+容器进程协议：
+
+- stdin：主程序传入抓取请求 JSON。
+- stdout：只能输出一份最终结果 JSON。
+- stderr：运行日志，实时转成结构化事件。
+- 退出码：区分成功、插件错误、超时、取消和 Runtime 错误。
+
+正式执行流程：
+
+```text
+手动/定时任务
+→ 现有 FetchJob 控制层
+→ 统一插件执行入口
+→ 创建 gVisor 临时容器
+→ 只读挂载已审核插件目录
+→ 通用 crawler_runner 加载 crawler:crawl
+→ 捕获 stdout JSON 与 stderr 日志
+→ 校验 items + stats
+→ 应用现有抓取限制
+→ CrawlOutputIngester + Pipeline
+→ 销毁容器
+```
+
+现有 `run_killable_fetch()` 继续负责运行记录、取消和结果回传，但不再在子进程中直接解释新 DSL，而是调用 `SandboxRuntime`。取消时按 `run_id` 终止对应容器。
+
+手动抓取与 `morning_crawl` 中重复的“执行、限制、部分成功、入库”逻辑必须收敛到同一个内部入口。
+
+## 7. gVisor 沙箱与资源调度
+
+使用本机 Docker + Google gVisor `runsc`。当前服务器没有 `/dev/kvm`，使用 `systrap` 平台；本轮不引入 Cube 或独立 KVM 节点。
+
+Discovery 与正式抓取使用同一个版本化 Runtime 镜像。每个任务创建临时容器，任务结束立即销毁，不为每个网站常驻进程。
+
+全局规则：
+
+- 最多同时运行 4 个 gVisor 容器。
+- 保留现有 Discovery 最多 3 个并发的限制和用户日志隔离。
+- 容量满时进入可取消等待队列，不直接失败。
+- 优先级：正式定时抓取 > 手动抓取 > Discovery > 自动修复。
+- 容器设置 CPU、内存、进程数和墙钟超时限制。
+
+Agent 权限：
+
+- Bash、浏览器和文件工具只能作用于容器内临时 `/workspace`。
+- 不挂载项目源码、数据库、Docker Socket、宿主机目录或主程序密钥。
+- 插件正式运行时只读挂载自己的制品目录。
+- `context` 不提供数据库 Session，插件只能返回候选条目。
+
+网络策略：
+
+- 仅允许访问 Manifest 声明的目标域名、必要 API/CDN 域名。
+- 始终禁止宿主机、数据库、内网 IP、环回地址、保留地址和云元数据地址。
+- 重定向到未声明域名时拒绝访问，并把候选域名交给 Agent 更新 Manifest 后重新审核。
+- 域名白名单由受控出口代理/网络策略执行，不能只依赖插件自觉检查。
+
+## 8. Runtime 依赖管理
+
+固定镜像可以更新，但必须版本化、不可原地覆盖：
+
+```text
+Agent 在 Discovery 沙箱试装“包==固定版本”
+→ 记录依赖和用途
+→ 更新 Runtime 锁定依赖
+→ 构建 crawler-runtime:vNext
+→ 在新镜像重新执行与验收插件
+→ Manifest 固定 runtime_version
+→ 审核发布
+```
+
+- Discovery 试装依赖也必须指定固定版本。
+- 正式抓取不访问 PyPI、不临时安装依赖。
+- 旧插件继续引用旧 Runtime；升级前必须重新验证。
+- Agent、构建器和审核阶段的职责必须分离，Agent 无权自行发布 Runtime。
+
+## 9. 确定性验收标准
+
+Agent 生成的代码不能以“运行未报错”作为通过条件。普通网站和微信采集器至少满足：
+
+- 至少返回 5 条新闻；低频站点允许人工例外审核。
+- 标题有效率 100%。
+- URL 为绝对地址且有效率 100%。
+- `published_at` 可解析率 100%。
+- 每条均有 `content` 或 `summary`。
+- 至少 80% 条目的正文/摘要长度达到 200 字符。
+- URL 去重率至少 90%，抽样 URL 可访问。
+- 声明支持分页时，下一页必须产生新条目。
+- 独立试运行连续成功 2 次。
+- 通过现有方法审计后，再通过现有质量审计。
+
+验收失败必须把具体字段、样本、异常和工具输出反馈给 Repair 阶段，禁止只给“质量不佳”等模糊结论。
+
+## 10. 检查点、恢复与自动修复
+
+每轮结束保存检查点：
+
+- 当前阶段和轮次。
+- 插件草稿与 Manifest 路径。
+- RAG 引用、工具证据和结构化处理摘要。
+- 执行结果、校验结果、代码 diff 和错误。
+- 已用时间、Token 和 Runtime 版本。
+
+后端重启后：
+
+- 终止或清理遗留容器。
+- 将未完成运行标记为 `interrupted`。
+- 用户可从最近检查点恢复，恢复时创建新容器，不尝试连接旧进程。
+
+正式插件连续 3 次抓取失败后：
+
+1. 自动创建并启动一次修复任务。
+2. 同样遵守 5 分钟、5 轮和沙箱限制。
+3. 成功时生成新版本并进入待审核。
+4. 失败时保存诊断，停止自动重试。
+5. 任何修复版本都不得自动替换生产版本。
+
+## 11. 数据库变更
+
+原计划“首版不改表结构”取消，增加最小必要迁移：
+
+### 扩展 `site_discovery_runs`
+
+- `trigger_type`：manual / repair / resume。
+- `phase`：当前 Loop 阶段。
+- `round`：当前轮次。
+- `checkpoint_path`：最近检查点目录。
+- `repair_method_id`：自动修复来源方法。
+- `runtime_version`：本次使用的 Runtime。
+- 支持 `queued`、`interrupted`、`repairing` 等状态。
+
+### 新增 `discovery_experiences`
+
+保存已审核经验、网站特征、失败修复摘要、Embedding、Embedding 版本和来源方法。
+
+### 新增 `discovery_run_events`
+
+按 `run_id + sequence` 保存阶段变化、行动摘要、工具调用、结果摘要、代码 diff、校验结果和错误，用于 SSE 重连和运行回放。
+
+模型逐 Token 增量、重复心跳和临时 stdout 碎片不落库。敏感字段必须在写日志和写库前统一脱敏。
+
+`CrawlMethod` 继续复用，Runtime 版本保存在 Manifest，不额外建立 Runtime 表。
+
+## 12. API 兼容边界
+
+“保留接口”只表示保持外部 HTTP 契约，不表示保留旧探查或旧查询方法。
+
+保留：
+
+- `POST /discovery/run`
+- `POST /discovery/multi-run`
+- `GET /discovery/runs`
+- `GET /discovery/runs/{run_id}`
+- `POST /discovery/runs/{run_id}/cancel`
+- 方法列表、详情、审核、删除、启用/禁用和提醒接口
+- `POST /discovery/methods/{id}/fetch` 及取消接口
+
+普通网站和微信请求进入新的 Loop Engine；内部论坛仍停留在保留分流；旧 Explorer、Validator、DSL Writer、Auditor 及网站/微信 DSL 解释逻辑不再作为新接口的内部实现。
+
+兼容新增：
+
+- `POST /discovery/runs/{run_id}/resume`
+- `GET /discovery/runs/{run_id}/events`：由前端通过 `fetch` 携带认证 Header 读取的 SSE 流
+- 运行查询增加 `phase`、`round`、`queue_position`、`runtime_version` 等可选字段
+- 状态增加 `queued`、`interrupted`、`repairing`
+
+原有字段不删除、不改名。正式抓取继续返回当前的 `run_id`、`discovered_count`、`stored_count`、`items`、`stats` 和 `message`。
+
+## 13. SSE 日志与可审计 Agent 过程
+
+当前 `/run-logs` 每 1.5 秒轮询会造成日志成批出现和前端跳动。Discovery 改用 SSE：后端产生事件后立即推送，连接断开后通过事件序号续传。
+
+允许展示：
+
+- 当前目标和阶段。
+- Agent 的行动与修改理由摘要。
+- 工具调用参数的脱敏摘要、开始/结束和观察结果。
+- 代码 diff、gVisor 运行状态和确定性校验结果。
+- 重试原因、轮次、剩余时间和最终结论。
+
+不展示模型私有完整思维链；使用可审计的工作轨迹：
+
+```text
+目标 → 行动 → 工具结果 → 判断摘要 → 修改
+```
+
+前端规则：
+
+- 日志按时间从上到下追加，不再倒序插入。
+- 事件先进入缓冲区，每 50～100ms 批量渲染。
+- 使用虚拟列表，只渲染可见日志。
+- 用户向上查看历史时暂停自动滚动。
+- 断线自动续传；模型网关不支持 Token 流时，仍持续推送阶段、工具和校验事件。
+- 继续保证不同用户、不同 `run_id` 的日志互不混合。
+
+## 14. 前端流程图重设计
+
+删除当前“Explorer / Validator / DSL Writer / Auditor 四 Agent 环”的表达，改成与单 Agent Loop 一致的流程：
+
+```text
+[准备上下文 / RAG]
+          ↓
+┌──────── 第 N / 5 轮 ────────┐
+│ 探查 → 编写 → 沙箱执行 → 校验 │
+│   ↑          失败 → 修复 ───┘ │
+└───────────────────────────────┘
+          ↓ 通过
+[封装制品] → [进入待审核]
+```
+
+- 流程图直接读取后端 `phase` 和 `round`，不再通过 `node_trace` 猜测当前节点。
+- 显示排队位置、已用/剩余时间、网站/微信类型和 Runtime 版本。
+- 支持 `queued`、`interrupted`、`repairing`、`failed`、`completed`。
+- 点击阶段查看对应证据、代码变化、执行输出和校验结果。
+- 圆形不再表示多个 Agent，界面明确说明“一个 Agent，在受控 Loop 中工作”。
+
+## 15. 旧 DSL 全量迁移
+
+目标不是长期兼容旧 DSL，而是最终全部替换：
+
+```text
+旧 DSL 继续正式运行
+→ 新 Agent 生成 Python 插件
+→ 新旧方式逐站双跑并对比
+→ 新插件连续通过验收
+→ 逐站切换到插件
+→ 进入回滚观察期
+→ 全站完成后删除网站/微信旧 DSL 制品与解释逻辑
+```
+
+单站切换条件：
+
+- 新插件满足全部确定性验收标准。
+- 新旧结果完成对比，没有不可解释的大量缺失或错误。
+- 新插件已审核批准。
+
+旧 DSL 在切换后至少保留 **7 天且新插件完成 3 次正式抓取成功**；两个条件同时满足后才删除。回滚期内插件异常可立即切回旧 DSL。
+
+迁移结束后，普通网站和微信不再生成或执行 DSL。删除共享解释器前必须先拆出内部论坛所需的最小兼容入口，确保其现有接口和分流不受影响。
+
+## 16. 替换与复用清单
+
+| 范围 | 处理方式 |
+|---|---|
+| Website Explorer、Validator、DSL Writer、Auditor、LangGraph | 替换为 Single Agent Loop Engine |
+| 网站/微信新 DSL 生成与解释执行 | 替换为 Python 插件 + gVisor Runtime |
+| 网站/微信旧 DSL 制品与解释逻辑 | 仅迁移回滚期临时保留，最终删除 |
+| Discovery HTTP 路径与原有返回字段 | 保留外部契约，内部实现替换 |
+| `SiteDiscoveryRun`、并发限制、用户日志隔离、Token 统计 | 复用并扩展 |
+| `CrawlMethod`、`Source`、`CrawlMethodDomain`、签名去重 | 复用 |
+| 待审核、批准、删除、启用/禁用、提醒 | 复用 |
+| 方法审计、质量审计 | 复用接口，输入改为插件真实试运行结果 |
+| 手动/定时抓取、取消、部分成功、统计 | 复用并收敛到统一内部执行入口 |
+| `CrawlOutputIngester` 与新闻 Pipeline | 原样复用 |
+| 微信后台登录历史链路 | 标记废弃，代码与接口暂留，不主动使用 |
+| 内部论坛 | 只保留接口和分流，本轮不实现 |
+| `agent_crawl` | 完全排除 |
+
+## 17. 后续研究项（本轮不实现）
+
+以下能力只做备案，不进入本轮交付：
+
+- 验证码自动处理。
+- 浏览器指纹兼容。
+- 代理网络能力。
+
+任何实现前必须单独完成合规、安全和目标网站授权评估。当前只使用正常 HTTP/浏览器访问、合理请求频率、缓存、有限重试、随机退避和公开入口；仍遇验证码或限流时返回部分结果并标记 `captcha_required` / `rate_limited`。
+
+## 18. 实施顺序
+
+1. 定义插件、Manifest、Runner、统一错误码和 stdout/stderr 契约。
+2. 建立 gVisor `SandboxRuntime`、固定 Runtime 镜像、网络策略和全局容量队列。
+3. 完成数据库迁移、检查点、事件流和恢复机制。
+4. 实现轻量 RAG 与 Single Agent Loop Engine，替换普通网站探查。
+5. 实现共享无登录搜狗微信采集器，保留内部论坛接口。
+6. 接入现有方法审计、质量审计、待审核和版本制品管理。
+7. 将手动抓取与 `morning_crawl` 收敛到统一插件执行入口。
+8. 增加 SSE 日志并重设计前端单 Agent Loop 流程图。
+9. 按站点逐一双跑迁移旧 DSL，满足回滚条件后删除旧制品。
+10. 全量迁移完成后删除网站/微信旧 DSL 生成与解释执行代码。
+
+## 19. 必须保持不变
+
+- 不修改或复用 `agent_crawl`。
+- 不破坏现有 Discovery 外部 HTTP 调用和正式抓取返回结构。
+- 不绕过待审核流程，不通过的插件不能参与正式抓取。
+- 插件不得直接读写数据库或访问主程序密钥。
+- 新闻仍由现有 Ingester 和 Pipeline 完成规范化、去重、富化和入库。
+- 单个插件失败不能影响其他方式，已取得的合法部分结果继续保留。
+- 正式插件执行不调用 Agent、RAG 或 LLM。

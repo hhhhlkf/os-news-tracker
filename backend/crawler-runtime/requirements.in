@@ -1,0 +1,8 @@
+# Connector dependencies are resolved with hashes into requirements.lock at build-review time.
+pydantic==2.13.4
+httpx==0.28.1
+feedparser==6.0.14
+lxml==6.1.2
+python-dateutil==2.9.0.post0
+PyYAML==6.0.3
+playwright==1.62.0

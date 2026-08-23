@@ -17,7 +17,7 @@ import {
   type MailTemplate,
 } from "../mail/types";
 import { MailNoticeBox } from "./MailNoticeBox";
-import { MailPreviewItemCard } from "./MailPreviewItemCard";
+import { MailPreviewItemGroups } from "./MailPreviewItemGroups";
 import { clampInput, INPUT_LIMITS } from "../inputLimits";
 import { emailListError, parseEmailList } from "../mail/emailValidation";
 
@@ -184,7 +184,7 @@ export function MailImmediateSendPanel(props: {
         data.status === "sent"
           ? `发送成功，共 ${data.item_count} 条，通道：${mailProviderLabel(data.provider)}。`
           : data.status === "查询空" || data.status === "skipped_empty"
-            ? "当前筛选没有匹配到新闻，未发送。"
+            ? "当前筛选没有匹配到条目，未发送。"
           : `发送失败（${mailProviderLabel(data.provider)}）：${data.error_message ?? "未知错误"}`,
       );
     },
@@ -303,6 +303,7 @@ export function MailImmediateSendPanel(props: {
     const formatMulti = (raw: string | null | undefined) =>
       (raw ?? "").split(",").map((part) => part.trim()).filter(Boolean).join(" / ");
     const segments = [
+      filterSnapshot.item_kind === "discussion" ? "技术讨论" : filterSnapshot.item_kind === "news" ? "新闻" : null,
       formatMulti(filterSnapshot.main_category) || null,
       formatMulti(filterSnapshot.importance) || null,
       formatMulti(filterSnapshot.sub_tag) || null,
@@ -320,6 +321,7 @@ export function MailImmediateSendPanel(props: {
     return "依据当前筛选快照生成";
   }, [
     filterSnapshot.main_category,
+    filterSnapshot.item_kind,
     filterSnapshot.importance,
     filterSnapshot.sub_tag,
     filterSnapshot.q,
@@ -337,11 +339,23 @@ export function MailImmediateSendPanel(props: {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "0.8fr 1.2fr", gap: 12, alignItems: "start" }}>
       <div ref={leftColumnRef} style={{ display: "grid", gap: 12 }}>
-        <section style={{ border: "1px solid #eaecf0", borderRadius: 12, padding: 14, background: "#fff" }}>
+        <section
+          style={{
+            border: "1px solid #eaecf0",
+            borderRadius: 12,
+            padding: 14,
+            background: "#fff",
+            height: 145,
+            boxSizing: "border-box",
+            display: "grid",
+            gridTemplateRows: "auto minmax(0, 1fr)",
+            minHeight: 0,
+          }}
+        >
           <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: "#667085", fontWeight: 700, marginBottom: 10 }}>
             当前筛选快照
           </div>
-          <div style={{ display: "grid", gap: 8 }}>
+          <div style={{ display: "grid", gap: 8, minHeight: 0, overflowY: "auto", paddingRight: 2 }}>
             {snapshotSummary.map((row) => (
               <div
                 key={row.label}
@@ -581,16 +595,14 @@ export function MailImmediateSendPanel(props: {
           </div>
         </div>
         <div style={{ padding: 14, display: "grid", gap: 12, minHeight: 0, overflowY: "auto", alignContent: "start" }}>
-          <MailNoticeBox notice={previewNotice} />
           {previewData?.items.length ? (
-            previewData.items.map((item, index) => (
-              <MailPreviewItemCard key={`${item.source_url}-${index}`} item={item} />
-            ))
+            <MailPreviewItemGroups items={previewData.items} />
           ) : (
             <div style={{ border: "1px dashed #d0d5dd", background: "#fff", color: "#667085", borderRadius: 12, padding: 18 }}>
               还没有生成预览内容。
             </div>
           )}
+          <MailNoticeBox notice={previewNotice} />
         </div>
       </section>
     </div>

@@ -75,6 +75,21 @@ URL: {site_url}
 页面标题: {title}
 """
 
+# These keys remain in the prompt-management HTTP contract so saved prompt
+# sets from older deployments still round-trip.  The connector loops never
+# execute them; keeping inert templates here avoids importing the retired
+# Explorer/Validator/DSL Writer/Auditor implementation.
+RETIRED_EXPLORER_PROMPT = "旧网站 Explorer 已停用；普通网站由 Single Agent Loop 探查。"
+RETIRED_VALIDATOR_PROMPT = "旧 Validator 已停用。site={site_url} exploration={exploration}"
+RETIRED_DSL_WRITER_PROMPT = (
+    "旧 DSL Writer 已停用。site={site_url} rule={url_rule} "
+    "exploration={exploration} retry={retry_feedback}"
+)
+RETIRED_AUDITOR_PROMPT = (
+    "旧 DSL Auditor 已停用。site={site_url} recipe={recipe_summary} errors={errors} "
+    "count={discovered_count} n={n} sample={items_sample}"
+)
+
 
 @dataclass(frozen=True)
 class StageDef:
@@ -155,29 +170,27 @@ STAGE_MAP: dict[str, StageDef] = {s.key: s for s in STAGES}
 
 
 def get_stage_defaults() -> dict[str, str]:
-    """返回各阶段的内置默认模版文本（前端"新建"时的预定模版）。
+    """返回各发现阶段的内置默认 prompt 模板文本（前端「新建」时的预定模板）。
 
-    对原本就是内联/常量的 4 个阶段延迟从各自模块导入，避免模块级循环导入。
+    功能：从各模块延迟导入默认 prompt 常量，组装成 stage_key→模板文本的字典，避免模块级循环导入。
+    谁会调用：prompt 管理接口在返回/初始化默认模板时调用。
+    直接调用：
+    - 延迟导入各模块 prompt 常量（discovery_routes、graph、quality_audit、wechat_tools、enricher、relevance）。
+    输入与结果：无参数；返回阶段 key 到默认模板文本的字典。
+    副作用：无（仅导入常量）。
     """
     from app.api.discovery_routes import _NAMING_PROMPT  # noqa: F401 - 仅取常量
-    from app.discovery.graph import (
-        DSL_WRITER_PROMPT,
-        EXPLORER_SYSTEM_PROMPT,
-        VALIDATOR_PROMPT,
-        _AUDIT_PROMPT,
-        _SYNTHESIS_PROMPT,
-    )
     from app.discovery.quality_audit import QUALITY_AUDIT_PROMPT
     from app.discovery.wechat_tools import WECHAT_PREFETCH_PROMPT
     from app.processing.enricher import _PROMPT_TEMPLATE as ENRICH_PROMPT
     from app.processing.relevance import _PROMPT as RELEVANCE_FILTER_PROMPT
 
     return {
-        "explorer_system": EXPLORER_SYSTEM_PROMPT,
-        "synthesis": _SYNTHESIS_PROMPT,
-        "validator": VALIDATOR_PROMPT,
-        "dsl_writer": DSL_WRITER_PROMPT,
-        "auditor": _AUDIT_PROMPT,
+        "explorer_system": RETIRED_EXPLORER_PROMPT,
+        "synthesis": DEFAULT_SYNTHESIS,
+        "validator": RETIRED_VALIDATOR_PROMPT,
+        "dsl_writer": RETIRED_DSL_WRITER_PROMPT,
+        "auditor": RETIRED_AUDITOR_PROMPT,
         "quality_audit": QUALITY_AUDIT_PROMPT,
         "wechat_prefetch": WECHAT_PREFETCH_PROMPT,
         "naming": _NAMING_PROMPT,
@@ -187,10 +200,14 @@ def get_stage_defaults() -> dict[str, str]:
 
 
 def validate_prompts(prompts: dict[str, str]) -> list[str]:
-    """校验一套 prompt：返回错误信息列表（空=通过）。
+    """校验一套 prompt 配置：返回错误信息列表（空=通过）。
 
-    - 未知 stage key → 报错
-    - 非空文本必须包含该阶段所有必需 token
+    功能：遍历传入的 prompts，未知 stage key 报错；非空文本必须包含该阶段声明的所有必需占位符 token。
+    谁会调用：保存 DiscoveryPromptSet 前（discovery_routes 保存接口）调用，拦截非法配置。
+    直接调用：
+    - STAGE_MAP（查询阶段定义与必需 token）。
+    输入与结果：输入 prompts 字典；返回错误字符串列表（空表示通过）。
+    副作用：无。
     """
     errors: list[str] = []
     for key, text in (prompts or {}).items():
@@ -207,9 +224,17 @@ def validate_prompts(prompts: dict[str, str]) -> list[str]:
 
 
 def resolve_prompt(stage_key: str, fallback: str) -> str:
-    """运行时解析某阶段 prompt：active 套有非空覆盖则用它，否则用 fallback（内置默认）。
+    """运行时解析某阶段的 prompt 文本（active 覆盖优先，否则用内置默认）。
 
-    任何异常（表未建、DB 不可用等）都安全回退到 fallback，保证发现流程不被配置影响。
+    功能：查询当前 active 的 DiscoveryPromptSet，取其对该阶段的覆盖文本（非空则用），否则回退到 fallback；
+    任何异常（表未建、DB 不可用）都安全回退，保证发现流程不受配置影响。
+    谁会调用：render_prompt 及各阶段取 prompt 处调用。
+    直接调用：
+    - SQLAlchemy select(...)：查询 active 的 prompt 套。
+    - SessionLocal(...)：获取数据库会话。
+    - DiscoveryPromptSet：读取 prompts 字段。
+    输入与结果：输入 stage_key 与 fallback 文本；返回最终 prompt 文本。
+    副作用：只读数据库查询（active prompt 套）；异常时不写库。
     """
     try:
         from sqlalchemy import select
@@ -234,11 +259,16 @@ def resolve_prompt(stage_key: str, fallback: str) -> str:
 
 
 def render_prompt(stage_key: str, fallback: str, tokens: Mapping[str, object] | None = None) -> str:
-    """统一渲染 prompt。
+    """统一渲染某阶段的 prompt：解析文本 → 注入 token → 检查必需 token 是否残留。
 
-    - 先解析 active/fallback prompt 文本
-    - 再按 ``{token}`` 逐个执行字符串替换
-    - 最后检查该阶段声明的必需 token 是否仍有残留，防止漏传
+    功能：先 resolve 出 prompt 文本，再按 {token} 逐个字符串替换；最后若仍残留未替换的必需 token 则报错，防止漏传。
+    谁会调用：explorer/synthesis/validator/dsl_writer/auditor 等各 LLM 阶段在调用模型前调用。
+    直接调用：
+    - resolve_prompt(...)：取阶段 prompt 文本。
+    - STAGE_MAP（查必需 token）。
+    - prompt.replace(...)：注入 token 值。
+    输入与结果：输入 stage_key、fallback 与 tokens；返回渲染后文本，缺 token 时抛 ValueError。
+    副作用：无。
     """
     prompt = resolve_prompt(stage_key, fallback)
     for key, value in (tokens or {}).items():

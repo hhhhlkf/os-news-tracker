@@ -1,4 +1,6 @@
 from functools import lru_cache
+
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -36,6 +38,33 @@ class Settings(BaseSettings):
     tof4_from_name: str | None = None
     system_access_password: str = "admin"
     discovery_max_concurrent_runs: int = 3
+    discovery_sandbox_max_containers: int = 4
+    discovery_sandbox_runtime: str = "runsc"
+    discovery_sandbox_platform: str = "systrap"
+    discovery_sandbox_runsc_binary: str = "/usr/local/bin/runsc"
+    discovery_sandbox_runsc_version: str = ""
+    discovery_sandbox_docker_daemon_config: str = "/etc/docker/daemon.json"
+    discovery_sandbox_cpus: float = 1.0
+    discovery_sandbox_memory: str = "512m"
+    discovery_sandbox_pids_limit: int = 64
+    discovery_sandbox_timeout_seconds: float = 120.0
+    discovery_sandbox_runtime_images: dict[str, str] = Field(default_factory=dict)
+    discovery_sandbox_docker_command: str = "docker"
+    discovery_sandbox_docker_socket: str = "/var/run/docker.sock"
+    discovery_sandbox_proxy_port: int = 8080
+    discovery_sandbox_attestation_keyring_path: str = "/var/lib/os-news-tracker/discovery-attestation/keyring.json"
+    discovery_sandbox_allow_ephemeral_attestation_keyring: bool = False
+    discovery_checkpoint_root: str = "/var/lib/os-news-tracker/discovery-checkpoints"
+    discovery_checkpoint_max_bytes: int = 4 * 1024 * 1024
+    discovery_workspace_root: str = "/var/lib/os-news-tracker/discovery-workspaces"
+    discovery_connector_root: str = "/var/lib/os-news-tracker/connectors"
+    discovery_sandbox_capacity_lock_root: str = "/var/lib/os-news-tracker/connectors/.sandbox-capacity"
+    discovery_runtime_version: str = "crawler-runtime:2"
+    discovery_loop_max_seconds: float = 1200.0
+    discovery_rag_top_k: int = 5
+    discussion_mail_enabled: bool = False
+    discussion_mail_cron: str = "0 8 * * *"
+    discussion_auto_organize: bool = True
 
 
 @lru_cache

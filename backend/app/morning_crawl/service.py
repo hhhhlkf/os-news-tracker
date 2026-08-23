@@ -6,7 +6,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
+import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
@@ -30,6 +33,10 @@ from app.schemas import (
 
 
 class MorningCrawlRunNotFoundError(Exception):
+    pass
+
+
+class MorningCrawlRetryNotAvailableError(Exception):
     pass
 
 logger = logging.getLogger(__name__)
@@ -68,7 +75,20 @@ def _has_live_worker(run_id: int) -> bool:
 def _is_cancel_requested(run_id: int) -> bool:
     with _cancel_lock:
         event = _cancel_events.get(run_id)
-    return bool(event and event.is_set())
+    if event and event.is_set():
+        return True
+    session = SessionLocal()
+    try:
+        run = session.get(MorningCrawlRun, run_id)
+        return bool(run is not None and run.status in {"stopping", "cancelled"})
+    finally:
+        session.close()
+
+
+def _cancel_event_for_run(run_id: int) -> threading.Event | None:
+    """Return the live cooperative-cancellation handle for one scheduled run."""
+    with _cancel_lock:
+        return _cancel_events.get(run_id)
 
 
 def beijing_now() -> datetime:
@@ -84,6 +104,12 @@ def _compute_next_run(config: MorningCrawlConfig, reference: datetime) -> dateti
     except (ValueError, AttributeError):
         return None
     candidate = reference.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if config.frequency == "hourly":
+        interval = max(1, int(config.interval_hours or 1))
+        if candidate <= reference:
+            elapsed_hours = int((reference - candidate).total_seconds() // 3600)
+            candidate += timedelta(hours=((elapsed_hours // interval) + 1) * interval)
+        return candidate
     if candidate <= reference:
         candidate = candidate + timedelta(days=1)
     if config.frequency == "weekly":
@@ -128,6 +154,8 @@ def update_morning_crawl_config(
         config.run_time = payload.run_time
     if payload.frequency is not None:
         config.frequency = payload.frequency
+    if payload.interval_hours is not None:
+        config.interval_hours = payload.interval_hours
     if payload.lookback_window is not None:
         config.lookback_window = payload.lookback_window
     if payload.patrol_interval_hours is not None:
@@ -154,7 +182,15 @@ def _active_method_count(db: Session) -> int:
 
 
 def _list_active_methods(db: Session) -> list[CrawlMethod]:
-    return list(
+    # Periodic coordination seam for the migration state machine.  It only
+    # marks already-qualified rollback windows eligible; shadow/cutover and
+    # retirement always remain explicit admin actions.
+    from app.discovery.migration import refresh_migration_eligibility
+
+    refresh_migration_eligibility(db)
+    from app.discovery.migration import assert_formal_method_current
+
+    methods = list(
         db.scalars(
             select(CrawlMethod)
             .where(
@@ -164,10 +200,54 @@ def _list_active_methods(db: Session) -> list[CrawlMethod]:
             .order_by(CrawlMethod.id)
         )
     )
+    current: list[CrawlMethod] = []
+    for method in methods:
+        try:
+            assert_formal_method_current(db, method)
+        except RuntimeError:
+            continue
+        current.append(method)
+    return current
+
+
+def _list_retry_methods_from_run(db: Session, previous_run: MorningCrawlRun) -> list[CrawlMethod]:
+    """Return active methods that failed or were not reached by one completed run.
+
+    A patrol run is a recovery pass, not a second full crawl: methods that
+    already finished as ``ok``, ``empty``, or ``partial`` keep their result.
+    """
+    active_methods = _list_active_methods(db)
+    completed_method_ids = set(
+        db.scalars(
+            select(MorningCrawlRunMethod.method_id).where(
+                MorningCrawlRunMethod.run_id == previous_run.id,
+                MorningCrawlRunMethod.status.in_(("ok", "empty", "partial")),
+            )
+        )
+    )
+    return [method for method in active_methods if method.id not in completed_method_ids]
+
+
+def _list_patrol_retry_methods(db: Session, run: MorningCrawlRun) -> list[CrawlMethod]:
+    """Return only methods that failed or were not reached by the previous run today."""
+    previous_run = db.scalar(
+        select(MorningCrawlRun)
+        .where(
+            MorningCrawlRun.run_date == run.run_date,
+            MorningCrawlRun.id < run.id,
+        )
+        .order_by(MorningCrawlRun.id.desc())
+        .limit(1)
+    )
+    if previous_run is None:
+        return _list_active_methods(db)
+    return _list_retry_methods_from_run(db, previous_run)
 
 
 def _reclaim_stale_runs(db: Session) -> None:
     """回收进程退出后残留的 running/stopping run（本进程无活动 worker 且超过宽限期）。"""
+    from app.discovery.fetch_runs import has_live_scheduled_fetch_owner
+
     running = list(
         db.scalars(select(MorningCrawlRun).where(MorningCrawlRun.status.in_(_RUNNING_STATUSES)))
     )
@@ -176,21 +256,55 @@ def _reclaim_stale_runs(db: Session) -> None:
     now = beijing_now()
     changed = False
     for run in running:
-        if _has_live_worker(run.id):
+        if _has_live_worker(run.id) or has_live_scheduled_fetch_owner(run.id, db):
             continue
         started = run.started_at or now
         if (now - started).total_seconds() < _STALE_RUN_GRACE_SECONDS:
             continue
-        run.status = "failed"
+        original_status = run.status
+        if original_status == "stopping":
+            _finalize_orphan_methods(
+                db,
+                run.id,
+                now,
+                "停止请求生效，方式执行已取消（stale）",
+                status="cancelled",
+            )
+        else:
+            _finalize_orphan_methods(db, run.id, now, "进程已退出，方式执行被中断（stale）")
+        rows = list(
+            db.scalars(
+                select(MorningCrawlRunMethod).where(MorningCrawlRunMethod.run_id == run.id)
+            )
+        )
+        _roll_up_run_method_stats(db, run)
+        if original_status == "stopping":
+            # A persisted stop request wins even between methods, including
+            # when all rows written before the stop happened to be successful.
+            run.status = "cancelled"
+            run.error_message = "停止请求生效，进程退出后已完成取消（stale）"
+        elif not rows:
+            run.status = "failed"
+            run.error_message = "进程已退出且没有方式执行记录，运行失败（stale）"
+        else:
+            if run.status in _RUNNING_STATUSES:
+                run.status = "failed"
+            run.error_message = "进程已退出，运行被判定为中断（stale）"
         run.finished_at = now
-        run.error_message = "进程已退出，运行被判定为中断（stale）"
-        _finalize_orphan_methods(db, run.id, now, "进程已退出，方式执行被中断（stale）")
+        assert run.status not in _RUNNING_STATUSES
         changed = True
     if changed:
         db.commit()
 
 
-def _finalize_orphan_methods(db: Session, run_id: int, now: datetime, message: str) -> None:
+def _finalize_orphan_methods(
+    db: Session,
+    run_id: int,
+    now: datetime,
+    message: str,
+    *,
+    status: str = "failed",
+) -> None:
     """把某个 run 下仍处于 running 的方式明细收尾为 failed，避免明细永远卡在执行中。"""
     orphans = db.scalars(
         select(MorningCrawlRunMethod).where(
@@ -199,10 +313,37 @@ def _finalize_orphan_methods(db: Session, run_id: int, now: datetime, message: s
         )
     )
     for rm in orphans:
-        rm.status = "failed"
+        rm.status = status
         rm.finished_at = now
         if not rm.error_message:
             rm.error_message = message
+
+
+def _roll_up_run_method_stats(db: Session, run: MorningCrawlRun) -> None:
+    """按方式明细回填 run 级 success/failed/stored，避免中断后聚合字段仍是 0。"""
+    rows = list(
+        db.scalars(select(MorningCrawlRunMethod).where(MorningCrawlRunMethod.run_id == run.id))
+    )
+    success = failed = stored = cancelled = 0
+    for row in rows:
+        stored += int(row.stored_count or 0)
+        if row.status == "failed":
+            failed += 1
+        elif row.status == "cancelled":
+            cancelled += 1
+        elif row.status in ("ok", "empty", "partial"):
+            success += 1
+    run.success_methods = success
+    run.failed_methods = failed
+    run.stored_count = stored
+    if cancelled > 0:
+        run.status = "cancelled"
+    elif failed > 0 and success == 0:
+        run.status = "failed"
+    elif failed > 0 or any(row.status == "partial" for row in rows):
+        run.status = "partial"
+    elif success > 0:
+        run.status = "success"
 
 
 def is_running(db: Session) -> bool:
@@ -219,7 +360,8 @@ def config_to_response(config: MorningCrawlConfig) -> MorningCrawlConfigResponse
     return MorningCrawlConfigResponse(
         enabled=config.enabled,
         run_time=config.run_time,
-        frequency=config.frequency if config.frequency in ("daily", "weekdays", "weekly") else "daily",
+        frequency=config.frequency if config.frequency in ("hourly", "daily", "weekdays", "weekly") else "daily",
+        interval_hours=max(1, int(config.interval_hours or 1)),
         lookback_window=config.lookback_window if config.lookback_window in ("24h", "7d", "30d", "all") else "24h",
         patrol_interval_hours=config.patrol_interval_hours,
         last_run_at=config.last_run_at,
@@ -312,9 +454,15 @@ def get_morning_crawl_dashboard(db: Session) -> MorningCrawlDashboardResponse:
         today_status = today_run.status
     else:
         today_status = "not_run"
+    retryable_method_count = (
+        len(_list_retry_methods_from_run(db, today_run))
+        if today_run is not None and today_run.status in ("partial", "failed", "cancelled") and running_run is None
+        else 0
+    )
     return MorningCrawlDashboardResponse(
         config=config_to_response(config),
         active_method_count=_active_method_count(db),
+        retryable_method_count=retryable_method_count,
         today_status=today_status,
         today_run=run_to_summary(today_run) if today_run else None,
         recent_runs=[run_to_summary(r) for r in recent],
@@ -335,78 +483,120 @@ def _build_request(config: MorningCrawlConfig):
     )
 
 
-def _fetch_and_ingest_method(db: Session, method: CrawlMethod, request) -> dict:
-    """运行单条 discovery method 的 DSL 并走正常 pipeline 入库。复用 discovery 内部入口，不反调 HTTP。"""
-    from app.discovery.execution import run_method
-    from app.discovery.ingester import CrawlOutputIngester
-    from app.discovery.interpreter import DslExecutionPartialError
-    from app.discovery.progress import log_discovery_progress
-    from app.discovery.recipe_prepare import (
-        apply_fetch_limits,
-        attach_wechat_skip_keys,
-        prepare_fetch_recipe,
+def _persist_run_method_progress(
+    db: Session,
+    rm: MorningCrawlRunMethod | None,
+    *,
+    discovered_count: int | None = None,
+    stored_count: int | None = None,
+) -> None:
+    """把统计用的 discovered/stored 尽早落库，避免进程中断后分母仍是 0。"""
+    if rm is None:
+        return
+    row = db.get(MorningCrawlRunMethod, rm.id)
+    if row is None:
+        return
+    if discovered_count is not None:
+        row.discovered_count = discovered_count
+        rm.discovered_count = discovered_count
+    if stored_count is not None:
+        row.stored_count = stored_count
+        rm.stored_count = stored_count
+    db.commit()
+
+
+def _fetch_and_ingest_method(
+    db: Session,
+    method: CrawlMethod,
+    request,
+    *,
+    run_method: MorningCrawlRunMethod | None = None,
+) -> dict:
+    """Execute one method through the same formal runner used by manual fetches."""
+    from app.discovery.fetch_runs import (
+        process_start_token,
+        start_method_fetch_run,
+        watch_method_fetch_owner,
     )
-    from app.extract.scrapling_extractor import ScraplingExtractor
-    from app.models import Item, Source
-    from app.pipeline import Pipeline
-    from app.processing.enricher import Enricher
-    from app.run_logs import append_run_log
+    from app.discovery.runner import execute_discovery_fetch
+    from app.discovery.redaction import redact_discovery_text
+    from app.discovery.sandbox import SandboxJobPriority
+    from app.discovery.sandbox.runtime import get_formal_sandbox_runtime
+    request_payload = request.model_dump(mode="json") if request is not None else None
+    owner_pid = os.getpid()
+    owner_start_token = process_start_token(owner_pid)
+    owner_id = f"scheduled-{owner_pid}-{owner_start_token}-{uuid.uuid4().hex}"
+    sandbox_job_id = (
+        f"formal-scheduled-{run_method.run_id if run_method else 'direct'}-{method.id}-{owner_id}"
+    )
+    formal_run_id = start_method_fetch_run(
+        method.id,
+        request_payload,
+        db,
+        owner_id=owner_id,
+        owner_pid=owner_pid,
+        owner_start_token=owner_start_token,
+        sandbox_job_id=sandbox_job_id,
+    )
+    runtime = get_formal_sandbox_runtime()
+    cancel_event = (
+        _cancel_event_for_run(run_method.run_id)
+        if run_method is not None
+        else threading.Event()
+    )
+    cancel_event = cancel_event or threading.Event()
+    watcher_stop = threading.Event()
 
-    def _log_progress(event: str, payload: dict) -> None:
-        """把 DSL 执行过程中的分页/补抓进度透传到共享运行日志，避免长任务看起来卡死。"""
-        log_discovery_progress(
-            event,
-            payload or {},
-            emit=append_run_log,
-            stage="定时抓取",
-            source=method.domain,
-            method_id=method.id,
+    watcher = threading.Thread(
+        target=watch_method_fetch_owner,
+        kwargs={
+            "run_id": formal_run_id,
+            "owner_id": owner_id,
+            "sandbox_job_id": sandbox_job_id,
+            "runtime": runtime,
+            "cancel_event": cancel_event,
+            "stop_event": watcher_stop,
+        },
+        name=f"scheduled-formal-owner-{formal_run_id}",
+        daemon=True,
+    )
+    watcher.start()
+
+    def _persist(discovered_count: int, stored_count: int) -> None:
+        _persist_run_method_progress(
+            db,
+            run_method,
+            discovered_count=discovered_count,
+            stored_count=stored_count,
         )
 
-    recipe = prepare_fetch_recipe(method.dsl_recipe, request)
-    existing_urls = list(db.scalars(select(Item.url).where(Item.source_id == method.source_id)))
-    recipe = attach_wechat_skip_keys(recipe, existing_urls)
-    partial_error: DslExecutionPartialError | None = None
     try:
-        output = run_method(recipe, progress_callback=_log_progress)
-    except DslExecutionPartialError as exc:
-        # A paginated fetch may time out only after earlier pages already
-        # yielded useful candidates. Keep and ingest those candidates instead
-        # of letting the whole scheduled method become a hard failure.
-        partial_error = exc
-        output = {
-            "items": list(exc.items),
-            "stats": {**(exc.stats or {}), "status": "partial", "error": str(exc)},
-        }
-        append_run_log(
-            "定时抓取",
-            f"DSL 执行部分完成，已保留已抓到候选继续处理 · {exc}",
-            source=method.domain,
-            method_id=method.id,
-            level="warning",
-            raw_count=len(output["items"]),
-            stats_count=output["stats"].get("discovered_count"),
-            error_type=type(exc).__name__,
+        result = execute_discovery_fetch(
+            method.id,
+            formal_run_id,
+            request_payload,
+            db=db,
+            sandbox_runtime=runtime,
+            sandbox_job_id=sandbox_job_id,
+            cancel_event=cancel_event,
+            owner_id=owner_id,
+            sandbox_priority=SandboxJobPriority.SCHEDULED,
+            log_stage="定时抓取",
+            manage_usage_scope=False,
+            result_progress_callback=_persist,
         )
-    raw_items = list(output.get("items", []))
-    output["items"] = apply_fetch_limits(raw_items, request)
-
-    raws = CrawlOutputIngester().to_raw_items(output, source_id=method.source_id)
-    source = db.get(Source, method.source_id)
-    pipeline = Pipeline(session=db, extractor=ScraplingExtractor(), enricher=Enricher())
-    stored = 0
-    for raw in raws:
-        if pipeline.process_item_result(source, raw).stored:
-            stored += 1
-
-    method.last_run_at = datetime.now(timezone.utc)
-    status = "partial" if partial_error is not None else ("ok" if stored > 0 else "empty")
-    method.last_run_status = status
+    finally:
+        watcher_stop.set()
+        watcher.join(timeout=1.0)
+    status = method.last_run_status or "empty"
     return {
-        "discovered_count": len(raws),
-        "stored_count": stored,
+        **result,
         "status": status,
-        "error_message": str(partial_error) if partial_error is not None else None,
+        "error_message": (
+            redact_discovery_text(str(result.get("stats", {}).get("error")))[:4000]
+            if status == "partial" and result.get("stats", {}).get("error")
+            else None
+        ),
     }
 
 
@@ -422,15 +612,25 @@ def _run_methods(db: Session, run: MorningCrawlRun, *, trigger_type: str) -> Mor
 
 
 def _run_methods_body(db: Session, run: MorningCrawlRun, *, trigger_type: str) -> MorningCrawlRun:
+    from app.discovery.redaction import redact_discovery_text
     from app.llm.usage import UsageScope, usage_scope
     from app.run_logs import append_run_log
 
     config = get_or_create_config(db)
-    methods = _list_active_methods(db)
+    methods = (
+        _list_patrol_retry_methods(db, run)
+        if trigger_type == "patrol_resend"
+        else _list_active_methods(db)
+    )
     run.total_methods = len(methods)
     db.commit()
 
-    append_run_log("定时抓取", "系统定时抓取开始", trigger_type=trigger_type, total_methods=len(methods))
+    append_run_log(
+        "定时抓取",
+        "系统巡检补跑开始（仅失败或未执行方式）" if trigger_type == "patrol_resend" else "系统定时抓取开始",
+        trigger_type=trigger_type,
+        total_methods=len(methods),
+    )
 
     success = failed = partial = stored_total = 0
     cancelled = False
@@ -464,7 +664,7 @@ def _run_methods_body(db: Session, run: MorningCrawlRun, *, trigger_type: str) -
                     method_id=method_id,
                 )
             ):
-                result = _fetch_and_ingest_method(db, method, request)
+                result = _fetch_and_ingest_method(db, method, request, run_method=rm)
             rm.status = result["status"]
             rm.discovered_count = result["discovered_count"]
             rm.stored_count = result["stored_count"]
@@ -487,23 +687,40 @@ def _run_methods_body(db: Session, run: MorningCrawlRun, *, trigger_type: str) -
             )
         except Exception as exc:  # noqa: BLE001 - 单条失败不阻断整体
             db.rollback()
-            failed += 1
+            safe_error = redact_discovery_text(str(exc))[:4000]
+            method_cancelled = bool(getattr(exc, "_formal_cancelled", False)) or _is_cancel_requested(
+                run.id
+            )
+            if method_cancelled:
+                cancelled = True
+            else:
+                failed += 1
             rm = db.get(MorningCrawlRunMethod, rm_id)
             if rm is not None:
-                rm.status = "failed"
-                rm.error_message = str(exc)
+                # Progress is persisted after every stored item. The exception
+                # branch is mutually exclusive with the normal result branch,
+                # so fold this durable partial count into the run exactly once.
+                stored_total += max(0, int(rm.stored_count or 0))
+                rm.status = "cancelled" if method_cancelled else "failed"
+                rm.error_message = safe_error
                 rm.finished_at = beijing_now()
                 db.commit()
             append_run_log(
                 "定时抓取",
-                f"爬取方式执行失败 · {exc}",
+                (
+                    f"爬取方式执行已取消 · {safe_error}"
+                    if method_cancelled
+                    else f"爬取方式执行失败 · {safe_error}"
+                ),
                 source=domain,
                 method_id=method_id,
-                level="error",
+                level="warning" if method_cancelled else "error",
                 error_type=type(exc).__name__,
             )
 
+    db.expire_all()
     run = db.get(MorningCrawlRun, run.id)
+    cancelled = cancelled or run.status in {"stopping", "cancelled"}
     if cancelled:
         run.status = "cancelled"
         run.error_message = "已手动停止"
@@ -595,6 +812,27 @@ def trigger_morning_crawl_async(db: Session, *, trigger_type: str) -> MorningCra
     return run
 
 
+def retry_today_failed_methods_async(db: Session) -> MorningCrawlRun:
+    """Start one recovery pass containing only today's unfinished methods."""
+    _reclaim_stale_runs(db)
+    if is_running(db):
+        raise MorningCrawlRetryNotAvailableError("当前已有定时抓取在执行，请先等待其结束")
+    today = beijing_now().date().isoformat()
+    previous_run = db.scalar(
+        select(MorningCrawlRun)
+        .where(MorningCrawlRun.run_date == today)
+        .order_by(MorningCrawlRun.id.desc())
+        .limit(1)
+    )
+    if previous_run is None:
+        raise MorningCrawlRetryNotAvailableError("今日尚无定时抓取记录，无法重试")
+    if previous_run.status not in ("partial", "failed", "cancelled"):
+        raise MorningCrawlRetryNotAvailableError("今日抓取已成功完成，没有需要重试的方式")
+    if not _list_retry_methods_from_run(db, previous_run):
+        raise MorningCrawlRetryNotAvailableError("今日没有未成功的抓取方式")
+    return trigger_morning_crawl_async(db, trigger_type="patrol_resend")
+
+
 def stop_morning_crawl(db: Session) -> dict:
     """停止所有正在进行的定时抓取。
 
@@ -602,6 +840,11 @@ def stop_morning_crawl(db: Session) -> dict:
       同时把 run.status 标为 stopping 以便前端即时反馈。
     - 无活动 worker 的僵尸 run（进程已退出）：直接强制标记 cancelled，避免卡死无法关闭。
     """
+    from app.discovery.fetch_runs import (
+        recover_dead_method_fetch_runs,
+        request_method_fetch_cancel,
+    )
+    from app.models import CrawlMethodRun
     from app.run_logs import append_run_log
 
     running = list(
@@ -615,21 +858,68 @@ def stop_morning_crawl(db: Session) -> dict:
             event = _cancel_events.get(run.id)
             if event is not None:
                 event.set()
-                run.status = "stopping"
-                stopping.append(run.id)
-            else:
-                run.status = "cancelled"
-                run.finished_at = now
-                run.error_message = "手动停止（无活动进程，已强制标记停止）"
-                _finalize_orphan_methods(db, run.id, now, "手动停止（无活动进程）")
+            run.status = "stopping"
+            stopping.append(run.id)
+    db.commit()
+
+    active_by_morning_run: dict[int, list[int]] = {}
+    for run in running:
+        active = list(
+            db.scalars(
+                select(CrawlMethodRun).where(
+                    CrawlMethodRun.status == "running",
+                    CrawlMethodRun.sandbox_job_id.like(f"formal-scheduled-{run.id}-%"),
+                )
+            )
+        )
+        active_by_morning_run[run.id] = [item.id for item in active]
+        for item in active:
+            request_method_fetch_cancel(item.id, db)
+            recover_dead_method_fetch_runs(db, run_id=item.id)
+
+    deadline = time.monotonic() + 2.0
+    pending_ids = {item for values in active_by_morning_run.values() for item in values}
+    while pending_ids and time.monotonic() < deadline:
+        db.expire_all()
+        acknowledged = set(
+            db.scalars(
+                select(CrawlMethodRun.id).where(
+                    CrawlMethodRun.id.in_(pending_ids),
+                    CrawlMethodRun.status == "cancelled",
+                    CrawlMethodRun.cancel_acknowledged_at.is_not(None),
+                )
+            )
+        )
+        pending_ids -= {int(value) for value in acknowledged}
+        if pending_ids:
+            time.sleep(0.05)
+
+    for run in running:
+        owned_ids = set(active_by_morning_run.get(run.id, ()))
+        if owned_ids and owned_ids.isdisjoint(pending_ids):
+            row = db.get(MorningCrawlRun, run.id)
+            if row is not None and row.status == "stopping":
+                row.status = "cancelled"
+                row.finished_at = now
+                row.error_message = "手动停止（正式抓取 owner 已确认取消）"
+                _finalize_orphan_methods(
+                    db,
+                    run.id,
+                    now,
+                    "手动停止（owner 已确认取消）",
+                    status="cancelled",
+                )
                 cancelled.append(run.id)
+                if run.id in stopping:
+                    stopping.remove(run.id)
     db.commit()
     if stopping or cancelled:
         append_run_log(
             "定时抓取",
             "收到停止全部爬取请求",
             stopping=stopping,
-            force_cancelled=cancelled,
+            acknowledged_cancelled=cancelled,
+            cancel_pending=sorted(pending_ids),
             level="warn",
         )
     return {"stopping": stopping, "cancelled": cancelled}
@@ -637,26 +927,62 @@ def stop_morning_crawl(db: Session) -> dict:
 
 # --- 调度判定（供 scheduler tick / patrol 使用；均按北京时间） ---
 
+def _is_schedule_day(config: MorningCrawlConfig, now: datetime) -> bool:
+    if config.frequency == "weekly":
+        anchor = config.created_at.weekday() if config.created_at else now.weekday()
+        return now.weekday() == anchor
+    return config.frequency != "weekdays" or now.weekday() < 5
+
+
+def _hourly_slot(config: MorningCrawlConfig, now: datetime) -> datetime | None:
+    try:
+        hour_str, minute_str = (config.run_time or "07:00").split(":", 1)
+        anchor_hour, minute = int(hour_str), int(minute_str)
+    except (ValueError, AttributeError):
+        return None
+    if now.minute != minute:
+        return None
+    interval = max(1, int(config.interval_hours or 1))
+    if (now.hour - anchor_hour) % interval != 0:
+        return None
+    return now.replace(second=0, microsecond=0)
+
+
 def schedule_due_now(config: MorningCrawlConfig, *, now: datetime, today: str) -> bool:
+    """Whether the normal scheduled run is due at this exact scheduler tick."""
     if not config.enabled:
         return False
+    if config.frequency == "hourly":
+        slot = _hourly_slot(config, now)
+        if slot is None:
+            return False
+        return config.last_run_at is None or config.last_run_at < slot
     if config.last_success_date == today:
         return False
     scheduled_at = _scheduled_time_for_day(config, now)
     if scheduled_at is None:
         return False
-    if config.frequency == "weekly":
-        anchor = config.created_at.weekday() if config.created_at else now.weekday()
-        if now.weekday() != anchor:
-            return False
-    elif config.frequency == "weekdays" and now.weekday() >= 5:
+    if not _is_schedule_day(config, now):
         return False
     if now < scheduled_at:
         return False
 
-    # If today's scheduled run already happened but did not fully succeed, do not let
-    # the 1-minute tick hammer the system. Retry after the configured patrol interval.
+    # Normal ticks run each scheduled slot once. Failed slots are recovered by the
+    # separate patrol task so a one-minute tick never retries the whole run.
     if config.last_run_at and config.last_run_at.date().isoformat() == today and config.last_run_at >= scheduled_at:
-        interval_hours = max(1, int(config.patrol_interval_hours or 3))
-        return now >= config.last_run_at + timedelta(hours=interval_hours)
+        return False
     return True
+
+
+def patrol_due_now(config: MorningCrawlConfig, *, now: datetime) -> bool:
+    """Whether a failed/partial run may be recovered by the patrol job."""
+    if not config.enabled or config.last_run_status not in ("failed", "partial", "cancelled"):
+        return False
+    if config.last_run_at is None or not _is_schedule_day(config, now):
+        return False
+    if config.frequency != "hourly":
+        scheduled_at = _scheduled_time_for_day(config, now)
+        if scheduled_at is None or now < scheduled_at:
+            return False
+    interval = max(1, int(config.patrol_interval_hours or 3))
+    return now >= config.last_run_at + timedelta(hours=interval)

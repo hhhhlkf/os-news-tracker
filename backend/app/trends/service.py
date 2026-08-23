@@ -32,6 +32,7 @@ from app.trends.evaluation import (
     runtime_to_status_response,
     trend_evaluation_controller,
 )
+from app.trends.directions import parse_template_directions, require_template_directions
 from app.trends.models import TrendIdentityTemplate, TrendRun, TrendSettings, TrendStorylineReview
 from app.trends.repository import TrendRepository
 from app.trends.schemas import (
@@ -49,6 +50,7 @@ from app.trends.schemas import (
     TrendClusterStageStatusResponse,
     TrendEmbeddingStatusResponse,
     TrendIdentityTemplateCreateRequest,
+    TrendIdentityTemplateUpdateRequest,
     TrendLatestResultsResponse,
     TrendResultItemResponse,
     TrendResultResponse,
@@ -107,6 +109,21 @@ class TrendService:
             identity_text=payload.identity_text.strip(),
         )
         self._repository.add_identity_template(template)
+        self._db.commit()
+        self._db.refresh(template)
+        return template
+
+    def update_identity_template(
+        self, template_id: str, payload: TrendIdentityTemplateUpdateRequest
+    ) -> TrendIdentityTemplate:
+        template = self._repository.get_identity_template(template_id)
+        if template is None:
+            raise TrendIdentityTemplateNotFoundError(template_id)
+        # Request validation owns the syntax; retain this service-level check
+        # so non-HTTP callers cross the same direction seam.
+        require_template_directions(payload.identity_text)
+        template.name = payload.name.strip()
+        template.identity_text = payload.identity_text.strip()
         self._db.commit()
         self._db.refresh(template)
         return template
@@ -255,8 +272,11 @@ class TrendService:
                 TrendCardListItemResponse(
                     item_id=item.item_id,
                     title=item.title,
+                    item_kind=item.item_kind,
+                    content_revision=item.content_revision,
                     published_at=item.published_at,
                     fetched_at=item.fetched_at,
+                    last_activity_at=item.last_activity_at,
                     status=item.status,
                     news_actor=item.news_actor if item.status == "ready" else None,
                     action=item.action if item.status == "ready" else None,
@@ -267,6 +287,7 @@ class TrendService:
                     error_message=item.error_message,
                     attempt_count=item.attempt_count,
                     card_updated_at=item.card_updated_at,
+                    discussion_result=item.discussion_result,
                 )
                 for item in page.items
             ],
@@ -665,13 +686,14 @@ class TrendService:
             window_end=window_end,
             trend_count=settings.trend_count,
             storyline_candidate_goal=settings.storyline_candidate_goal,
+            analysis_identity_snapshot=template.identity_text,
+            direction_labels=require_template_directions(template.identity_text),
         )
         self._repository.add_trend_run(run)
         self._db.commit()
         self._db.refresh(run)
         state = trend_evaluation_controller.start(
             run=run,
-            analysis_identity=template.identity_text,
             session_factory=SessionLocal,
         )
         return runtime_to_status_response(state)
@@ -748,6 +770,8 @@ class TrendService:
             return TrendLatestResultsResponse(
                 template_id=template_id,
                 run_id=None,
+                run_direction_labels=[],
+                current_template_directions=parse_template_directions(template.identity_text),
                 window_start_date=None,
                 window_end_date=None,
                 trend_count=settings.trend_count,
@@ -757,13 +781,24 @@ class TrendService:
                 message="当前模板尚无成功发布的趋势结果。",
             )
         entries = self._repository.list_trend_results_for_run(run.run_id)
+        run_direction_labels = list(run.direction_labels)
+        if not run_direction_labels:
+            run_direction_labels = list(
+                dict.fromkeys(
+                    entry.result.direction
+                    for entry in entries
+                    if entry.result.direction is not None
+                )
+            )
         verified_count = sum(1 for entry in entries if entry.result.category != "unverified_change")
         return TrendLatestResultsResponse(
             template_id=template_id,
             run_id=run.run_id,
+            run_direction_labels=run_direction_labels,
+            current_template_directions=parse_template_directions(template.identity_text),
             window_start_date=run.window_start_date,
             window_end_date=run.window_end_date,
-            trend_count=settings.trend_count,
+            trend_count=run.trend_count,
             status="succeeded",
             finished_at=run.finished_at,
             items=[
@@ -780,6 +815,7 @@ class TrendService:
                     template_relevance_score=entry.result.template_relevance_score,
                     trend_rank_score=entry.result.trend_rank_score,
                     category=entry.result.category,  # type: ignore[arg-type]
+                    direction=entry.result.direction,
                     topic=entry.result.topic,
                     trend_summary=entry.result.trend_summary,
                     agent_review=entry.result.agent_review,
@@ -798,7 +834,9 @@ class TrendService:
             ),
         )
 
-    def get_trend_carousel(self, *, template_id: str) -> TrendCarouselResponse:
+    def get_trend_carousel(
+        self, *, template_id: str, direction: str | None = None
+    ) -> TrendCarouselResponse:
         """Return the top X verified trends of the latest successful run.
 
         Only trends whose referenced news actually intersects the currently
@@ -809,6 +847,7 @@ class TrendService:
         if template is None:
             raise TrendIdentityTemplateNotFoundError(template_id)
         settings = self.get_settings()
+        template_directions = parse_template_directions(template.identity_text)
         run = self._repository.get_latest_succeeded_trend_run(template_id)
         if run is None:
             return TrendCarouselResponse(
@@ -817,6 +856,7 @@ class TrendService:
                 window_start_date=None,
                 window_end_date=None,
                 trend_count=settings.trend_count,
+                directions=template_directions,
                 finished_at=None,
                 items=[],
                 message="当前模板尚无成功发布的趋势结果。",
@@ -827,13 +867,27 @@ class TrendService:
             window_start=window_start,
             window_end=window_end,
         )
-        visible = [entry for entry in entries if entry.window_item_count > 0][: settings.trend_count]
+        historical_directions = {
+            entry.result.direction for entry in entries if entry.result.direction is not None
+        }
+        available_directions = list(template_directions)
+        for item in sorted(historical_directions):
+            if item not in available_directions:
+                available_directions.append(item)
+        if direction is not None and direction not in available_directions:
+            raise ValueError("direction 不是该模板当前或已发布结果中的方向")
+        visible = [
+            entry
+            for entry in entries
+            if entry.window_item_count > 0 and (direction is None or entry.result.direction == direction)
+        ][: run.trend_count]
         return TrendCarouselResponse(
             template_id=template_id,
             run_id=run.run_id,
             window_start_date=window_start,
             window_end_date=window_end,
-            trend_count=settings.trend_count,
+            trend_count=run.trend_count,
+            directions=available_directions,
             finished_at=run.finished_at,
             items=[
                 TrendCarouselItemResponse(
@@ -841,6 +895,7 @@ class TrendService:
                     storyline_id=entry.result.storyline_id,
                     category=entry.result.category,  # type: ignore[arg-type]
                     category_label=TREND_CATEGORY_LABELS.get(entry.result.category, entry.result.category),
+                    direction=entry.result.direction,
                     topic=entry.result.topic or "",
                     trend_summary=entry.result.trend_summary or "",
                     trend_rank_score=entry.result.trend_rank_score,

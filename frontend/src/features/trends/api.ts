@@ -23,6 +23,7 @@ import type {
   TrendRunList,
   TrendRunStageStatus,
   UpdateTrendSettingsRequest,
+  UpdateTrendIdentityTemplateRequest,
 } from "./types";
 
 const configuredBase = import.meta.env.VITE_API_BASE?.trim();
@@ -79,6 +80,18 @@ export async function createTrendIdentityTemplate(
     body: JSON.stringify(request),
   });
   return expectOk<TrendIdentityTemplate>(response, "failed to create trend identity template");
+}
+
+export async function updateTrendIdentityTemplate(
+  templateId: string,
+  request: UpdateTrendIdentityTemplateRequest,
+): Promise<TrendIdentityTemplate> {
+  const response = await fetch(`${TRENDS_BASE}/templates/${encodeURIComponent(templateId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(request),
+  });
+  return expectOk<TrendIdentityTemplate>(response, "failed to update trend identity template");
 }
 
 export async function deleteTrendIdentityTemplate(templateId: string): Promise<void> {
@@ -255,8 +268,9 @@ export async function fetchLatestTrendResults(templateId: string): Promise<Trend
   return expectOk<TrendLatestResults>(response, "failed to load latest trend results");
 }
 
-export async function fetchTrendCarousel(templateId: string): Promise<TrendCarousel> {
+export async function fetchTrendCarousel(templateId: string, direction?: string): Promise<TrendCarousel> {
   const query = new URLSearchParams({ template_id: templateId });
+  if (direction) query.set("direction", direction);
   const response = await fetch(`${TRENDS_BASE}/results/carousel?${query.toString()}`);
   return expectOk<TrendCarousel>(response, "failed to load trend carousel");
 }

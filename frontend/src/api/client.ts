@@ -21,6 +21,7 @@ import type {
   DiscoveryFetchResult,
   DiscoveryRun,
   DiscoveryRunSummary,
+  DiscoveryRunEvent,
   CreateFromProbeRequest,
   MultiDiscoveryStartRequest,
   MultiDiscoveryStartResponse,
@@ -65,7 +66,8 @@ export interface ItemQueryParams {
   q?: string;
   limit?: number | string;
   offset?: number | string;
-  sort_by?: "published_at" | "fetched_at";
+  sort_by?: "published_at" | "fetched_at" | "last_activity_at";
+  item_kind?: "news" | "discussion";
   sort_dir?: "desc" | "asc";
   published_after_mode?: "none" | "absolute" | "relative";
   published_after_value?: "24h" | "7d" | "30d";
@@ -403,6 +405,78 @@ export async function getDiscoveryRun(runId: number): Promise<DiscoveryRun> {
   return expectOk<DiscoveryRun>(r, "failed to load discovery run");
 }
 
+/** Open an authenticated SSE response. The caller owns parsing, reconnect and cancellation. */
+export async function openDiscoveryEventStream(
+  runId: number,
+  cursor: number,
+  signal: AbortSignal,
+): Promise<Response> {
+  const params = new URLSearchParams({ cursor: String(Math.max(0, cursor)) });
+  const response = await fetch(`${DISCOVERY_BASE}/runs/${runId}/events?${params}`, {
+    headers: {
+      Accept: "text/event-stream",
+      "Last-Event-ID": String(Math.max(0, cursor)),
+      ...authHeaders(),
+    },
+    cache: "no-store",
+    signal,
+  });
+  if (!response.ok) {
+    const body = await parseErrorBody(response);
+    throw new ApiError(response.status, `failed to stream discovery events (HTTP ${response.status})`, body);
+  }
+  return response;
+}
+
+export function parseDiscoverySseFrame(frame: string): DiscoveryRunEvent | null {
+  const data = frame
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart())
+    .join("\n");
+  if (!data) return null;
+  const event = JSON.parse(data) as DiscoveryRunEvent;
+  if (!Number.isInteger(event.sequence) || event.sequence <= 0 || !Number.isInteger(event.run_id)) {
+    throw new Error("invalid Discovery SSE event");
+  }
+  return event;
+}
+
+export const DISCOVERY_SSE_FRAME_LIMIT = 256 * 1024;
+export const DISCOVERY_SSE_BUFFER_LIMIT = 512 * 1024;
+
+function utf8Length(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+export function extractDiscoverySseFrames(
+  accumulated: string,
+  endOfStream = false,
+): { frames: string[]; remainder: string } {
+  if (utf8Length(accumulated) > DISCOVERY_SSE_BUFFER_LIMIT) {
+    throw new Error("Discovery SSE buffer exceeds its limit");
+  }
+  const frames: string[] = [];
+  let remainder = accumulated;
+  while (true) {
+    const match = /\r?\n\r?\n/.exec(remainder);
+    if (!match || match.index === undefined) break;
+    if (utf8Length(remainder.slice(0, match.index)) > DISCOVERY_SSE_FRAME_LIMIT) {
+      throw new Error("Discovery SSE frame exceeds its limit");
+    }
+    frames.push(remainder.slice(0, match.index));
+    remainder = remainder.slice(match.index + match[0].length);
+  }
+  if (utf8Length(remainder) > DISCOVERY_SSE_FRAME_LIMIT) {
+    throw new Error("Discovery SSE frame exceeds its limit");
+  }
+  if (endOfStream && remainder.trim()) {
+    frames.push(remainder);
+    remainder = "";
+  }
+  return { frames, remainder };
+}
+
 export async function cancelDiscoveryRun(runId: number): Promise<DiscoveryRun> {
   const r = await fetch(`${DISCOVERY_BASE}/runs/${runId}/cancel`, {
     method: "POST",
@@ -495,6 +569,11 @@ export async function sendCrawlMethodReviewReminderNow(): Promise<{ sent: boolea
 export async function getDiscoveryMethod(methodId: number): Promise<CrawlMethodDetail> {
   const r = await fetch(`${DISCOVERY_BASE}/methods/${methodId}`, { headers: authHeaders() });
   return expectOk<CrawlMethodDetail>(r, "failed to load crawl method");
+}
+
+export async function getDiscoveryMethodSource(methodId: number): Promise<{ method_id: number; filename: string; source: string }> {
+  const r = await fetch(`${DISCOVERY_BASE}/methods/${methodId}/source`, { headers: authHeaders() });
+  return expectOk(r, "failed to load connector source");
 }
 
 export async function patchDiscoveryMethod(

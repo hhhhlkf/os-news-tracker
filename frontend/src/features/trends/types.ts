@@ -2,12 +2,14 @@ export interface TrendIdentityTemplate {
   template_id: string;
   name: string;
   identity_text: string;
+  directions: string[];
   created_at: string;
 }
 
 export interface TrendCarouselTemplate {
   template_id: string;
   name: string;
+  directions: string[];
 }
 
 export type TrendTriggerMode = "manual" | "scheduled";
@@ -138,8 +140,11 @@ export type TrendCardListStatus = "pending" | "ready" | "skipped" | "failed";
 export interface TrendCardListItem {
   item_id: number;
   title: string;
+  item_kind: "news" | "discussion";
+  content_revision: number;
   published_at: string | null;
   fetched_at: string;
+  last_activity_at: string | null;
   status: TrendCardListStatus;
   news_actor: string | null;
   action: string | null;
@@ -150,6 +155,7 @@ export interface TrendCardListItem {
   error_message: string | null;
   attempt_count: number;
   card_updated_at: string | null;
+  discussion_result: Record<string, unknown> | null;
 }
 
 export interface TrendCardList {
@@ -171,6 +177,8 @@ export interface CreateTrendIdentityTemplateRequest {
   name: string;
   identity_text: string;
 }
+
+export interface UpdateTrendIdentityTemplateRequest extends CreateTrendIdentityTemplateRequest {}
 
 export interface UpdateTrendSettingsRequest extends TrendSettings {}
 
@@ -315,6 +323,7 @@ export interface TrendResult {
   template_relevance_score: number;
   trend_rank_score: number;
   category: TrendCategory;
+  direction: string | null;
   topic: string | null;
   trend_summary: string | null;
   agent_review: string;
@@ -325,6 +334,8 @@ export interface TrendResult {
 export interface TrendLatestResults {
   template_id: string;
   run_id: string | null;
+  run_direction_labels: string[];
+  current_template_directions: string[];
   window_start_date: string | null;
   window_end_date: string | null;
   trend_count: number | null;
@@ -339,6 +350,7 @@ export interface TrendCarouselItem {
   storyline_id: string;
   category: TrendCategory;
   category_label: string;
+  direction: string | null;
   topic: string;
   trend_summary: string;
   trend_rank_score: number;
@@ -355,6 +367,7 @@ export interface TrendCarousel {
   window_start_date: string | null;
   window_end_date: string | null;
   trend_count: number;
+  directions: string[];
   finished_at: string | null;
   items: TrendCarouselItem[];
   message: string | null;

@@ -7,7 +7,7 @@ from sqlalchemy import and_, case, delete, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.models import Item
+from app.models import DiscussionGroup, Item
 from app.trends.cards import (
     CardGenerationCandidate,
     CardGenerationOutcome,
@@ -40,8 +40,11 @@ from app.trends.vectors import CardEmbeddingRequestItem, CardEmbeddingResult, Ca
 class TrendCardListEntry:
     item_id: int
     title: str
+    item_kind: str
+    content_revision: int
     published_at: datetime | None
     fetched_at: datetime
+    last_activity_at: datetime | None
     status: str
     news_actor: str | None
     action: str | None
@@ -52,6 +55,7 @@ class TrendCardListEntry:
     error_message: str | None
     attempt_count: int
     card_updated_at: datetime | None
+    discussion_result: dict | None
 
 
 @dataclass(frozen=True)
@@ -384,6 +388,8 @@ class TrendRepository(CardVectorSink):
             select(
                 NewsExplanationCard.card_prompt_version,
                 NewsExplanationCard.status,
+                NewsExplanationCard.input_content_revision,
+                Item.content_revision,
                 Item.summary,
             )
             .select_from(Item)
@@ -394,8 +400,8 @@ class TrendRepository(CardVectorSink):
             )
         )
         pending = generated = skipped = failed = 0
-        for prompt_version, card_status, summary in self._db.execute(statement):
-            if prompt_version is None:
+        for prompt_version, card_status, card_revision, item_revision, summary in self._db.execute(statement):
+            if prompt_version is None or card_revision != item_revision:
                 pending += 1
             elif card_status == "ready":
                 generated += 1
@@ -452,6 +458,9 @@ class TrendRepository(CardVectorSink):
                 Item.id,
                 Item.title,
                 Item.title_tldr,
+                Item.item_kind,
+                Item.content_revision,
+                Item.last_activity_at,
                 Item.published_at,
                 Item.fetched_at,
                 effective_status.label("effective_status"),
@@ -464,9 +473,11 @@ class TrendRepository(CardVectorSink):
                 NewsExplanationCard.error_message,
                 NewsExplanationCard.attempt_count,
                 NewsExplanationCard.updated_at,
+                DiscussionGroup.structured_result,
             )
             .select_from(Item)
             .outerjoin(NewsExplanationCard, NewsExplanationCard.item_id == Item.id)
+            .outerjoin(DiscussionGroup, DiscussionGroup.item_id == Item.id)
             .where(*filters)
             .order_by(business_datetime.desc(), Item.id.desc())
             .offset(offset)
@@ -478,8 +489,11 @@ class TrendRepository(CardVectorSink):
                 TrendCardListEntry(
                     item_id=row.id,
                     title=row.title_tldr or row.title,
+                    item_kind=row.item_kind,
+                    content_revision=row.content_revision,
                     published_at=row.published_at,
                     fetched_at=row.fetched_at,
+                    last_activity_at=row.last_activity_at,
                     status=row.effective_status,
                     news_actor=row.news_actor,
                     action=row.action,
@@ -490,6 +504,7 @@ class TrendRepository(CardVectorSink):
                     error_message=row.error_message,
                     attempt_count=row.attempt_count or 0,
                     card_updated_at=row.updated_at,
+                    discussion_result=row.structured_result if row.item_kind == "discussion" else None,
                 )
             )
         return TrendCardListPage(total=total or 0, items=items)
@@ -513,14 +528,18 @@ class TrendRepository(CardVectorSink):
             select(
                 Item.id,
                 Item.title,
+                Item.item_kind,
+                Item.content_revision,
                 Item.clean_content,
                 Item.summary,
                 Item.key_points,
                 Item.published_at,
                 Item.fetched_at,
+                DiscussionGroup.structured_result,
             )
             .select_from(Item)
             .outerjoin(NewsExplanationCard, NewsExplanationCard.item_id == Item.id)
+            .outerjoin(DiscussionGroup, DiscussionGroup.item_id == Item.id)
             .where(
                 business_datetime >= start_datetime,
                 business_datetime < end_datetime,
@@ -528,6 +547,7 @@ class TrendRepository(CardVectorSink):
                     NewsExplanationCard.card_id.is_(None),
                     NewsExplanationCard.status == "failed",
                     skipped_with_summary,
+                    NewsExplanationCard.input_content_revision != Item.content_revision,
                 ),
             )
             .order_by(business_datetime.asc(), Item.id.asc())
@@ -536,13 +556,28 @@ class TrendRepository(CardVectorSink):
         for (
             item_id,
             title,
+            item_kind,
+            content_revision,
             clean_content,
             summary,
             key_points,
             published_at,
             fetched_at,
+            structured_result,
         ) in self._db.execute(statement):
             item_business_datetime = published_at or fetched_at
+            if item_kind == "discussion":
+                discussion = structured_result if isinstance(structured_result, dict) else {}
+                discussion_content = "\n".join(
+                    value for value in (
+                        summary,
+                        discussion.get("latest_progress"),
+                        discussion.get("current_conclusion"),
+                        "；".join(str(value) for value in discussion.get("disagreements", []) if value),
+                        "；".join(str(value) for value in discussion.get("open_questions", []) if value),
+                    ) if isinstance(value, str) and value.strip()
+                )
+                clean_content = discussion_content or clean_content
             content, content_source = select_card_content(
                 clean_content=clean_content,
                 summary=summary,
@@ -553,6 +588,8 @@ class TrendRepository(CardVectorSink):
                     title=title,
                     content=content,
                     at=item_business_datetime.date(),
+                    item_kind=item_kind,
+                    content_revision=content_revision,
                     content_source=content_source,
                     key_points=[str(point) for point in key_points] if isinstance(key_points, list) else None,
                 )
@@ -571,12 +608,16 @@ class TrendRepository(CardVectorSink):
             card = NewsExplanationCard(
                 item_id=candidate.item_id,
                 at=candidate.at,
+                item_kind=candidate.item_kind,
+                input_content_revision=candidate.content_revision,
                 card_prompt_version=CARD_PROMPT_VERSION,
                 status=outcome.status,
             )
             self._db.add(card)
 
         card.at = candidate.at
+        card.item_kind = candidate.item_kind
+        card.input_content_revision = candidate.content_revision
         card.card_prompt_version = CARD_PROMPT_VERSION
         card.status = outcome.status
         card.skip_reason = outcome.skip_reason
@@ -594,6 +635,11 @@ class TrendRepository(CardVectorSink):
             card.result = outcome.content.result
             card.potential_impact = outcome.content.potential_impact
             card.cause = outcome.content.cause
+        # A re-organized discussion represents a new fact revision.  Its
+        # previous vector must not remain eligible for clustering.
+        embedding = self._db.get(NewsCardEmbedding, card.card_id)
+        if embedding is not None:
+            self._db.delete(embedding)
         return card
 
     def get_vector_stage_counts(
@@ -1149,6 +1195,7 @@ class TrendRepository(CardVectorSink):
                 or_(
                     NewsExplanationCard.card_id.is_(None),
                     skipped_with_summary,
+                    NewsExplanationCard.input_content_revision != Item.content_revision,
                 ),
                 "pending",
             ),

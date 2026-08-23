@@ -15,6 +15,7 @@ import type {
   MailTemplate,
   MailTemplateCreateRequest,
   MailTemplateUpdateRequest,
+  MailTrendPreviewRequest,
 } from "./types";
 
 const configuredBase = import.meta.env.VITE_API_BASE?.trim();
@@ -113,6 +114,7 @@ export function buildMailFilterSnapshot(params: ItemQueryParams): MailTemplateCr
     importance: params.importance ?? null,
     sub_tag: params.sub_tag ?? null,
     source_id: params.source_id ?? null,
+    item_kind: params.item_kind ?? null,
     sort_by: params.sort_by ?? "published_at",
     sort_dir: params.sort_dir ?? "desc",
     ...publishedAfter,
@@ -256,6 +258,24 @@ export async function sendImmediateMail(request: MailImmediateSendRequest): Prom
     body: JSON.stringify(request),
   });
   return expectOk<MailImmediateSendResponse>(r, "failed to send immediate mail");
+}
+
+export async function previewTrendDistributionMail(request: MailTrendPreviewRequest): Promise<MailPreviewResponse> {
+  const r = await fetch(`${BASE}/mail/trends/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(request),
+  });
+  return expectOk<MailPreviewResponse>(r, "failed to preview trend distribution mail");
+}
+
+export async function sendTrendDistributionMail(request: MailTrendPreviewRequest): Promise<MailImmediateSendResponse> {
+  const r = await fetch(`${BASE}/mail/trends/send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(request),
+  });
+  return expectOk<MailImmediateSendResponse>(r, "failed to send trend distribution mail");
 }
 
 export async function fetchMailSchedules(): Promise<MailSchedule[]> {

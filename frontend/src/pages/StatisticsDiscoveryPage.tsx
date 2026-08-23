@@ -816,7 +816,7 @@ export function StatisticsDiscoveryPage({ hasSystemAccess = false }: { hasSystem
             {
               key: "itemAvg",
               title: "单条均 Token",
-              subtitle: "与「每次查询 Token」同时间刻度；一根柱一次查询，按信息源堆叠单条均耗；查出 0 条按 ÷0.2",
+              subtitle: "与「每次查询 Token」同时间刻度；一根柱一次查询，按信息源堆叠单条均耗；查出 0 条时用模型调用次数填充",
               content: (
                 <StackedBarChart
                   points={itemAvgChart.points}

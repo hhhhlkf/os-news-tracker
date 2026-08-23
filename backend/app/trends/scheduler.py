@@ -60,7 +60,8 @@ WEEKDAY_LABELS: dict[str, str] = {
     "saturday": "每周六",
     "sunday": "每周日",
 }
-_RULE_PATTERN = re.compile(rf"^weekly_({'|'.join(WEEKDAY_INDEXES)})_(\d{{2}}):(\d{{2}})$")
+_WEEKLY_RULE_PATTERN = re.compile(rf"^weekly_({'|'.join(WEEKDAY_INDEXES)})_(\d{{2}}):(\d{{2}})$")
+_DAILY_RULE_PATTERN = re.compile(r"^daily_(\d{2}):(\d{2})$")
 
 STAGE_CARDS = "新闻卡片"
 STAGE_VECTORS = "事件核心向量"
@@ -93,6 +94,19 @@ class WeeklyScheduleRule:
 
 
 @dataclass(frozen=True)
+class DailyScheduleRule:
+    hour: int
+    minute: int
+
+    @property
+    def label(self) -> str:
+        return f"每日 {self.hour:02d}:{self.minute:02d}（北京时间）"
+
+
+ScheduleRule = WeeklyScheduleRule | DailyScheduleRule
+
+
+@dataclass(frozen=True)
 class ScheduledRunOutcome:
     status: str
     stage: str
@@ -109,15 +123,22 @@ class TrendScheduleRuntimeState:
     stage: str
 
 
-def parse_schedule_rule(rule: str | None) -> WeeklyScheduleRule | None:
-    """Parse the ``weekly_<weekday>_<HH:MM>`` rule the settings UI produces."""
-    match = _RULE_PATTERN.match((rule or "").strip())
-    if match is None:
+def parse_schedule_rule(rule: str | None) -> ScheduleRule | None:
+    """Parse the daily or weekly rule produced by the settings UI."""
+    normalized = (rule or "").strip()
+    weekly_match = _WEEKLY_RULE_PATTERN.match(normalized)
+    daily_match = _DAILY_RULE_PATTERN.match(normalized)
+    if weekly_match is None and daily_match is None:
         return None
-    weekday_name, hour_text, minute_text = match.groups()
+    if weekly_match is not None:
+        weekday_name, hour_text, minute_text = weekly_match.groups()
+    else:
+        hour_text, minute_text = daily_match.groups()
     hour, minute = int(hour_text), int(minute_text)
     if hour > 23 or minute > 59:
         return None
+    if daily_match is not None:
+        return DailyScheduleRule(hour=hour, minute=minute)
     return WeeklyScheduleRule(
         weekday_name=weekday_name,
         weekday=WEEKDAY_INDEXES[weekday_name],
@@ -126,25 +147,26 @@ def parse_schedule_rule(rule: str | None) -> WeeklyScheduleRule | None:
     )
 
 
-def resolve_due_slot(rule: WeeklyScheduleRule, *, now: datetime) -> datetime | None:
+def resolve_due_slot(rule: ScheduleRule, *, now: datetime) -> datetime | None:
     """Return the planned instant this tick belongs to, or None when not due.
 
     Catch-up stays inside the planned weekday so an outage during the exact
     minute still runs once later that day, while the persistent claim keeps the
     instant single-shot.
     """
-    if now.weekday() != rule.weekday:
+    if isinstance(rule, WeeklyScheduleRule) and now.weekday() != rule.weekday:
         return None
     if (now.hour, now.minute) < (rule.hour, rule.minute):
         return None
     return now.replace(hour=rule.hour, minute=rule.minute, second=0, microsecond=0)
 
 
-def resolve_next_run_at(rule: WeeklyScheduleRule, *, now: datetime) -> datetime:
+def resolve_next_run_at(rule: ScheduleRule, *, now: datetime) -> datetime:
     candidate = now.replace(hour=rule.hour, minute=rule.minute, second=0, microsecond=0)
-    candidate += timedelta(days=(rule.weekday - now.weekday()) % 7)
+    if isinstance(rule, WeeklyScheduleRule):
+        candidate += timedelta(days=(rule.weekday - now.weekday()) % 7)
     if candidate <= now:
-        candidate += timedelta(days=7)
+        candidate += timedelta(days=7 if isinstance(rule, WeeklyScheduleRule) else 1)
     return candidate
 
 
@@ -449,13 +471,13 @@ def _finalize_schedule_run(
 def resolve_skip_reason(
     *,
     trigger_mode: str,
-    rule: WeeklyScheduleRule | None,
+    rule: ScheduleRule | None,
     scheduled_template_id: str | None,
 ) -> str | None:
     if trigger_mode != "scheduled":
         return "触发方式为手动，全局定时趋势任务未启用。"
     if rule is None:
-        return "定时规则缺失或格式不合法，无法解析每周执行时刻，定时任务不会运行。"
+        return "定时规则缺失或格式不合法，无法解析每日或每周执行时刻，定时任务不会运行。"
     if not scheduled_template_id:
         return "未选择当前定时模板，定时任务不会运行。"
     return None

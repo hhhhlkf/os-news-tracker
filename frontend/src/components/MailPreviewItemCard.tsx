@@ -15,6 +15,11 @@ function SourceRow({ item }: { item: MailPreviewItem }): ReactNode {
         overflow: "hidden",
       }}
     >
+      {item.item_kind === "discussion" && (
+        <span style={{ fontSize: 11, borderRadius: 999, padding: "2px 7px", background: "#ecfdf3", color: "#067647", fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>
+          社区技术讨论
+        </span>
+      )}
       {item.source_url ? <SourceCta url={item.source_url} size="sm" /> : null}
       <SourceQualityMeta
         sourceName={item.source_name}

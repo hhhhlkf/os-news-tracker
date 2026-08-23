@@ -1,5 +1,25 @@
 from html import escape
 
+from app.trends.palette import trend_category_color, trend_direction_color, trend_direction_sort_key
+
+
+MAIN_CATEGORY_COLOR_GROUPS = (
+    {"color": "#175cd3", "background": "#eff8ff", "border": "#b2ddff"},
+    {"color": "#5925dc", "background": "#f4f3ff", "border": "#d9d6fe"},
+    {"color": "#027a48", "background": "#ecfdf3", "border": "#abefc6"},
+    {"color": "#b54708", "background": "#fffaeb", "border": "#fedf89"},
+    {"color": "#c01048", "background": "#fff1f3", "border": "#fecdd6"},
+    {"color": "#0e7090", "background": "#ecfdff", "border": "#a5f0fc"},
+)
+
+
+def _is_ai_tools_category(category: str) -> bool:
+    return "AI工具" in category
+
+
+def _main_category_sort_key(category: str) -> tuple[bool, str]:
+    return (_is_ai_tools_category(category), category)
+
 
 def build_mail_preview_context(
     *,
@@ -33,6 +53,10 @@ def _parse_tech_highlight(text: str) -> tuple[str | None, str]:
 
 def _build_header_summary(filters: dict) -> str:
     segments: list[str] = []
+    if filters.get("item_kind") == "discussion":
+        segments.append("技术讨论")
+    elif filters.get("item_kind") == "news":
+        segments.append("新闻")
     if filters.get("main_category"):
         segments.append(str(filters["main_category"]))
     if filters.get("importance"):
@@ -91,6 +115,16 @@ def _render_importance_badge(value: str | None) -> str:
         f'<span style="display:inline-block;background:{bg};color:{fg};'
         'padding:2px 8px;border-radius:999px;font-size:12px;font-weight:700;white-space:nowrap;">'
         f'{escape(str(value))}</span>'
+    )
+
+
+def _render_discussion_badge(item_kind: object) -> str:
+    if item_kind != "discussion":
+        return ""
+    return (
+        '<span style="display:inline-block;background:#ecfdf3;color:#067647;'
+        'padding:2px 8px;border-radius:999px;font-size:12px;font-weight:700;white-space:nowrap;">'
+        '社区技术讨论</span>'
     )
 
 
@@ -158,15 +192,8 @@ def _render_source_quality(item: dict, *, compact: bool = False) -> str:
         if source_name
         else f'<span style="font-size:{name_size};color:#98a2b3;white-space:nowrap;">来源未标注</span>'
     )
-    if score_value is None:
-        badge_style = (
-            f"min-width:{'48px' if compact else '58px'};text-align:center;border-radius:{'6px' if compact else '8px'};"
-            f"padding:{'2px 5px' if compact else '3px 7px'};font-size:{'10px' if compact else '12px'};"
-            "font-weight:800;line-height:1.1;white-space:nowrap;border:1px solid #d0d5dd;"
-            "color:#475467;background:#f9fafb;flex-shrink:0;"
-        )
-        label = "未审计"
-    else:
+    badge_html = ""
+    if score_value is not None:
         if status == "failed" or score_value < 50:
             colors = ("#fecdca", "#b42318", "#fef3f2")
         elif status == "weak" or score_value < 70:
@@ -180,6 +207,7 @@ def _render_source_quality(item: dict, *, compact: bool = False) -> str:
             f"color:{colors[1]};background:{colors[2]};flex-shrink:0;"
         )
         label = f"{grade} {score_value}".strip()
+        badge_html = f'<span style="{badge_style}">{escape(label)}</span>'
     shell = (
         f'display:inline-flex;align-items:center;gap:{"5px" if compact else "8px"};'
         f'height:{"22px" if compact else "28px"};box-sizing:border-box;min-width:0;'
@@ -190,7 +218,7 @@ def _render_source_quality(item: dict, *, compact: bool = False) -> str:
     return (
         f'<div style="{shell}">'
         f"{source_html}"
-        f'<span style="{badge_style}">{escape(label)}</span>'
+        f"{badge_html}"
         "</div>"
     )
 
@@ -221,33 +249,50 @@ def _render_notice_box(notice: dict | None) -> str:
     if not doc_text and not website_url:
         return ""
 
-    doc_html = (
-        f'<div style="font-size:13px;line-height:1.7;color:#344054;white-space:pre-wrap;">{escape(doc_text)}</div>'
-        if doc_text
-        else '<div style="font-size:13px;color:#98a2b3;">暂无说明文档</div>'
-    )
+    doc_html = f'<span style="min-width:0;flex:1 1 220px;font-size:12px;line-height:1.45;color:#475467;white-space:pre-wrap;">{escape(doc_text)}</span>' if doc_text else ""
     if website_url:
         safe_url = escape(website_url, quote=True)
         link_html = (
-            f'<a href="{safe_url}" style="color:#175cd3;font-size:13px;font-weight:700;text-decoration:none;word-break:break-all;">'
+            f'<a href="{safe_url}" style="color:#175cd3;font-size:12px;font-weight:700;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;">'
             f"{escape(website_url)}</a>"
         )
     else:
-        link_html = '<span style="font-size:13px;color:#98a2b3;">暂无网站链接</span>'
+        link_html = ""
 
     return f"""
-    <section style="background:#fff;border:1px solid #d0d5dd;border-radius:14px;padding:16px 18px;margin-bottom:14px;">
-      <div style="font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#667085;margin-bottom:10px;">说明与链接</div>
-      <div style="display:grid;gap:12px;">
-        <div>
-          <div style="font-size:12px;font-weight:700;color:#475467;margin-bottom:4px;">说明文档</div>
-          {doc_html}
-        </div>
-        <div>
-          <div style="font-size:12px;font-weight:700;color:#475467;margin-bottom:4px;">网站链接</div>
-          {link_html}
-        </div>
+    <section style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#fff;border:1px solid #d0d5dd;border-radius:10px;padding:10px 12px;margin-top:8px;">
+      <span style="font-size:11px;font-weight:800;color:#667085;white-space:nowrap;">说明与链接</span>
+      {doc_html}{link_html}
+    </section>
+    """
+
+
+def _render_timeline_table(cards: list[str], *, color: str) -> str:
+    """Use the shared news-mail timeline markup for every mailed content type."""
+    timeline_rows = "".join(
+        f'''<tr>
+          <td width="6" style="width:6px;padding:0;font-size:0;line-height:0;"></td>
+          <td width="1" bgcolor="{color}" style="width:1px;padding:0;vertical-align:top;background:{color};font-size:0;line-height:0;">
+            <span style="display:block;width:1px;height:1px;margin:22px 0 0 0;border-radius:50%;background:{color};box-shadow:0 0 0 4px {color},0 0 0 6px #f8fafc;"></span>
+          </td>
+          <td style="padding:0 0 14px 14px;vertical-align:top;">{card}</td>
+        </tr>'''
+        for card in cards
+    )
+    return f'<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="width:100%;border-collapse:collapse;">{timeline_rows}</table>'
+
+
+def _render_module_section(title: str, cards: list[str], *, color: str, background: str, border: str) -> str:
+    if not cards:
+        return ""
+    return f"""
+    <section style="margin-bottom:18px;">
+      <div style="display:flex;align-items:center;gap:10px;margin:0 0 10px;">
+        <span style="display:inline-block;border:1px solid {border};border-radius:999px;padding:4px 10px;background:{background};color:{color};font-size:12px;font-weight:800;white-space:nowrap;">{title}</span>
+        <span style="height:1px;flex:1;background:{border};"></span>
+        <span style="font-size:13px;color:#98a2b3;white-space:nowrap;">{len(cards)} 条</span>
       </div>
+      {_render_timeline_table(cards, color=color)}
     </section>
     """
 
@@ -259,11 +304,12 @@ def render_mail_html(context: dict) -> str:
     summary_text = _build_header_summary(filters)
     notice_html = _render_notice_box(context.get("notice") if isinstance(context.get("notice"), dict) else None)
 
-    cards = []
+    cards_by_category: dict[str, list[str]] = {}
     for item in items:
         title = escape(str(item.get("title") or "未命名新闻"))
         summary = escape(str(item.get("summary") or ""))
         importance_html = _render_importance_badge(item.get("importance"))
+        discussion_badge_html = _render_discussion_badge(item.get("item_kind"))
         published_at = _format_date_ymd(item.get("published_at"))
         source_url = str(item.get("source_url") or "")
         hotspots_html = _render_hotspot_tags([str(h) for h in (item.get("hotspots") or [])])
@@ -276,9 +322,9 @@ def render_mail_html(context: dict) -> str:
         source_quality_html = _render_source_quality(item, compact=True)
         source_row_html = (
             f'<div style="display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0;overflow:hidden;">'
-            f"{source_cta_html}{source_quality_html}</div>"
+            f"{discussion_badge_html}{source_cta_html}{source_quality_html}</div>"
         )
-        cards.append(
+        card = (
             f"""
             <details class="mail-item" style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px 16px;margin-bottom:12px;">
               <summary style="list-style:none;cursor:pointer;outline:none;">
@@ -310,6 +356,15 @@ def render_mail_html(context: dict) -> str:
             </details>
             """
         )
+        category = str(item.get("main_category") or "").strip() or "未分类"
+        cards_by_category.setdefault(category, []).append(card)
+
+    cards_html = "".join(
+        _render_module_section(category, cards, **MAIN_CATEGORY_COLOR_GROUPS[index % len(MAIN_CATEGORY_COLOR_GROUPS)])
+        for index, (category, cards) in enumerate(
+            sorted(cards_by_category.items(), key=lambda entry: _main_category_sort_key(entry[0]))
+        )
+    )
 
     return f"""
     <!doctype html>
@@ -335,9 +390,115 @@ def render_mail_html(context: dict) -> str:
           <h1 style="margin:0 0 8px;font-size:28px;line-height:1.2;">{subject}</h1>
           <p style="margin:0;color:#d0d5dd;font-size:14px;line-height:1.7;">筛选条件：{escape(summary_text)}<br/>共 {len(items)} 条，按当前筛选生成。点击右上角可展开单条详情。</p>
         </header>
+        {cards_html if cards_by_category else '<section style="background:#fff;border:1px dashed #d0d5dd;border-radius:14px;padding:24px;color:#667085;">当前筛选下暂无可发送新闻。</section>'}
         {notice_html}
-        {''.join(cards) if cards else '<section style="background:#fff;border:1px dashed #d0d5dd;border-radius:14px;padding:24px;color:#667085;">当前筛选下暂无可发送新闻。</section>'}
       </main>
     </body>
     </html>
+    """
+
+
+def _render_trend_source_card(item: dict) -> str:
+    """Render one source news item under an expandable trend summary."""
+
+    title = escape(str(item.get("title") or "未命名新闻"))
+    summary = escape(str(item.get("summary") or ""))
+    importance = _render_importance_badge(item.get("importance"))
+    source_url = str(item.get("source_url") or "")
+    source_cta = _render_source_cta(source_url, compact=True) if source_url else ""
+    source_quality = _render_source_quality(item, compact=True)
+    source_row = f'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">{source_cta}{source_quality}</div>'
+    return f"""
+    <details style="border:1px solid #eaecf0;border-radius:10px;background:#fff;padding:10px 12px;">
+      <summary style="list-style:none;cursor:pointer;">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+          <strong style="min-width:0;flex:1;color:#344054;font-size:13px;line-height:1.45;">{title}</strong>
+          <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;white-space:nowrap;">
+            {importance}
+            <span style="border:1px solid #d0d5dd;border-radius:6px;padding:3px 7px;color:#475467;font-size:11px;">展开 ▾</span>
+          </div>
+        </div>
+        <div style="margin-top:5px;color:#667085;font-size:12px;line-height:1.6;">{summary or '暂无摘要'}</div>
+      </summary>
+      <div style="display:grid;gap:8px;margin-top:10px;color:#475467;font-size:12px;line-height:1.65;">
+        <div><strong style="display:block;color:#344054;margin-bottom:5px;">技术要点</strong>{_render_tech_highlights([str(point) for point in (item.get('key_points') or [])])}</div>
+        <div><strong style="display:block;color:#344054;margin-bottom:5px;">技术热点</strong>{_render_hotspot_tags([str(tag) for tag in (item.get('hotspots') or [])])}</div>
+        {source_row}
+      </div>
+    </details>
+    """
+
+
+def render_trend_mail_html(*, subject: str, trend_groups: list[dict], notice: dict | None = None) -> str:
+    """Render the direction-grouped trend distribution mail.
+
+    Trend summaries stay concise when collapsed; each summary exposes the full,
+    independently collapsible news cards that provide its evidence.
+    """
+
+    sections: list[str] = []
+    trend_count = 0
+    source_count = 0
+    for group in sorted(
+        trend_groups,
+        key=lambda group: trend_direction_sort_key(str(group.get("direction") or "")),
+    ):
+        raw_direction = str(group.get("direction") or "未分类方向")
+        direction = escape(raw_direction)
+        direction_color = trend_direction_color(raw_direction)
+        cards: list[str] = []
+        for trend in group.get("trends") or []:
+            trend_count += 1
+            title = escape(str(trend.get("title") or "未命名趋势"))
+            summary = escape(str(trend.get("summary") or "暂无趋势概括"))
+            category = escape(str(trend.get("category_label") or "趋势"))
+            category_color = trend_category_color(str(trend.get("category") or ""))
+            sources = trend.get("sources") or []
+            source_count += len(sources)
+            sources_html = "".join(_render_trend_source_card(item) for item in sources)
+            trend_body = sources_html or '<div style="color:#98a2b3;font-size:12px;">暂无关联新闻。</div>'
+            cards.append(
+                f"""
+                <details style="border:1px solid #d0d5dd;border-radius:12px;background:#fff;padding:13px 14px;">
+                  <summary style="list-style:none;cursor:pointer;">
+                    <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+                      <strong style="min-width:0;flex:1;color:#101828;font-size:15px;line-height:1.45;">{title}</strong>
+                      <span style="border:1px solid {category_color['border']};border-radius:999px;background:{category_color['background']};color:{category_color['color']};padding:3px 7px;font-size:11px;font-weight:700;white-space:nowrap;">{category}</span>
+                    </div>
+                    <div style="margin-top:7px;color:#475467;font-size:13px;line-height:1.7;">{summary}</div>
+                    <div style="margin-top:8px;color:#98a2b3;font-size:11px;">关联新闻 {len(sources)} 条 · 点击展开完整新闻卡片</div>
+                  </summary>
+                  <div style="display:grid;gap:8px;margin-top:12px;">{trend_body}</div>
+                </details>
+                """
+            )
+        if cards:
+            sections.append(
+                f"""
+                <section style="margin:0 0 18px;">
+                  <div style="display:flex;align-items:center;gap:8px;margin:0 0 9px;">
+                    <span style="border:1px solid {direction_color['border']};border-radius:999px;background:{direction_color['background']};color:{direction_color['color']};padding:4px 9px;font-size:12px;font-weight:700;">{direction}</span>
+                    <span style="height:1px;flex:1;background:{direction_color['line']};"></span>
+                    <span style="color:#98a2b3;font-size:13px;">{len(cards)} 条趋势</span>
+                  </div>
+                  {_render_timeline_table(cards, color=direction_color['color'])}
+                </section>
+                """
+            )
+    notice_html = _render_notice_box(notice)
+    return f"""
+    <!doctype html>
+    <html lang="zh-CN"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+      <style>details > summary::-webkit-details-marker {{ display:none; }} details > summary::marker {{ content:''; }}</style>
+    </head><body style="margin:0;padding:24px;background:#f5f7fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#101828;">
+      <main style="max-width:960px;margin:0 auto;">
+        <header style="background:linear-gradient(135deg,#101828 0%,#1f2937 100%);color:#f8fafc;border-radius:18px;padding:24px 28px;margin-bottom:18px;">
+          <div style="font-size:12px;color:#98a2b3;margin-bottom:8px;">OS News Tracker</div>
+          <h1 style="margin:0 0 8px;font-size:28px;line-height:1.2;">{escape(subject)}</h1>
+          <p style="margin:0;color:#d0d5dd;font-size:14px;line-height:1.7;">按身份模板方向分发最近成功发布的趋势。共 {trend_count} 条趋势、{source_count} 条关联新闻；趋势与新闻均默认收起。</p>
+        </header>
+        {''.join(sections) if sections else '<section style="background:#fff;border:1px dashed #d0d5dd;border-radius:14px;padding:24px;color:#667085;">当前模板最近成功发布中暂无可分发趋势。</section>'}
+        {notice_html}
+      </main>
+    </body></html>
     """

@@ -4,43 +4,27 @@ import {
   ApiError,
   approveDiscoveryMethods,
   deletePendingDiscoveryMethods,
-  getCrawlMethodReviewReminderConfig,
   listPendingDiscoveryMethods,
-  sendCrawlMethodReviewReminderNow,
-  updateCrawlMethodReviewReminderConfig,
 } from "../api/client";
 import type { CrawlMethod } from "../types";
-import { clampInput, INPUT_LIMITS } from "../inputLimits";
-import { emailListError, parseEmailList } from "../mail/emailValidation";
 
 export function CrawlMethodReviewList({ highlightId, onOpenMethod }: { highlightId?: number | null; onOpenMethod?: (id: number) => void }) {
   const qc = useQueryClient();
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [summary, setSummary] = useState<{ text: string; tone: "success" | "danger" } | null>(null);
-  const [expanded, setExpanded] = useState(true);
-  const [recipientsText, setRecipientsText] = useState("");
   const pending = useQuery({ queryKey: ["discovery-methods", "pending-review"], queryFn: listPendingDiscoveryMethods });
-  const reminder = useQuery({
-    queryKey: ["discovery-review-reminder"],
-    queryFn: getCrawlMethodReviewReminderConfig,
-  });
   const methods = useMemo(() => pending.data ?? [], [pending.data]);
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
   const allSelected = methods.length > 0 && methods.every((method) => selected.has(method.id));
-  const reminderRecipientsError = useMemo(
-    () => emailListError(parseEmailList(recipientsText)),
-    [recipientsText],
-  );
+
+  useEffect(() => {
+    if (!summary) return;
+    const timeoutId = window.setTimeout(() => setSummary(null), 5000);
+    return () => window.clearTimeout(timeoutId);
+  }, [summary]);
 
   const approveMut = useMutation({ mutationFn: approveDiscoveryMethods });
   const deleteMut = useMutation({ mutationFn: deletePendingDiscoveryMethods });
-  const reminderMut = useMutation({ mutationFn: updateCrawlMethodReviewReminderConfig });
-  const sendReminderMut = useMutation({ mutationFn: sendCrawlMethodReviewReminderNow });
-
-  useEffect(() => {
-    if (!reminder.data) return;
-    setRecipientsText(reminder.data.recipients.join(", "));
-  }, [reminder.data]);
 
   function toggle(id: number, checked: boolean) {
     setSelectedIds((prev) => {
@@ -93,55 +77,6 @@ export function CrawlMethodReviewList({ highlightId, onOpenMethod }: { highlight
     }
   }
 
-  async function saveReminderConfig(enabled?: boolean) {
-    const current = reminder.data;
-    const parsed = parseEmailList(recipientsText);
-    if (reminderRecipientsError) {
-      setSummary({ text: reminderRecipientsError, tone: "danger" });
-      return;
-    }
-    try {
-      const next = await reminderMut.mutateAsync({
-        enabled: enabled ?? current?.enabled ?? false,
-        interval_minutes: current?.interval_minutes ?? 1440,
-        recipients: parsed.valid,
-      });
-      setRecipientsText(next.recipients.join(", "));
-      setSummary({ text: "审核提醒设置已保存", tone: "success" });
-      await qc.invalidateQueries({ queryKey: ["discovery-review-reminder"] });
-    } catch (error) {
-      setSummary({ text: error instanceof ApiError ? error.message : "保存提醒设置失败", tone: "danger" });
-    }
-  }
-
-  async function changeInterval(intervalMinutes: number) {
-    const current = reminder.data;
-    try {
-      await reminderMut.mutateAsync({
-        enabled: current?.enabled ?? false,
-        interval_minutes: intervalMinutes,
-        recipients: current?.recipients ?? [],
-      });
-      await qc.invalidateQueries({ queryKey: ["discovery-review-reminder"] });
-      setSummary({ text: "提醒间隔已更新", tone: "success" });
-    } catch (error) {
-      setSummary({ text: error instanceof ApiError ? error.message : "更新提醒间隔失败", tone: "danger" });
-    }
-  }
-
-  async function sendNow() {
-    try {
-      const result = await sendReminderMut.mutateAsync();
-      setSummary({
-        text: result.sent ? `已发送 ${result.count} 个待审核方式提醒` : `未发送：${result.reason}${result.error ? ` · ${result.error}` : ""}`,
-        tone: result.sent ? "success" : "danger",
-      });
-      await qc.invalidateQueries({ queryKey: ["discovery-review-reminder"] });
-    } catch (error) {
-      setSummary({ text: error instanceof ApiError ? error.message : "发送提醒失败", tone: "danger" });
-    }
-  }
-
   return (
     <section style={section}>
       <div style={headerRow}>
@@ -150,102 +85,38 @@ export function CrawlMethodReviewList({ highlightId, onOpenMethod }: { highlight
           <div style={subtitle}>智能探查成功后先进入这里。通过审核后才会进入正式爬取方式库。</div>
         </div>
         <div style={actions}>
-          {expanded && (
-            <>
-              <span style={counter}>待审核 <b>{methods.length}</b> 个 · 已选 <b>{selected.size}</b> 个</span>
-              <label style={checkLabel}>
-                <input type="checkbox" checked={allSelected} disabled={methods.length === 0} onChange={(event) => toggleAll(event.target.checked)} />
-                全选
-              </label>
-              <button type="button" style={btnPrimary} disabled={selected.size === 0 || approveMut.isPending} onClick={approveSelected}>
-                {approveMut.isPending ? "通过中..." : "批量通过"}
-              </button>
-              <button type="button" style={btnDangerGhost} disabled={selected.size === 0 || deleteMut.isPending} onClick={deleteSelected}>
-                {deleteMut.isPending ? "删除中..." : "批量删除"}
-              </button>
-            </>
-          )}
-          <button type="button" style={btnGhost} onClick={() => setExpanded((value) => !value)}>
-            {expanded ? "收起" : "展开"}
+          <span style={counter}>待审核 <b>{methods.length}</b> 个 · 已选 <b>{selected.size}</b> 个</span>
+          <label style={checkLabel}>
+            <input type="checkbox" checked={allSelected} disabled={methods.length === 0} onChange={(event) => toggleAll(event.target.checked)} />
+            全选
+          </label>
+          <button type="button" style={btnPrimary} disabled={selected.size === 0 || approveMut.isPending} onClick={approveSelected}>
+            {approveMut.isPending ? "通过中..." : "批量通过"}
+          </button>
+          <button type="button" style={btnDangerGhost} disabled={selected.size === 0 || deleteMut.isPending} onClick={deleteSelected}>
+            {deleteMut.isPending ? "删除中..." : "批量删除"}
           </button>
         </div>
       </div>
 
-      {!expanded ? null : (
-        <>
-          {summary && <div style={{ ...notice, color: summary.tone === "danger" ? "#b42318" : "#059669" }}>{summary.text}</div>}
-          <div style={reminderBar}>
-            <label style={inlineControl}>
-              <span>邮件提醒</span>
-              <input
-                type="checkbox"
-                checked={Boolean(reminder.data?.enabled)}
-                disabled={reminder.isLoading || reminderMut.isPending}
-                onChange={(event) => saveReminderConfig(event.target.checked)}
-              />
-            </label>
-            <label style={inlineControl}>
-              <span>间隔</span>
-              <select
-                value={reminder.data?.interval_minutes ?? 1440}
-                disabled={reminder.isLoading || reminderMut.isPending}
-                onChange={(event) => changeInterval(Number(event.target.value))}
-                style={selectStyle}
-              >
-                <option value={30}>30 分钟</option>
-                <option value={60}>1 小时</option>
-                <option value={360}>6 小时</option>
-                <option value={720}>12 小时</option>
-                <option value={1440}>24 小时</option>
-              </select>
-            </label>
-            <div style={{ display: "grid", gap: 4, flex: 1, minWidth: 220 }}>
-              <input
-                style={{ ...recipientInput, width: "100%" }}
-                placeholder="管理员邮箱，多个用逗号分隔"
-                value={recipientsText}
-                maxLength={INPUT_LIMITS.emailList}
-                onChange={(event) => setRecipientsText(clampInput(event.target.value, INPUT_LIMITS.emailList))}
-              />
-              {reminderRecipientsError && (
-                <span style={{ fontSize: 12, color: "#b42318" }}>{reminderRecipientsError}</span>
-              )}
-            </div>
-            <button
-              type="button"
-              style={btnGhost}
-              disabled={reminderMut.isPending || Boolean(reminderRecipientsError)}
-              onClick={() => saveReminderConfig()}
-            >
-              保存提醒
-            </button>
-            <button type="button" style={btnGhost} disabled={sendReminderMut.isPending || methods.length === 0} onClick={sendNow}>
-              立即提醒
-            </button>
-            {reminder.data?.last_result_status && (
-              <span style={lastStatus}>上次：{reminder.data.last_result_status}</span>
-            )}
-          </div>
-
-          <div style={listGrid}>
-            {pending.isLoading && <div style={infoBox}>加载待审核方式中...</div>}
-            {pending.isError && <div style={{ ...infoBox, color: "#b42318", borderColor: "#fecdca", background: "#fef3f2" }}>加载待审核方式失败。</div>}
-            {methods.map((method) => (
-              <ReviewRow
-                key={method.id}
-                method={method}
-                selected={selected.has(method.id)}
-                highlight={highlightId === method.id}
-                onToggle={(checked) => toggle(method.id, checked)}
-                onOpen={() => onOpenMethod?.(method.id)}
-              />
-            ))}
-            {pending.data && methods.length === 0 && (
-              <div style={emptyBox}>暂无待审核爬取方式。新的智能探查结果会先出现在这里。</div>
-            )}
-          </div>
-        </>
-      )}
+      {summary && <div style={{ ...notice, display: "flex", gap: 8, alignItems: "flex-start", color: summary.tone === "danger" ? "#b42318" : "#059669" }}><span style={{ flex: 1 }}>{summary.text}</span><button type="button" onClick={() => setSummary(null)} aria-label="关闭提示" style={closeButton}>×</button></div>}
+      <div style={listGrid}>
+        {pending.isLoading && <div style={infoBox}>加载待审核方式中...</div>}
+        {pending.isError && <div style={{ ...infoBox, color: "#b42318", borderColor: "#fecdca", background: "#fef3f2" }}>加载待审核方式失败。</div>}
+        {methods.map((method) => (
+          <ReviewRow
+            key={method.id}
+            method={method}
+            selected={selected.has(method.id)}
+            highlight={highlightId === method.id}
+            onToggle={(checked) => toggle(method.id, checked)}
+            onOpen={() => onOpenMethod?.(method.id)}
+          />
+        ))}
+        {pending.data && methods.length === 0 && (
+          <div style={emptyBox}>暂无待审核爬取方式。新的智能探查结果会先出现在这里。</div>
+        )}
+      </div>
     </section>
   );
 }
@@ -323,25 +194,20 @@ function qualityBadgeStyle(score: number | null | undefined, status: string | nu
 
 const section: CSSProperties = { background: "#fff", border: "1px solid #d0d5dd", borderRadius: 10, padding: 16, marginTop: 14 };
 const headerRow: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 };
-const title: CSSProperties = { fontSize: 15, fontWeight: 700, color: "#101828" };
-const subtitle: CSSProperties = { fontSize: 12, color: "#667085", marginTop: 2 };
+const title: CSSProperties = { fontSize: 13, fontWeight: 700, color: "#101828" };
+const subtitle: CSSProperties = { fontSize: 11, color: "#667085", marginTop: 2 };
 const actions: CSSProperties = { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" };
-const counter: CSSProperties = { fontSize: 12, color: "#475467" };
-const checkLabel: CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "#475467" };
-const notice: CSSProperties = { fontSize: 13, marginBottom: 10 };
-const reminderBar: CSSProperties = { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0", borderTop: "1px solid #eaecf0", borderBottom: "1px solid #eaecf0", marginBottom: 10 };
-const inlineControl: CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "#475467" };
+const counter: CSSProperties = { fontSize: 11, color: "#475467" };
+const checkLabel: CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "#475467" };
+const notice: CSSProperties = { fontSize: 12, marginBottom: 10 };
+const closeButton: CSSProperties = { border: 0, background: "transparent", color: "inherit", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0 };
 const listGrid: CSSProperties = { display: "grid", gap: 8 };
 const row: CSSProperties = { display: "flex", alignItems: "center", gap: 12, border: "1px solid #eaecf0", borderRadius: 9, padding: "9px 11px" };
-const rowTitle: CSSProperties = { fontSize: 14, fontWeight: 700, color: "#101828" };
-const rowUrl: CSSProperties = { fontSize: 12, color: "#667085", wordBreak: "break-all" };
-const rowMeta: CSSProperties = { fontSize: 12, color: "#667085", textAlign: "right", minWidth: 150 };
+const rowTitle: CSSProperties = { fontSize: 13, fontWeight: 700, color: "#101828" };
+const rowUrl: CSSProperties = { fontSize: 11, color: "#667085", wordBreak: "break-all" };
+const rowMeta: CSSProperties = { fontSize: 11, color: "#667085", textAlign: "right", minWidth: 150 };
 const pendingBadge: CSSProperties = { fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, marginLeft: 6, background: "#fffaeb", color: "#b54708" };
-const btnPrimary: CSSProperties = { border: "none", borderRadius: 999, padding: "8px 16px", background: "#175cd3", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" };
-const btnGhost: CSSProperties = { border: "1px solid #d0d5dd", borderRadius: 999, padding: "8px 14px", background: "#fff", color: "#344054", fontSize: 13, fontWeight: 700, cursor: "pointer" };
-const btnDangerGhost: CSSProperties = { border: "1px solid #fecdca", borderRadius: 999, padding: "8px 16px", background: "#fff", color: "#b42318", fontSize: 13, fontWeight: 700, cursor: "pointer" };
-const infoBox: CSSProperties = { border: "1px dashed #d0d5dd", borderRadius: 8, padding: 16, color: "#667085", fontSize: 13 };
+const btnPrimary: CSSProperties = { border: "none", borderRadius: 999, padding: "8px 16px", background: "#175cd3", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" };
+const btnDangerGhost: CSSProperties = { border: "1px solid #fecdca", borderRadius: 999, padding: "8px 16px", background: "#fff", color: "#b42318", fontSize: 12, fontWeight: 700, cursor: "pointer" };
+const infoBox: CSSProperties = { border: "1px dashed #d0d5dd", borderRadius: 8, padding: 16, color: "#667085", fontSize: 12 };
 const emptyBox: CSSProperties = { ...infoBox };
-const selectStyle: CSSProperties = { border: "1px solid #d0d5dd", borderRadius: 8, padding: "6px 8px", background: "#fff", color: "#344054", fontSize: 12 };
-const recipientInput: CSSProperties = { minWidth: 260, flex: 1, border: "1px solid #d0d5dd", borderRadius: 8, padding: "7px 10px", fontSize: 12 };
-const lastStatus: CSSProperties = { fontSize: 12, color: "#667085" };

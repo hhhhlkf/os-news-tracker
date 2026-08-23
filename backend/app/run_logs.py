@@ -7,11 +7,13 @@ from datetime import datetime, timezone
 from threading import Lock
 from collections.abc import Iterator
 from typing import Any
+from uuid import uuid4
 
 _MAX_LOGS = 300
 _logs: deque[dict[str, Any]] = deque(maxlen=_MAX_LOGS)
 _lock = Lock()
 _next_id = 1
+_epoch = str(uuid4())
 _current_run_id: ContextVar[int | None] = ContextVar("current_run_id", default=None)
 
 
@@ -64,6 +66,11 @@ def list_run_logs(*, after_id: int | None = None, limit: int = 200) -> list[dict
     if after_id is not None:
         rows = [row for row in rows if row["id"] > after_id]
     return rows[-limit:]
+
+
+def get_run_log_epoch() -> str:
+    """Identify the in-memory log buffer across backend reloads."""
+    return _epoch
 
 
 def build_not_stored_log_fields(result: Any) -> dict[str, Any]:

@@ -122,6 +122,14 @@ class Condition(BaseModel):
 
     @model_validator(mode="after")
     def validate_target_presence(self) -> "Condition":
+        """校验 Condition 至少定义了一个判定目标（五种取值之一）。
+
+        功能：Pydantic 在构造 Condition 后自动调用，确保 count_of/var/path/exists/not_exists 至少有一个非空，否则报错。
+        谁会调用：Pydantic 在构造或解析 Condition 时自动触发（间接来自 DSL 解析与解释器）。
+        直接调用：无（仅读取字段并判断）。
+        输入与结果：输入 self（Condition 实例）；返回 self，或抛 ValueError。
+        副作用：无。
+        """
         if any(v is not None for v in (self.count_of, self.var, self.path, self.exists, self.not_exists)):
             return self
         raise ValueError("condition must define one of count_of/var/path/exists/not_exists")
@@ -160,12 +168,27 @@ _PATHISH_TEMPLATE_RE = re.compile(r"\{item\.(path|href)\}")
 
 
 def render_vars(text: str, ctx: dict) -> str:
-    """把 {{var}} / {{last_fetch.field}} 替换为 context 中的实际值。
+    """把模板里的 {{var}} / {{last_fetch.field}} 占位符替换为 context 中的实际值。
 
-    支持一层点号取字段。变量未定义时替换为空串。
+    功能：用正则匹配占位符，按路径从 ctx["vars"]（或对象属性）取值替换；变量未定义时替换为空串，支持一层点号取字段。
+    谁会调用：DslInterpreter 在渲染 URL、请求头、字段模板等时调用（如 _fetch、_browser_action、_render_item_template）。
+    直接调用：
+    - _VAR_RE.sub(...)：正则替换占位符。
+    - repl（嵌套）：按路径从 ctx 取值。
+    输入与结果：输入模板文本与上下文 ctx；返回替换后的字符串。
+    副作用：无。
     """
 
     def repl(m: "re.Match") -> str:
+        """正则替换回调：按点号路径从 ctx["vars"] 取值，未定义返回空串。
+
+        功能：取匹配到的占位符名，按 "." 拆成路径，从 ctx["vars"]（dict 或对象属性）逐层取值，
+        未定义/取到 None 时返回空串，否则返回字符串。
+        谁会调用：render_vars 在 _VAR_RE.sub 时调用。
+        直接调用：无（仅字典/属性取值）。
+        输入与结果：输入正则匹配对象；返回替换字符串。
+        副作用：无。
+        """
         path = m.group(1).split(".")
         val = ctx.get("vars", {})
         for p in path:
@@ -176,10 +199,15 @@ def render_vars(text: str, ctx: dict) -> str:
 
 
 def eval_condition(cond: dict, ctx: dict) -> bool:
-    """求值 loop 的 until 终止条件。
+    """求值 loop 的 until 终止条件（供解释器判断是否继续循环）。
 
-    五种取值：count_of（数 list 长度）/var（取变量）/path（取 last_fetch 字段）
-    /exists/not_exists（页面 selector，需 Playwright，此处占 False）。
+    功能：把条件 dict 构造成 Condition，按 count_of（数 list 长度）/var（取变量）/path（取 last_fetch 字段）/exists/not_exists
+    取出实际值，再用 op 与期望值比较；selector 类条件需 Playwright，在此处占 False。
+    谁会调用：DslInterpreter._loop 在每轮循环开始时调用，判断是否满足终止条件。
+    直接调用：
+    - Condition(...)：构造条件对象以便读取字段。
+    输入与结果：输入条件 dict 与上下文 ctx；返回布尔（True 表示条件成立，应终止循环）。
+    副作用：无。
     """
     c = Condition(**cond)
     if c.count_of:
@@ -213,16 +241,30 @@ def eval_condition(cond: dict, ctx: dict) -> bool:
 
 
 def validate_semantics(recipe: DslRecipe) -> list[str]:
-    """语义校验：跨 action 的约束，结构校验（Pydantic）管不了的部分。
+    """跨 action 的语义约束校验（结构校验管不了的部分）。
 
-    规则：from 与最近 fetch.mode 匹配；extract.fields 须能产 url；
-    goto/click/wait_for 须在 goto 打开浏览器之后。
+    功能：检查 extract.from 是否与最近 fetch.mode 匹配、extract.fields 能否产出 url、浏览器动作须在 goto 之后、
+    scrapling transport 仅支持 GET；递归检查 loop 的 body/on_each。
+    谁会调用：website_workflow 在保存 DSL 前、website/recipe_audit.auditor 在审计时调用，做静态结构合理性审查。
+    直接调用：
+    - check_fetch_transport（嵌套）：递归检查每个 fetch 的 transport 与 method 约束。
+    输入与结果：输入 DslRecipe；返回错误字符串列表（空列表表示通过）。
+    副作用：无。
     """
     errors: list[str] = []
     last_mode: str | None = None
     has_browser = False
 
     def check_fetch_transport(actions: list[Action], *, path: str = "action") -> None:
+        """递归检查 fetch 动作的 transport 约束：scrapling 仅支持 GET。
+
+        功能：遍历动作列表，若 FetchAction 使用 scrapling 但 method 非 GET，追加错误；
+        遇到 LoopAction 则递归检查其 body 与 on_each（带路径前缀）。
+        谁会调用：validate_semantics 在顶层与递归 loop 体时调用。
+        直接调用：无（仅类型判断与向 errors 列表追加）。
+        输入与结果：输入动作列表与路径前缀；无返回值（错误写入外层 errors）。
+        副作用：无。
+        """
         for idx, action in enumerate(actions):
             action_path = f"{path} {idx}" if path == "action" else f"{path}.{idx}"
             if (

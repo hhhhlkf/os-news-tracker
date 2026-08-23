@@ -1,0 +1,4 @@
+{
+  "crawler-runtime:1": "registry.example.invalid/os-news/crawler-runtime@sha256:replace-with-reviewed-v1-64-hex-digest",
+  "crawler-runtime:2": "registry.example.invalid/os-news/crawler-runtime@sha256:replace-with-reviewed-v2-64-hex-digest"
+}

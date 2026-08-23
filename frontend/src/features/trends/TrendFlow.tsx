@@ -33,6 +33,7 @@ import type {
   TrendStorylineReviewFilter,
   TrendStorylineStageStatus,
 } from "./types";
+import { trendCategoryColor, trendDirectionColor } from "./palette";
 
 const cardStatusQueryKey = ["trends", "cards", "status"] as const;
 const cardListQueryKey = ["trends", "cards", "list"] as const;
@@ -699,9 +700,11 @@ function TrendResultList({
   error: Error | null;
 }) {
   const items = results?.items ?? [];
+  const verifiedItems = items.filter((item) => item.category !== "unverified_change");
   const [page, setPage] = useState(1);
-  const pageCount = Math.max(1, Math.ceil(items.length / cardListPageSize));
-  const visibleItems = items.slice(
+  const [dismissedDirectionMismatchRunId, setDismissedDirectionMismatchRunId] = useState<string | null>(null);
+  const pageCount = Math.max(1, Math.ceil(verifiedItems.length / cardListPageSize));
+  const visibleItems = verifiedItems.slice(
     (page - 1) * cardListPageSize,
     page * cardListPageSize,
   );
@@ -709,6 +712,12 @@ function TrendResultList({
   useEffect(() => {
     setPage(1);
   }, [results?.run_id]);
+
+  const directionLabelsChanged = Boolean(
+    results?.run_id &&
+      !sameDirections(results.run_direction_labels, results.current_template_directions) &&
+      dismissedDirectionMismatchRunId !== results.run_id,
+  );
 
   useEffect(() => {
     if (page > pageCount) {
@@ -723,22 +732,38 @@ function TrendResultList({
           <div style={cardListTitle}>最近成功发布</div>
           <div style={cardListMeta}>
             {results?.run_id
-              ? `运行 ${results.run_id.slice(0, 8)} · X=${results.trend_count ?? "—"} · unverified_change 不占 X`
+              ? `运行 ${results.run_id.slice(0, 8)} · X=${results.trend_count ?? "—"}`
               : "尚无成功发布的趋势结果"}
           </div>
         </div>
       </div>
+      {directionLabelsChanged && results?.run_id && (
+        <div style={directionMismatchNotice} role="status">
+          <span>
+            本次运行使用方向：{results.run_direction_labels.join("、") || "未记录"}；当前模板方向已变更为：
+            {results.current_template_directions.join("、") || "未声明"}。重新运行后生效。
+          </span>
+          <button
+            type="button"
+            style={directionMismatchDismiss}
+            onClick={() => setDismissedDirectionMismatchRunId(results.run_id)}
+            aria-label="关闭方向变更提示"
+          >
+            ×
+          </button>
+        </div>
+      )}
       {isLoading ? (
         <div style={listLoading}>正在读取趋势结果…</div>
       ) : error ? (
         <div style={listError}>趋势结果读取失败：{error.message}</div>
-      ) : items.length === 0 ? (
+      ) : verifiedItems.length === 0 ? (
         <div style={listEmpty}>
-          {results?.message ?? "完成趋势总结后，当前身份模板的最新成功结果会显示在这里。"}
+          {results?.message ?? "本次运行没有形成可发布的趋势。"}
         </div>
       ) : (
         <>
-          <PagedListContent page={page} contentKey={items[0]?.result_id ?? "empty"} isFetching={isFetching}>
+          <PagedListContent page={page} contentKey={verifiedItems[0]?.result_id ?? "empty"} isFetching={isFetching}>
           <div style={cardListRows}>
             {visibleItems.map((item) => (
               <TrendResultRow key={item.result_id} item={item} />
@@ -758,14 +783,27 @@ function TrendResultList({
   );
 }
 
+function sameDirections(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((direction, index) => direction === right[index]);
+}
+
 function TrendResultRow({ item }: { item: TrendResult }) {
+  const hasDirection = Boolean(item.direction);
+  const categoryColor = trendCategoryColor(item.category);
+  const directionColor = trendDirectionColor(item.direction);
+
   return (
     <article style={cardListRow}>
       <div style={cardRowHeader}>
         <div style={cardTitle}>{item.topic ?? "无法形成可验证的共同变化"}</div>
-        <span style={cardStatusBadge(item.category === "unverified_change" ? "skipped" : "ready")}>
-          {trendCategoryLabel(item.category)}
-        </span>
+        <div style={trendResultBadges}>
+          <span style={{ ...rowStatusBadge, background: categoryColor.background, color: categoryColor.color, border: `1px solid ${categoryColor.border}` }}>
+            {trendCategoryLabel(item.category)}
+          </span>
+          <span style={hasDirection ? { ...rowStatusBadge, background: directionColor.background, color: directionColor.color, border: `1px solid ${directionColor.border}` } : noTrendBadge}>
+            {hasDirection ? item.direction : "暂无趋势"}
+          </span>
+        </div>
       </div>
       <div style={cardReason}>
         窗口 {item.window_start_date} 至 {item.window_end_date} · 排序分 {item.trend_rank_score.toFixed(1)} ·
@@ -775,7 +813,6 @@ function TrendResultRow({ item }: { item: TrendResult }) {
       <div style={cardReason}>判定说明：{item.agent_review}</div>
       <div style={cardRowFooter}>
         <span>引用新闻 {item.item_ids.length} 条</span>
-        {item.category === "unverified_change" && <span>不占 X / 不进轮播</span>}
       </div>
     </article>
   );
@@ -1143,19 +1180,28 @@ function CandidateClusterList({
 }
 
 function CardListRow({ item }: { item: TrendCardListItem }) {
-  const contentFields: Array<{ label: string; value: string | null }> = [
+  const discussion = item.discussion_result ?? {};
+  const discussionList = (key: string): string | null => Array.isArray(discussion[key]) ? discussion[key].filter((value): value is string => typeof value === "string" && Boolean(value.trim())).join("；") || null : null;
+  const contentFields: Array<{ label: string; value: string | null }> = item.item_kind === "discussion" ? [
+    { label: "讨论摘要", value: typeof discussion.topic_summary === "string" ? discussion.topic_summary : null },
+    { label: "最新进展", value: typeof discussion.latest_progress === "string" ? discussion.latest_progress : null },
+    { label: "当前结论", value: typeof discussion.current_conclusion === "string" ? discussion.current_conclusion : null },
+    { label: "关键分歧", value: discussionList("disagreements") },
+    { label: "未决问题", value: discussionList("open_questions") },
+  ] : [
     { label: "主体", value: item.news_actor },
     { label: "动作", value: item.action },
     { label: "结果", value: item.result },
     { label: "潜在影响", value: item.potential_impact },
     { label: "原因", value: item.cause },
   ];
-  const businessTime = item.published_at ?? item.fetched_at;
+  const businessTime = item.item_kind === "discussion" ? item.last_activity_at ?? item.published_at ?? item.fetched_at : item.published_at ?? item.fetched_at;
 
   return (
     <article style={cardListRow}>
       <div style={cardRowHeader}>
         <div style={cardTitle}>{item.title}</div>
+        {item.item_kind === "discussion" && <span style={discussionTypeBadge}>技术讨论 · 修订 {item.content_revision}</span>}
         <time style={cardRowDate}>{formatCardDate(businessTime)}</time>
         <span style={cardStatusBadge(item.status)}>{cardListStatusLabel(item.status)}</span>
       </div>
@@ -1294,11 +1340,16 @@ const activeFilterButton: CSSProperties = { ...filterButton, borderColor: "#84ad
 const listLoading: CSSProperties = { color: "#98a2b3", padding: "20px 0", textAlign: "center", fontSize: 12 };
 const listError: CSSProperties = { marginTop: 12, border: "1px solid #fecdca", borderRadius: 8, background: "#fef3f2", color: "#b42318", padding: "10px 12px", fontSize: 12 };
 const listEmpty: CSSProperties = { marginTop: 12, border: "1px dashed #d0d5dd", borderRadius: 8, color: "#98a2b3", padding: 16, textAlign: "center", fontSize: 12 };
+const directionMismatchNotice: CSSProperties = { marginTop: 8, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, border: "1px solid #d0d5dd", borderRadius: 7, background: "#f8fafc", color: "#667085", padding: "6px 8px", fontSize: 11, fontWeight: 400, lineHeight: 1.5 };
+const directionMismatchDismiss: CSSProperties = { flex: "0 0 auto", border: 0, background: "transparent", color: "#98a2b3", padding: 0, fontSize: 16, fontWeight: 400, lineHeight: 1, cursor: "pointer" };
 const cardListRows: CSSProperties = { display: "grid", gap: 7, marginTop: 10 };
 const cardListRow: CSSProperties = { border: "1px solid #eaecf0", borderRadius: 8, background: "#fff", padding: "8px 10px" };
 const cardRowHeader: CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 };
+const trendResultBadges: CSSProperties = { display: "flex", alignItems: "center", gap: 6, flex: "0 0 auto", flexWrap: "wrap", justifyContent: "flex-end" };
+const discussionTypeBadge: CSSProperties = { borderRadius: 999, padding: "2px 6px", background: "#ecfdf3", color: "#067647", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap" };
 const cardTitle: CSSProperties = { minWidth: 0, flex: 1, color: "#344054", fontSize: 12, fontWeight: 800, lineHeight: 1.35, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 const rowStatusBadge: CSSProperties = { flex: "0 0 auto", borderRadius: 999, padding: "3px 8px", fontSize: 10, fontWeight: 800, whiteSpace: "nowrap" };
+const noTrendBadge: CSSProperties = { ...rowStatusBadge, background: "#f2f4f7", color: "#667085" };
 const cardRowDate: CSSProperties = { flex: "0 0 auto", color: "#98a2b3", fontFamily: "var(--font-mono)", fontSize: 10, whiteSpace: "nowrap" };
 const cardContentGrid: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "4px 10px", marginTop: 7, borderTop: "1px solid #f2f4f7", paddingTop: 7 };
 const cardContentField: CSSProperties = { display: "flex", gap: 5, minWidth: 0, fontSize: 11, lineHeight: 1.4 };

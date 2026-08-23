@@ -32,6 +32,7 @@ const FILTER_LABELS: Array<{ key: string; label: string }> = [
   { key: "main_category", label: "分类" },
   { key: "info_type", label: "类型" },
   { key: "importance", label: "重要度" },
+  { key: "item_kind", label: "条目类型" },
   { key: "sub_tag", label: "热点" },
 ];
 
@@ -67,6 +68,18 @@ function summarizeTimeFilter(filters: Record<string, string>, prefix: "published
 
 function splitItemIds(raw: string | undefined): string[] {
   return (raw ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+}
+
+function parseItemId(value: string | null): number | null {
+  if (value === null || !/^\d+$/.test(value)) return null;
+  const id = Number(value);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+function parsePage(value: string | null): number {
+  if (value === null || !/^\d+$/.test(value)) return 1;
+  const page = Number(value);
+  return Number.isSafeInteger(page) && page > 0 ? page : 1;
 }
 
 function methodDisplayName(method: CrawlMethod): string {
@@ -154,12 +167,48 @@ interface TrendSelection {
 }
 
 export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolean }) {
-  const [filters, setFilters] = useState<Record<string, string>>({ q: "", sort_by: "published_at", sort_dir: "desc" });
-  const [page, setPage] = useState(1);
-  const [openId, setOpenId] = useState<number | null>(null);
+  const [locationSearch, setLocationSearch] = useState(() => window.location.search);
+  const [filters, setFilters] = useState<Record<string, string>>({ q: "", sort_by: "last_activity_at", sort_dir: "desc" });
   const [mailOpen, setMailOpen] = useState(false);
   const [morningCrawlOpen, setMorningCrawlOpen] = useState(false);
   const [trendSelection, setTrendSelection] = useState<TrendSelection | null>(null);
+  const searchParams = useMemo(() => new URLSearchParams(locationSearch), [locationSearch]);
+  const openId = parseItemId(searchParams.get("item"));
+  const page = parsePage(searchParams.get("page"));
+
+  useEffect(() => {
+    const syncLocation = () => setLocationSearch(window.location.search);
+    window.addEventListener("popstate", syncLocation);
+    return () => window.removeEventListener("popstate", syncLocation);
+  }, []);
+
+  const updateLocationSearch = (update: (current: URLSearchParams) => URLSearchParams) => {
+    const next = update(new URLSearchParams(window.location.search));
+    const search = next.toString();
+    window.history.pushState(null, "", `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`);
+    setLocationSearch(window.location.search);
+  };
+
+  const setPage = (nextPage: number) => {
+    updateLocationSearch((current) => {
+      const next = new URLSearchParams(current);
+      next.set("page", String(nextPage));
+      return next;
+    });
+  };
+
+  const setOpenId = (id: number | null) => {
+    updateLocationSearch((current) => {
+      const next = new URLSearchParams(current);
+      if (id === null) {
+        next.delete("item");
+      } else {
+        next.set("item", String(id));
+      }
+      next.set("page", String(page));
+      return next;
+    });
+  };
 
   const setFilter = (key: string, value: string) => {
     setPage(1);
@@ -425,7 +474,7 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
             <select
               value={`${filters.sort_by ?? "published_at"}:${filters.sort_dir ?? "desc"}`}
               onChange={(e) => {
-                const [sort_by, sort_dir] = e.target.value.split(":") as ["published_at" | "fetched_at", "desc" | "asc"];
+                const [sort_by, sort_dir] = e.target.value.split(":") as ["published_at" | "fetched_at" | "last_activity_at", "desc" | "asc"];
                 setPage(1);
                 setFilters((f) => ({ ...f, sort_by, sort_dir }));
               }}
@@ -438,15 +487,26 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
                 color: "#344054",
               }}
             >
+              <option value="last_activity_at:desc">最近活动 最新优先</option>
+              <option value="last_activity_at:asc">最近活动 最早优先</option>
               <option value="published_at:desc">发布时间 最新优先</option>
               <option value="published_at:asc">发布时间 最早优先</option>
               <option value="fetched_at:desc">入库时间 最新优先</option>
               <option value="fetched_at:asc">入库时间 最早优先</option>
             </select>
+            <select
+              value={filters.item_kind ?? ""}
+              onChange={(event) => setFilter("item_kind", event.target.value)}
+              style={{ border: "1px solid #d0d5dd", borderRadius: 8, padding: "12px 14px", fontSize: 14, background: "#fff", color: "#344054" }}
+            >
+              <option value="">全部条目</option>
+              <option value="news">新闻</option>
+              <option value="discussion">技术讨论</option>
+            </select>
             <button
               onClick={() => {
                 setPage(1);
-                setFilters({ q: "", sort_by: "published_at", sort_dir: "desc" });
+                setFilters({ q: "", sort_by: "last_activity_at", sort_dir: "desc" });
                 setOpenId(null);
                 setTrendSelection(null);
               }}
@@ -644,7 +704,6 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
                 </button>
               </div>
             )}
-
             <FacetSidebar
               facets={facets ?? { main_category: [], info_type: [], importance: [], sub_tags: [] }}
               crawlMethods={activeCrawlMethods}
@@ -682,6 +741,7 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
               }
               emptyMessage="没有匹配的条目，试试放宽搜索词或取消筛选条件。"
               sortBy={(filters.sort_by as "published_at" | "fetched_at") ?? "published_at"}
+              openId={openId}
               onOpen={setOpenId}
               onPageChange={setPage}
             />

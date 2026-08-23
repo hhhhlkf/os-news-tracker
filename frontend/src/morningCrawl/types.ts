@@ -1,10 +1,11 @@
-export type MorningCrawlFrequency = "daily" | "weekdays" | "weekly";
+export type MorningCrawlFrequency = "hourly" | "daily" | "weekdays" | "weekly";
 export type MorningCrawlLookback = "24h" | "7d" | "30d" | "all";
 
 export interface MorningCrawlConfig {
   enabled: boolean;
   run_time: string;
   frequency: MorningCrawlFrequency;
+  interval_hours: number;
   lookback_window: MorningCrawlLookback;
   patrol_interval_hours: number;
   last_run_at: string | null;
@@ -17,6 +18,7 @@ export interface MorningCrawlConfigUpdateRequest {
   enabled?: boolean;
   run_time?: string;
   frequency?: MorningCrawlFrequency;
+  interval_hours?: number;
   lookback_window?: MorningCrawlLookback;
   patrol_interval_hours?: number;
 }
@@ -38,6 +40,7 @@ export interface MorningCrawlRunSummary {
 export interface MorningCrawlDashboard {
   config: MorningCrawlConfig;
   active_method_count: number;
+  retryable_method_count: number;
   today_status: string;
   today_run: MorningCrawlRunSummary | null;
   recent_runs: MorningCrawlRunSummary[];

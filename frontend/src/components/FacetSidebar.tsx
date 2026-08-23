@@ -50,6 +50,25 @@ export function toggleFacetValue(raw: string | undefined | null, value: string):
   return [...current, value].join(",");
 }
 
+/**
+ * Select every available value that is not currently selected.
+ *
+ * The API accepts a comma-separated inclusion list, so inverse selection is
+ * represented by replacing the selection with its complement rather than by
+ * introducing a separate exclusion query parameter.
+ */
+export function invertFacetValues(raw: string | undefined | null, availableValues: string[]): string {
+  const current = new Set(parseFacetValues(raw));
+  const seen = new Set<string>();
+  return availableValues
+    .filter((value) => {
+      if (seen.has(value)) return false;
+      seen.add(value);
+      return !current.has(value);
+    })
+    .join(",");
+}
+
 function methodDisplayName(method: CrawlMethod): string {
   return method.source_name?.trim() || method.domain || method.entry_url || `来源#${method.source_id ?? method.id}`;
 }
@@ -61,6 +80,12 @@ export function FacetSidebar({ facets, crawlMethods = [], isLoading, isMethodsLo
   const activeCrawlMethods = useMemo(
     () => crawlMethods.filter((method) => method.status === "active"),
     [crawlMethods],
+  );
+  const activeSourceIds = useMemo(
+    () => activeCrawlMethods
+      .map((method) => method.source_id != null ? String(method.source_id) : "")
+      .filter(Boolean),
+    [activeCrawlMethods],
   );
 
   function resolveTimePreset(prefix: "published" | "fetched"): TimePreset {
@@ -241,7 +266,31 @@ export function FacetSidebar({ facets, crawlMethods = [], isLoading, isMethodsLo
             background: "#fff",
           }}
         >
-          <div style={{ fontWeight: 600, marginBottom: 7, color: "#101828", fontSize: 13 }}>{label}</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 7 }}>
+            <div style={{ fontWeight: 600, color: "#101828", fontSize: 13 }}>{label}</div>
+            {key === "sub_tags" && (
+              <button
+                type="button"
+                onClick={() => onSelect(getFacetFilterKey(key), invertFacetValues(
+                  selected[getFacetFilterKey(key)],
+                  facets[key].map((facet) => facet.value),
+                ))}
+                title="排除当前已选热点，改为选择其余热点"
+                style={{
+                  border: "1px solid #d0d5dd",
+                  borderRadius: 5,
+                  padding: "3px 6px",
+                  background: "#fff",
+                  color: "#475467",
+                  fontSize: 11,
+                  cursor: "pointer",
+                  flexShrink: 0,
+                }}
+              >
+                反选（排除已选）
+              </button>
+            )}
+          </div>
           <div
             style={key === "sub_tags" ? {
               maxHeight: HOTSPOT_SCROLL_HEIGHT,
@@ -347,7 +396,28 @@ export function FacetSidebar({ facets, crawlMethods = [], isLoading, isMethodsLo
           background: "#fff",
         }}
       >
-        <div style={{ fontWeight: 600, marginBottom: 9, color: "#101828", fontSize: 13 }}>查询链接筛选</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 9 }}>
+          <div style={{ fontWeight: 600, color: "#101828", fontSize: 13 }}>查询链接筛选</div>
+          {activeSourceIds.length > 0 && (
+            <button
+              type="button"
+              onClick={() => onSelect("source_id", invertFacetValues(selected.source_id, activeSourceIds))}
+              title="排除当前已选查询链接，改为选择其余链接"
+              style={{
+                border: "1px solid #d0d5dd",
+                borderRadius: 5,
+                padding: "3px 6px",
+                background: "#fff",
+                color: "#475467",
+                fontSize: 11,
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+            >
+              反选（排除已选）
+            </button>
+          )}
+        </div>
         {isMethodsLoading ? (
           <div style={{ color: "#667085", fontSize: 12 }}>正在加载来源…</div>
         ) : activeCrawlMethods.length === 0 ? (

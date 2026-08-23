@@ -1,3 +1,10 @@
+"""多来源探查配方的正式数据合同。
+
+功能：定义网站、微信公众号和内部来源共用的 ``multi_dsl`` 存储格式。
+由谁调用：``multi_graph`` 生成/保存配方，``execution`` 与解释器执行配方。
+会调用谁：Pydantic 进行结构校验。
+"""
+
 from __future__ import annotations
 
 from typing import Any, Literal

@@ -1,10 +1,10 @@
 import { BrowserRouter, Navigate, Routes, Route, NavLink } from "react-router-dom";
-import { useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { HomePage } from "./pages/HomePage";
 import { DiscoveryPage } from "./pages/DiscoveryPage";
 import { StatisticsDiscoveryPage } from "./pages/StatisticsDiscoveryPage";
 import { TrendWorkspacePage } from "./features/trends/TrendWorkspacePage";
-import { isSystemAuthenticated, logout, systemLogin } from "./auth";
+import { getAccessTokenExpiresAtMs, isSystemAuthenticated, logout, systemLogin } from "./auth";
 import { clampInput, INPUT_LIMITS } from "./inputLimits";
 
 function TopNav({ authenticated, onAuthenticatedChange }: { authenticated: boolean; onAuthenticatedChange: (value: boolean) => void }) {
@@ -86,6 +86,39 @@ function TopNav({ authenticated, onAuthenticatedChange }: { authenticated: boole
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState(() => isSystemAuthenticated());
+
+  // Drop into non-login mode as soon as the JWT expires — no manual logout needed.
+  useEffect(() => {
+    const syncAuth = () => {
+      const ok = isSystemAuthenticated();
+      setAuthenticated((prev) => (prev === ok ? prev : ok));
+    };
+    syncAuth();
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") syncAuth();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    const pollId = window.setInterval(syncAuth, 15_000);
+
+    let timeoutId: number | undefined;
+    if (authenticated) {
+      const expiresAt = getAccessTokenExpiresAtMs();
+      if (expiresAt == null) {
+        logout();
+        setAuthenticated(false);
+      } else {
+        timeoutId = window.setTimeout(syncAuth, Math.max(0, expiresAt - Date.now() + 250));
+      }
+    }
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.clearInterval(pollId);
+      if (timeoutId != null) window.clearTimeout(timeoutId);
+    };
+  }, [authenticated]);
+
   return (
     <BrowserRouter>
       <TopNav authenticated={authenticated} onAuthenticatedChange={setAuthenticated} />

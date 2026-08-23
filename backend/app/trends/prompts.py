@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-CARD_PROMPT_VERSION = "news-card-v3"
+CARD_PROMPT_VERSION = "item-fact-card-v4"
 
 COMMON_RESPONSIBILITY_AND_FACT_BOUNDARY = """【通用职责与事实边界】
 1. 只能依据本次输入的新闻正文或已存摘要、新闻卡、故事线、快照和系统指标判断；不得补充外部知识或未提供的背景。
@@ -18,8 +18,8 @@ COMMON_OUTPUT_CONSTRAINTS = """【通用输出约束】
 2. 严格遵守枚举、null、字段名、语言和长度限制。
 3. 不确定时不得猜测，使用当前阶段的保守兜底值、reject 或 unverified_change。"""
 
-CARD_STAGE_TASK = """【当前阶段任务：新闻卡片生成】
-你是新闻事实分析助手。仅根据输入的新闻标题与内容，生成以下五字段 JSON：
+CARD_STAGE_TASK = """【当前阶段任务：事实卡片生成】
+你是技术事实分析助手。仅根据输入的新闻或技术讨论标题与内容，生成以下五字段 JSON：
 {
   "news_actor": "新闻角色（主动方、被动方和参与方）",
   "action": "做了什么",
@@ -29,7 +29,7 @@ CARD_STAGE_TASK = """【当前阶段任务：新闻卡片生成】
 }
 
 【阶段规则】
-1. 五个字段必须都是非空字符串，每个字段不超过 100 个字符。
+1. 五个字段必须都是非空字符串，每个字段不超过 100 个字符。技术讨论中的主体可以是关键参与方；动作、结果和原因分别表达讨论进展、当前结论和形成背景。
 2. 统一使用中文；关键技术短语、产品名、版本号和缩写保留原文。
 3. result 只描述已发生且输入内容明确说明的结果，不得把预测写成事实；输入未明确说明时，必须填写“无”。
 4. news_actor 必须概括新闻中的角色关系，尽量写明主动方、被动方和重要参与方；没有明确角色时填写“无”。
@@ -73,6 +73,7 @@ def build_card_prompt(
     *,
     title: str,
     content: str,
+    item_kind: str = "news",
     content_source: str = "clean_content",
     key_points: list[str] | None = None,
     attempt: int,
@@ -94,6 +95,7 @@ def build_card_prompt(
     structured_input = json.dumps(
         {
             "title": title,
+            "item_kind": item_kind,
             "content_source": content_source_label,
             "content": content,
             "key_points": key_points or [],
@@ -157,23 +159,29 @@ def build_storyline_review_prompt(
     )
 
 
-TREND_EVALUATION_PROMPT_VERSION = "trend-evaluation-v1"
+TREND_EVALUATION_PROMPT_VERSION = "trend-evaluation-v5"
 
 TREND_EVALUATION_STAGE_TASK = """【当前阶段任务：身份模板趋势总结】
-你是趋势总结助手。请基于输入的身份视角、当前时间窗口、故事线、窗口内新闻与历史快照，判断该故事线在本窗口是否构成可验证的共同变化，并输出固定 JSON。
+你是趋势总结助手。请基于输入的身份视角、当前时间窗口、已通过事实层审查的故事线、窗口内新闻与历史快照，判断该故事线在本窗口出现了什么值得关注的新动态，并输出固定 JSON。
 
 【阶段规则】
-1. 只能依据输入中的故事线、窗口新闻正文、新闻卡、快照和系统窗口分数判断；不得编造 storyline_id、时间或系统分数。
+1. 只能依据输入中的故事线、窗口新闻正文、新闻卡、快照和系统窗口分数判断；不得编造 storyline_id、时间或系统分数。输入故事线已经通过事实层审查，其历史 core/supporting 证据和 agent_review 是成立前提，不得在本阶段重新否定或要求重新证明该故事线。
 2. category 只能取允许列表中的值。窗口不超过 30 天时，仅允许 emerging_trend、hot_event、unverified_change。窗口超过 30 天且快照证据充分时，才允许 periodic_activity、attention_declining。
 3. template_relevance_score 必须是 0～100 的数值，表示该趋势相对当前身份的相关程度。
-4. unverified_change 时 topic 与 trend_summary 必须为 null；其他类别必须输出中文 topic 与 trend_summary。
-5. agent_review 必须是中文判定说明，说明为何形成该类别，以及证据是否充分。
-6. 面向用户的文本统一使用中文；关键技术短语、产品名、版本号和缩写可保留原文。
-7. 不得输出系统计算字段（如 window_influence_score、trend_rank_score、overall_score）。
+4. direction 必须且只能从 allowed_directions 中选择一个精确标签；{标签} 是身份模板中声明的方向标记，不得自行创建、翻译或合并标签。
+5. topic 是面向用户的趋势标题，不是本期新闻摘要。对 emerging_trend、periodic_activity、attention_declining，必须从已验证故事线的多条历史证据中抽取一个跨证据、可持续的方向性变化。可按事实选择“技术对象从 A 转向 B”“B 成为 A 的主线”“A 开始以 B 为核心”“A 扩展至 B”“A 分化为 B 与 C”“A 与 B 加速融合”等自然句式；不得机械重复“从 A 走向 B”，也不要为了句式变化牺牲事实准确性。标题要一眼可读、短而具体，描述架构、能力、部署、兼容性、性能边界或生态关系已经发生的长期变化；不得重复 direction 或 category。
+6. 这三类标题不得罗列版本号、组件、功能、产品接入或单篇新闻动作，也不得把窗口内新卡改写成标题。窗口内新卡只证明既有方向仍在发展；标题应以已验证故事线为准，即使窗口内只有一张卡也不得退回空泛 topic 或拒绝总结。禁止把“技术、建设、优化、演进、发展、相关、趋势”等泛化词作为标题结论：例如“LLM服务中的KV缓存优化技术”“DeepSeek Agent 开发生态建设”均不合格；“KV缓存从HBM独占走向分层与弹性管理”这类明确方向才合格。
+7. 对 hot_event，topic 应直接描述该事件及其关键转折即可；可以保留关键主体、产品、版本或动作，但不得改写为新闻清单或泛主题标签。
+8. 只要已验证故事线在窗口内至少有一张成员卡，就必须按正常类别输出 topic 与 trend_summary：单张窗口卡表示本期新动态，历史故事线的已验证证据仍然有效。不得仅因窗口内新闻数量为一、该卡来自单一信息源，或该卡是论文而选择 unverified_change。unverified_change 仅用于输入明确显示故事线历史证据本身未成立、窗口卡与故事线实质无关或彼此矛盾的异常情形。
+9. unverified_change 时 topic 与 trend_summary 必须为 null；其他类别必须输出符合上述规则的中文 topic 与 trend_summary。
+10. agent_review 必须是中文判定说明，说明为何形成该类别，以及本期新动态与已验证故事线的关系。
+11. 面向用户的文本统一使用中文；关键技术短语、产品名、版本号和缩写可保留原文。
+12. 不得输出系统计算字段（如 window_influence_score、trend_rank_score、overall_score）。
 
 【固定 JSON 输出】
 {
   "category": "emerging_trend | hot_event | periodic_activity | attention_declining | unverified_change",
+  "direction": "allowed_directions 中的一个精确标签",
   "topic": "中文主题或 null",
   "trend_summary": "中文趋势概括或 null",
   "template_relevance_score": 0,
@@ -185,6 +193,7 @@ TREND_EVALUATION_STAGE_TASK = """【当前阶段任务：身份模板趋势总�
 def build_trend_evaluation_prompt(
     *,
     analysis_identity: str,
+    allowed_directions: list[str],
     window_start_date: str,
     window_end_date: str,
     window_days: int,
@@ -217,6 +226,7 @@ def build_trend_evaluation_prompt(
                 "window_days": window_days,
                 "long_term_categories_allowed": long_term_allowed,
                 "allowed_categories": allowed_categories,
+                "allowed_directions": allowed_directions,
             },
             "system_scores": {"window_influence_score": window_influence_score},
             "storyline": storyline,

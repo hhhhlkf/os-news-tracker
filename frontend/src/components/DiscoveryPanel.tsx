@@ -1,5 +1,5 @@
 // frontend/src/components/DiscoveryPanel.tsx
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, cancelDiscoveryRun, getDiscoveryRun, startDiscoveryRun, suggestDiscoveryName } from "../api/client";
 import type {
@@ -8,11 +8,10 @@ import type {
   MultiDiscoveryStartRequest,
   MultiDiscoveryNameRequest,
 } from "../types";
-import { DiscoveryFlowChart } from "./DiscoveryFlowChart";
+import { DiscoveryFlowChart, type DiscoveryPhaseId } from "./DiscoveryFlowChart";
 import { DiscoveryNodeDetail } from "./DiscoveryNodeDetail";
 import { DiscoveryLogPanel } from "./DiscoveryLogPanel";
 import { useDiscoveryLogs } from "../hooks/useDiscoveryLogs";
-import { currentAttemptRound, type FlowNodeId } from "../discovery/flowState";
 import {
   resolveDiscoveryRouteState,
   ROUTE_TYPE_LABELS,
@@ -27,8 +26,9 @@ interface DiscoveryPanelPersistedState {
   selectedRouteType?: DiscoveryRouteType | null;
   name?: string;
   runId?: number | null;
-  selectedNode?: FlowNodeId | null;
+  selectedNode?: DiscoveryPhaseId | null;
   expanded?: boolean;
+  logsResetAt?: number | null;
 }
 
 function readDiscoveryPanelState(): DiscoveryPanelPersistedState {
@@ -37,16 +37,15 @@ function readDiscoveryPanelState(): DiscoveryPanelPersistedState {
     const raw = window.sessionStorage.getItem(DISCOVERY_PANEL_STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const validRouteTypes = new Set(["website", "wechat_search", "wechat_history", "internal_forum"]);
-    const validNodeIds = new Set<FlowNodeId>([
-      "fetch_homepage", "capture_network", "explorer",
-      "validator", "dsl_writer", "auditor", "save_method",
+    const validRouteTypes = new Set(["website", "wechat_search", "internal_forum"]);
+    const validNodeIds = new Set<DiscoveryPhaseId>([
+      "context", "explore", "build", "execute", "evaluate_repair", "package", "pending_review",
     ]);
     const st = typeof parsed.selectedRouteType === "string" && validRouteTypes.has(parsed.selectedRouteType)
       ? (parsed.selectedRouteType as DiscoveryRouteType)
       : null;
-    const sn = typeof parsed.selectedNode === "string" && validNodeIds.has(parsed.selectedNode as FlowNodeId)
-      ? (parsed.selectedNode as FlowNodeId)
+    const sn = typeof parsed.selectedNode === "string" && validNodeIds.has(parsed.selectedNode as DiscoveryPhaseId)
+      ? (parsed.selectedNode as DiscoveryPhaseId)
       : null;
     return {
       rawInput: typeof parsed.rawInput === "string" ? parsed.rawInput : undefined,
@@ -55,6 +54,9 @@ function readDiscoveryPanelState(): DiscoveryPanelPersistedState {
       runId: typeof parsed.runId === "number" ? parsed.runId : null,
       selectedNode: sn,
       expanded: typeof parsed.expanded === "boolean" ? parsed.expanded : undefined,
+      logsResetAt: Number.isFinite(Number(parsed.logsResetAt)) && Number(parsed.logsResetAt) > 0
+        ? Number(parsed.logsResetAt)
+        : null,
     };
   } catch {
     return {};
@@ -64,11 +66,6 @@ function readDiscoveryPanelState(): DiscoveryPanelPersistedState {
 function writeDiscoveryPanelState(state: DiscoveryPanelPersistedState): void {
   if (typeof window === "undefined" || !window.sessionStorage) return;
   window.sessionStorage.setItem(DISCOVERY_PANEL_STORAGE_KEY, JSON.stringify(state));
-}
-
-function clearDiscoveryPanelState(): void {
-  if (typeof window === "undefined" || !window.sessionStorage) return;
-  window.sessionStorage.removeItem(DISCOVERY_PANEL_STORAGE_KEY);
 }
 
 export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: number) => void }) {
@@ -84,12 +81,14 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
     clampInput(persistedState.name ?? "", INPUT_LIMITS.displayName),
   );
   const [nameError, setNameError] = useState<string | null>(null);
+  const [hasEnteredInput, setHasEnteredInput] = useState(() => Boolean((persistedState.rawInput ?? "").trim()));
   const [runId, setRunId] = useState<number | null>(persistedState.runId ?? null);
   const [dup, setDup] = useState<{ method_id: number; domain: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selectedNode, setSelectedNode] = useState<FlowNodeId | null>(persistedState.selectedNode ?? null);
+  const [selectedNode, setSelectedNode] = useState<DiscoveryPhaseId | null>(persistedState.selectedNode ?? null);
   const [expanded, setExpanded] = useState(persistedState.expanded ?? true);
   const [startLocked, setStartLocked] = useState(false);
+  const [logsResetAt, setLogsResetAt] = useState<number | null>(persistedState.logsResetAt ?? null);
   const startLockRef = useRef(false);
   const skipNextPersistRef = useRef(false);
   const notifiedRef = useRef<number | null>(null);
@@ -101,9 +100,28 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
     queryKey: ["discovery-run", runId],
     queryFn: () => getDiscoveryRun(runId!),
     enabled: runId != null,
-    refetchInterval: (q) => (q.state.data?.status === "running" ? 1500 : false),
+    refetchInterval: (q) => {
+      const run = q.state.data;
+      if (["queued", "running", "repairing"].includes(run?.status ?? "")) return 1500;
+      if (
+        run?.status === "completed"
+        && run.resulting_method_id
+        && (run.review_status == null || run.review_status === "pending")
+      ) return 5000;
+      return false;
+    },
   });
-  const logs = useDiscoveryLogs(runId, true, "run_plus_methods");
+  const discoveryLogs = useDiscoveryLogs(runId, runId != null, "run");
+  const manualMethodLogs = useDiscoveryLogs(0, true, true);
+  const combinedLogs = useMemo(() => [
+    ...discoveryLogs,
+    ...manualMethodLogs
+      .filter((log) => typeof log.method_id === "number")
+      .map((log) => ({ ...log, id: -log.id, sequence: -log.sequence })),
+  ].sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts)), [discoveryLogs, manualMethodLogs]);
+  const logs = logsResetAt == null
+    ? combinedLogs
+    : combinedLogs.filter((log) => Date.parse(log.ts) > logsResetAt);
   const cancelMut = useMutation({
     mutationFn: (id: number) => cancelDiscoveryRun(id),
     onSuccess: () => {
@@ -156,10 +174,11 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
     },
   });
 
-  const running = runQuery.data?.status === "running";
+  const running = ["queued", "running", "repairing"].includes(runQuery.data?.status ?? "");
   const completed = runQuery.data?.status === "completed";
   const failed = runQuery.data?.status === "failed";
   const cancelled = runQuery.data?.status === "cancelled";
+  const reviewStatus = runQuery.data?.review_status ?? null;
   const startPending = startMut.isPending;
   const cancelBusy = cancelMut.isPending;
   const startBusy = running || startPending || startLocked || startLockRef.current;
@@ -187,11 +206,17 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
   }
 
   function resetPanelState() {
+    const resetAt = Date.now();
+    setLogsResetAt(resetAt);
     startLockRef.current = false;
     skipNextPersistRef.current = true;
     notifiedRef.current = null;
-    clearDiscoveryPanelState();
+    // Keep the reset boundary across a reload.  The old run remains in the
+    // backend for audit purposes, but its in-memory log entries must not
+    // reappear after the user explicitly reset this panel.
+    writeDiscoveryPanelState({ logsResetAt: resetAt });
     setRawInput("");
+    setHasEnteredInput(false);
     setSelectedRouteType(null);
     setName("");
     setNameError(null);
@@ -229,8 +254,9 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
       runId,
       selectedNode,
       expanded,
+      logsResetAt,
     });
-  }, [rawInput, selectedRouteType, name, runId, selectedNode, expanded]);
+  }, [rawInput, selectedRouteType, name, runId, selectedNode, expanded, logsResetAt]);
 
   useEffect(() => {
     if (!(runQuery.error instanceof ApiError) || runQuery.error.status !== 404 || runId == null) {
@@ -251,8 +277,21 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
     started_at: null,
     ended_at: null,
     error_message: null,
+    trigger_type: "manual",
+    phase: "context",
+    round: 0,
+    queue_position: null,
+    runtime_version: null,
+    repair_method_id: null,
+    source_kind: routeState.resolvedRouteType?.startsWith("wechat")
+      ? "wechat"
+      : routeState.resolvedRouteType === "website"
+        ? "website"
+        : "unknown",
+    review_status: null,
+    elapsed_seconds: 0,
+    remaining_seconds: 1200,
   };
-  const selectedEntry = displayRun.node_trace.findLast((e) => e.step === selectedNode);
 
   // Resolved route display label for the inferred badge
   const resolvedLabel = routeState.resolvedRouteType
@@ -271,14 +310,26 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
               background: running ? "#eff6ff" : completed ? "#ecfdf3" : cancelled ? "#fffaeb" : "#fef2f2",
               border: `1px solid ${running ? "#b9d4ff" : completed ? "#a3e0c4" : cancelled ? "#fedf89" : "#fca5a5"}`,
             }}>
-              {running ? `探查中 · 第 ${currentAttemptRound(runQuery.data)} / 3 轮` : completed ? "探查完成" : cancelled ? "已取消" : "探查失败"}
+              {runQuery.data.status === "queued"
+                ? `排队中${runQuery.data.queue_position != null ? ` · queue #${runQuery.data.queue_position}` : ""}`
+                : runQuery.data.status === "repairing"
+                  ? `修复中 · 第 ${runQuery.data.round ?? 0} 轮${runQuery.data.queue_position != null ? ` · queue #${runQuery.data.queue_position}` : ""}`
+                  : running
+                    ? `探查中 · 第 ${runQuery.data.round ?? 0} 轮${runQuery.data.queue_position != null ? ` · queue #${runQuery.data.queue_position}` : ""}`
+                    : completed
+                      ? reviewStatus === "approved"
+                        ? "探查完成 · 已批准"
+                        : reviewStatus === "rejected"
+                          ? "探查完成 · 已拒绝"
+                          : "探查完成 · 待审核"
+                      : cancelled ? "已取消" : runQuery.data.status === "interrupted" ? "已中断" : "探查失败"}
             </div>
           )}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <button type="button" onClick={resetPanelState} style={resetBtn}>
+          {expanded && <button type="button" onClick={resetPanelState} style={resetBtn}>
             重置状态
-          </button>
+          </button>}
           <button type="button" onClick={() => setExpanded((value) => !value)} style={toggleBtn}>
             {expanded ? "收起" : "展开"}
           </button>
@@ -299,14 +350,15 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
               <option value="">自动推断</option>
               <option value="website">网页</option>
               <option value="wechat_search">微信搜索</option>
-              <option value="wechat_history">微信公众号</option>
             </select>
             <input
-              placeholder="输入探查内容，如 URL、公众号名、搜索关键词"
+              placeholder="输入网页 URL 或搜索关键词"
               value={rawInput}
               maxLength={INPUT_LIMITS.discoveryInput}
               onChange={(e) => {
-                setRawInput(clampInput(e.target.value, INPUT_LIMITS.discoveryInput));
+                const nextInput = clampInput(e.target.value, INPUT_LIMITS.discoveryInput);
+                setRawInput(nextInput);
+                if (nextInput.trim()) setHasEnteredInput(true);
                 setNameError(null);
               }}
               style={{ ...inputBase, flex: 1 }}
@@ -322,7 +374,7 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
               已锁定 <span style={{ fontWeight: 600, color: "#059669" }}>{resolvedLabel}</span>
             </div>
           )}
-          {routeState.validationError && (
+          {routeState.validationError && hasEnteredInput && (
             <div style={{ color: "#b42318", fontSize: 13 }}>{routeState.validationError}</div>
           )}
         </div>
@@ -360,7 +412,7 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
             <button
               type="button"
               disabled={startDisabled}
-              onClick={() => startRun(false)}
+              onClick={() => startRun(true)}
               style={startDisabled ? btnDisabled : btnPrimary}
             >
               {running ? "探查中…" : startBusy ? "启动中…" : "开始探查"}
@@ -401,21 +453,31 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
             </div>
             <div style={{ minHeight: 0, height: 210, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
               {selectedNode ? (
-                <DiscoveryNodeDetail nodeId={selectedNode} entry={selectedEntry} />
+                <DiscoveryNodeDetail nodeId={selectedNode} events={logs} />
               ) : (
                 <div style={{ border: "1px dashed #d0d5dd", borderRadius: 10, background: "#fcfcfd", color: "#667085", padding: "16px 18px", fontSize: 13 }}>
                   点击流程图节点查看该步骤的摘要、证据和当前状态。
                 </div>
               )}
               {completed && (
-                <div style={{ border: "1px solid #a3e0c4", background: "#ecfdf3", color: "#059669", borderRadius: 8, padding: "10px 12px", fontSize: 13 }}>
-                  探查完成 · 已进入待审核方式 <a style={{ color: "#175cd3", cursor: "pointer", marginLeft: 8 }} onClick={() => displayRun.resulting_method_id && onMethodAdded?.(displayRun.resulting_method_id)}>查看待审核方式 →</a>
+                <div style={{
+                  border: `1px solid ${reviewStatus === "rejected" ? "#fca5a5" : "#a3e0c4"}`,
+                  background: reviewStatus === "rejected" ? "#fef2f2" : "#ecfdf3",
+                  color: reviewStatus === "rejected" ? "#b42318" : "#059669",
+                  borderRadius: 8, padding: "10px 12px", fontSize: 13,
+                }}>
+                  {reviewStatus === "approved"
+                    ? "探查完成 · 方式已批准"
+                    : reviewStatus === "rejected"
+                      ? "探查完成 · 方式审核已拒绝"
+                      : "探查完成 · 已进入待审核方式"}
+                  <a style={{ color: "#175cd3", cursor: "pointer", marginLeft: 8 }} onClick={() => displayRun.resulting_method_id && onMethodAdded?.(displayRun.resulting_method_id)}>查看方式 →</a>
                 </div>
               )}
               {failed && (
                 <div style={{ border: "1px solid #fca5a5", background: "#fef2f2", color: "#b42318", borderRadius: 8, padding: "10px 12px", fontSize: 13 }}>
                   探查失败：{displayRun.error_message ?? "未知错误"}
-                  <button type="button" disabled={startDisabled} style={{ ...(startDisabled ? btnDisabled : btnPrimary), marginLeft: 12 }} onClick={() => startRun(false)}>
+                  <button type="button" disabled={startDisabled} style={{ ...(startDisabled ? btnDisabled : btnPrimary), marginLeft: 12 }} onClick={() => startRun(true)}>
                     {startBusy ? "启动中…" : "重新探查"}
                   </button>
                 </div>
@@ -423,7 +485,7 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
               {cancelled && (
                 <div style={{ border: "1px solid #fedf89", background: "#fffaeb", color: "#b54708", borderRadius: 8, padding: "10px 12px", fontSize: 13 }}>
                   探查已取消：{displayRun.error_message ?? "已停止后续调用"}
-                  <button type="button" disabled={startDisabled} style={{ ...(startDisabled ? btnDisabled : btnPrimary), marginLeft: 12 }} onClick={() => startRun(false)}>
+                  <button type="button" disabled={startDisabled} style={{ ...(startDisabled ? btnDisabled : btnPrimary), marginLeft: 12 }} onClick={() => startRun(true)}>
                     {startBusy ? "启动中…" : "重新探查"}
                   </button>
                 </div>

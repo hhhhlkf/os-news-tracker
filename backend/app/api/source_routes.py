@@ -10,19 +10,25 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.api.source_cleanup import delete_source_and_related
-from app.categories import get_main_category_names
-from app.enums import SourceType, Stream
+from app.enums import Stream
 from app.models import Source
-from app.sources.detector import SourceDetectionError, detect_source
-from app.sources.html_list_discovery import discover_html_list_source
+from app.sources.detector import DetectResult, SourceDetectionError
+from app.sources.source_management import (
+    ApiProbeSourceInput,
+    HtmlListDiscoveryError,
+    MissingApiUrlError,
+    SourceCreateInput,
+    UnknownMainCategoryError,
+    create_news_source,
+    default_main_category,
+    detect_source_shape,
+    upsert_api_source_from_probe,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sources", tags=["sources"])
 UNABLE_TO_DETECT_DETAIL = "无法识别链接形态，请改用 RSS/API/网页首页链接"
-
-_VALID_SOURCE_TYPES = {"rss", "api", "page_monitor", "search"}
-
 
 class SourceDetectRequest(BaseModel):
     url: HttpUrl
@@ -79,14 +85,14 @@ class CreateFromProbeRequest(BaseModel):
     main_category: str
 
 
-def _detect_or_422(url: str):
+def _detect_or_422(url: str) -> DetectResult:
     try:
-        return detect_source(url)
+        return detect_source_shape(url)
     except SourceDetectionError as exc:
         raise HTTPException(status_code=422, detail=UNABLE_TO_DETECT_DETAIL) from exc
 
 
-def _source_response(source: Source) -> dict:
+def _source_response(source: Source) -> dict[str, Any]:
     return {
         "id": source.id,
         "name": source.name,
@@ -98,7 +104,7 @@ def _source_response(source: Source) -> dict:
 
 
 @router.post("/detect")
-def detect_source_route(body: SourceDetectRequest):
+def detect_source_route(body: SourceDetectRequest) -> dict[str, Any]:
     result = _detect_or_422(str(body.url))
     return {
         "detected_type": result.detected_type,
@@ -112,55 +118,36 @@ def detect_source_route(body: SourceDetectRequest):
 def create_source(
     body: SourceCreateRequest,
     db: Session = Depends(get_db),
-):
-    if body.main_category not in get_main_category_names(db):
-        raise HTTPException(status_code=422, detail="未知内容类型")
-
-    if body.type and body.type in _VALID_SOURCE_TYPES:
-        source_type = body.type
-        api_config = body.api_config
-        name = (body.name or "").strip() or str(body.url)
-    else:
-        result = _detect_or_422(str(body.url))
-        source_type = result.detected_type
-        api_config = result.api_config
-        name = (body.name or result.name_suggestion).strip()
-
-    link_selector = body.link_selector
-    title_selector = body.title_selector
-    date_selector = body.date_selector
-    if source_type == SourceType.PAGE_MONITOR.value and not link_selector:
-        discovery = discover_html_list_source(str(body.url))
-        if not discovery.success or not discovery.link_selector:
-            raise HTTPException(
-                status_code=422,
-                detail="未能自动识别新闻列表结构，请改用 RSS/API 或智能探测",
-            )
-        link_selector = discovery.link_selector
-        title_selector = discovery.title_selector
-        date_selector = discovery.date_selector
-
-    source = Source(
-        name=name,
-        type=source_type,
-        url=str(body.url),
-        api_config=api_config,
-        adapter=body.adapter,
-        main_category=body.main_category,
-        link_selector=link_selector,
-        title_selector=title_selector,
-        date_selector=date_selector,
-        stream=Stream.NEWS,
-        enabled=True,
-    )
-    db.add(source)
-    db.commit()
-    db.refresh(source)
+) -> dict[str, Any]:
+    try:
+        source = create_news_source(
+            db,
+            SourceCreateInput(
+                url=str(body.url),
+                name=body.name,
+                main_category=body.main_category,
+                source_type=body.type,
+                adapter=body.adapter,
+                api_config=body.api_config,
+                link_selector=body.link_selector,
+                title_selector=body.title_selector,
+                date_selector=body.date_selector,
+            ),
+        )
+    except UnknownMainCategoryError as exc:
+        raise HTTPException(status_code=422, detail="未知内容类型") from exc
+    except SourceDetectionError as exc:
+        raise HTTPException(status_code=422, detail=UNABLE_TO_DETECT_DETAIL) from exc
+    except HtmlListDiscoveryError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="未能自动识别新闻列表结构，请改用 RSS/API 或智能探测",
+        ) from exc
     return _source_response(source)
 
 
 @router.get("")
-def list_sources(db: Session = Depends(get_db)):
+def list_sources(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
     sources = db.scalars(
         select(Source)
         .where(Source.stream == Stream.NEWS)
@@ -170,7 +157,10 @@ def list_sources(db: Session = Depends(get_db)):
 
 
 @router.post("/discover")
-def discover_source_route(body: DiscoverRequest, db: Session = Depends(get_db)):
+def discover_source_route(
+    body: DiscoverRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
     """智能探测：用 Playwright 渲染页面，捕获 JSON XHR/Fetch 响应，
     识别文章列表 API，生成与 ApiAdapterFetcher 兼容的 probe 配置并自检。
 
@@ -190,21 +180,23 @@ def discover_source_route(body: DiscoverRequest, db: Session = Depends(get_db)):
     if body.create_source:
         if not result.success or not result.api_url:
             raise HTTPException(status_code=422, detail="未能发现可用 API，无法创建来源")
-        _category_names = get_main_category_names(db)
-        main_category = body.main_category or (_category_names[0] if _category_names else None)
-        if main_category not in _category_names:
-            raise HTTPException(status_code=422, detail="未知内容类型")
-        source = _upsert_api_source_from_probe(
-            db,
-            api_url=result.api_url,
-            method=result.method,
-            items_path=result.items_path or "",
-            fields=result.fields,
-            pagination=result.pagination,
-            json_body=result.json_body,
-            name=(body.name or result.name_suggestion or "").strip(),
-            main_category=main_category,
-        )
+        main_category = body.main_category or default_main_category(db)
+        try:
+            source = upsert_api_source_from_probe(
+                db,
+                ApiProbeSourceInput(
+                    api_url=result.api_url,
+                    method=result.method,
+                    items_path=result.items_path or "",
+                    fields=result.fields,
+                    pagination=result.pagination,
+                    json_body=result.json_body,
+                    name=(body.name or result.name_suggestion or "").strip(),
+                    main_category=main_category or "",
+                ),
+            )
+        except UnknownMainCategoryError as exc:
+            raise HTTPException(status_code=422, detail="未知内容类型") from exc
         payload["created_source"] = {
             "id": source.id,
             "name": source.name,
@@ -217,91 +209,37 @@ def discover_source_route(body: DiscoverRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/create-from-probe", status_code=201)
-def create_source_from_probe_route(body: CreateFromProbeRequest, db: Session = Depends(get_db)):
+def create_source_from_probe_route(
+    body: CreateFromProbeRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
     """用智能探测得到的 probe 配置创建/更新标准 API 来源（不重新跑探测）。
 
     同 URL 的已存在 api 来源会被覆盖更新，而非新建。
     """
-    if body.main_category not in get_main_category_names(db):
-        raise HTTPException(status_code=422, detail="未知内容类型")
-    if not body.api_url:
-        raise HTTPException(status_code=422, detail="缺少 api_url")
-
-    source = _upsert_api_source_from_probe(
-        db,
-        api_url=body.api_url,
-        method=body.method,
-        items_path=body.items_path or "",
-        fields=body.fields or {},
-        pagination=body.pagination,
-        json_body=body.json_body,
-        name=(body.name or "").strip(),
-        main_category=body.main_category,
-    )
+    try:
+        source = upsert_api_source_from_probe(
+            db,
+            ApiProbeSourceInput(
+                api_url=body.api_url,
+                method=body.method,
+                items_path=body.items_path or "",
+                fields=body.fields or {},
+                pagination=body.pagination,
+                json_body=body.json_body,
+                name=(body.name or "").strip(),
+                main_category=body.main_category,
+            ),
+        )
+    except UnknownMainCategoryError as exc:
+        raise HTTPException(status_code=422, detail="未知内容类型") from exc
+    except MissingApiUrlError as exc:
+        raise HTTPException(status_code=422, detail="缺少 api_url") from exc
     return _source_response(source)
 
 
-def _upsert_api_source_from_probe(
-    db: Session,
-    *,
-    api_url: str,
-    method: str,
-    items_path: str,
-    fields: dict,
-    pagination: dict | None,
-    json_body: dict | None,
-    name: str,
-    main_category: str,
-) -> Source:
-    """把 probe 配置落地为标准 ``api`` 来源（type=api + api_config.probe）。
-
-    同 ``api_url`` 的已存在 api 来源会被覆盖更新其 probe（包括 pagination 与
-    json_body），而非新建一条。这样重新探测同链接时，新的分页/模板配置会直接
-    覆盖旧的残缺 probe，避免一键抓取读到过期配置。
-    """
-    probe: dict[str, Any] = {
-        "mode": "json_list",
-        "method": method.upper() if method else "GET",
-        "url": api_url,
-        "items_path": items_path,
-        "fields": fields,
-    }
-    if pagination:
-        probe["pagination"] = pagination
-    if json_body:
-        probe["json_body"] = json_body
-
-    existing = db.scalar(
-        select(Source)
-        .where(Source.type == SourceType.API.value, Source.url == api_url)
-    )
-    if existing is not None:
-        existing.api_config = {"probe": probe}
-        if name:
-            existing.name = name
-        existing.main_category = main_category
-        existing.enabled = True
-        db.commit()
-        db.refresh(existing)
-        return existing
-
-    source = Source(
-        name=name or api_url,
-        type=SourceType.API.value,
-        url=api_url,
-        api_config={"probe": probe},
-        main_category=main_category,
-        stream=Stream.NEWS,
-        enabled=True,
-    )
-    db.add(source)
-    db.commit()
-    db.refresh(source)
-    return source
-
-
 @router.delete("/{source_id}", status_code=204)
-def delete_source(source_id: int, db: Session = Depends(get_db)):
+def delete_source(source_id: int, db: Session = Depends(get_db)) -> None:
     source = db.get(Source, source_id)
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
