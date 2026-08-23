@@ -15,5 +15,3 @@ dist/
 .agents/
 .cursor/
 db/
-# Runtime-generated, versioned site connectors are host-visible but not source-controlled.
-backend/connectors/sites/
