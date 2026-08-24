@@ -181,6 +181,8 @@ def get_stage_defaults() -> dict[str, str]:
     """
     from app.api.discovery_routes import _NAMING_PROMPT  # noqa: F401 - 仅取常量
     from app.discovery.quality_audit import QUALITY_AUDIT_PROMPT
+    # DEPRECATED / DORMANT default retained for stored prompt sets and the
+    # operator UI. Active shared-WeChat execution never consumes this prompt.
     from app.discovery.wechat_tools import WECHAT_PREFETCH_PROMPT
     from app.processing.enricher import _PROMPT_TEMPLATE as ENRICH_PROMPT
     from app.processing.relevance import _PROMPT as RELEVANCE_FILTER_PROMPT

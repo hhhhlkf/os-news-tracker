@@ -71,7 +71,11 @@ export function ItemList({
     const headId = items[0]?.id ?? null;
     const changed = prev.page !== page || prev.headId !== headId || prev.len !== items.length;
     if (!changed) return;
-    setEnterDir(directionRef.current);
+    // Page changes may come from outside (edge arrows), so derive the enter
+    // direction from the page delta instead of relying on changePage alone.
+    const dir = prev.page !== page ? (page > prev.page ? 1 : -1) : directionRef.current;
+    directionRef.current = dir;
+    setEnterDir(dir);
     setEnterKey(contentKey);
     prevSettledRef.current = { page, headId, len: items.length };
   }, [busy, contentKey, items, page]);

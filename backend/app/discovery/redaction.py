@@ -74,6 +74,28 @@ _ASSIGNED_SECRET = re.compile(
 )
 
 
+class DiscoveryDataBoundsError(ValueError):
+    """A safe, numeric explanation for a rejected persistence payload."""
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        approx_bytes: int,
+        node_count: int,
+        depth: int,
+        limit: int,
+    ) -> None:
+        super().__init__(reason)
+        self.details = {
+            "reason": reason,
+            "approx_bytes": approx_bytes,
+            "node_count": node_count,
+            "depth": depth,
+            "limit": limit,
+        }
+
+
 def validate_discovery_data_bounds(
     value: Any,
     *,
@@ -93,35 +115,79 @@ def validate_discovery_data_bounds(
             ancestors.remove(id(current))
             continue
         nodes += 1
-        if nodes > max_nodes or depth > max_depth:
-            raise ValueError("Discovery persistence payload exceeds traversal limits")
+        if nodes > max_nodes:
+            raise DiscoveryDataBoundsError(
+                "node_limit_exceeded",
+                approx_bytes=approximate_bytes,
+                node_count=nodes,
+                depth=depth,
+                limit=max_nodes,
+            )
+        if depth > max_depth:
+            raise DiscoveryDataBoundsError(
+                "depth_limit_exceeded",
+                approx_bytes=approximate_bytes,
+                node_count=nodes,
+                depth=depth,
+                limit=max_depth,
+            )
         if isinstance(current, str):
             if len(current) > max_string_chars:
-                raise ValueError("Discovery persistence string exceeds its limit")
+                raise DiscoveryDataBoundsError(
+                    "string_limit_exceeded",
+                    approx_bytes=approximate_bytes,
+                    node_count=nodes,
+                    depth=depth,
+                    limit=max_string_chars,
+                )
             approximate_bytes += len(current) * 4
         elif isinstance(current, dict):
             identity = id(current)
             if identity in ancestors:
-                raise ValueError("Discovery persistence payload contains a cycle")
+                raise DiscoveryDataBoundsError(
+                    "cycle_detected",
+                    approx_bytes=approximate_bytes,
+                    node_count=nodes,
+                    depth=depth,
+                    limit=max_depth,
+                )
             ancestors.add(identity)
             stack.append((current, depth, True))
             for key, item in current.items():
                 key_text = str(key)
                 if len(key_text) > max_string_chars:
-                    raise ValueError("Discovery persistence key exceeds its limit")
+                    raise DiscoveryDataBoundsError(
+                        "key_limit_exceeded",
+                        approx_bytes=approximate_bytes,
+                        node_count=nodes,
+                        depth=depth,
+                        limit=max_string_chars,
+                    )
                 approximate_bytes += len(key_text) * 4
                 stack.append((item, depth + 1, False))
         elif isinstance(current, (list, tuple)):
             identity = id(current)
             if identity in ancestors:
-                raise ValueError("Discovery persistence payload contains a cycle")
+                raise DiscoveryDataBoundsError(
+                    "cycle_detected",
+                    approx_bytes=approximate_bytes,
+                    node_count=nodes,
+                    depth=depth,
+                    limit=max_depth,
+                )
             ancestors.add(identity)
             stack.append((current, depth, True))
             stack.extend((item, depth + 1, False) for item in current)
         else:
             approximate_bytes += min(len(str(current)), max_string_chars) * 4
         if approximate_bytes > max_approx_bytes:
-            raise ValueError("Discovery persistence payload exceeds its byte limit")
+            raise DiscoveryDataBoundsError(
+                "approx_bytes_limit_exceeded",
+                approx_bytes=approximate_bytes,
+                node_count=nodes,
+                depth=depth,
+                limit=max_approx_bytes,
+            )
 
 
 def redact_discovery_data(

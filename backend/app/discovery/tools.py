@@ -1,4 +1,9 @@
-"""LangChain @tool 工具集：供 Explorer/Validator worker 自主调用的探查工具。
+"""DEPRECATED / MIGRATION-ONLY: old LangChain Explorer/Validator tools.
+
+The active Single Agent Loop uses ``loop.explore_tools`` inside gVisor.  This
+module is retained only because the legacy DSL interpreter still references
+some helpers during migration/rollback.  Do not expose these tools to new
+Discovery code.
 
 全部为只读探查动作（fetch/inspect/test），不写文件、不执行命令。Playwright 仅在
 render_js=True 或 capture_network 时按需启动，模块加载零浏览器开销。

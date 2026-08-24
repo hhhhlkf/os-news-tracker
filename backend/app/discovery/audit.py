@@ -1,9 +1,8 @@
-"""Unified audit entrypoint for discovery recipe probes.
+"""Plugin audit interfaces plus a deprecated legacy recipe adapter.
 
-This module unifies the audit interface without forcing every source kind to
-share the same audit strategy. Website discovery can keep its graph/LLM audit,
-while WeChat and other deterministic multi discovery branches use lightweight
-run-result audits.
+Active website and WeChat review uses deterministic connector output and
+host-signed sandbox evidence. ``audit_discovery_recipe`` remains below only as
+an unused compatibility adapter for the retired graph/DSL implementation.
 """
 
 from __future__ import annotations
@@ -26,10 +25,14 @@ def audit_discovery_recipe(
     status: str | None = None,
     website_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """统一审计入口：按来源类型把探查结果规整成一致的审计结论。
+    """DEPRECATED / UNUSED legacy graph/``multi_dsl`` audit interface.
 
-    功能：website 来源直接套用图审计结果（_finalize_website_audit），其它确定性分支（微信等）走轻量运行结果审计。
-    谁会调用：multi_graph._execute_multi_discovery_run、website/recipe_audit.auditor 在跑完 recipe 后调用。
+    No production caller remains. Active connector review uses
+    ``audit_plugin_trial`` with deterministic evaluation and host-signed
+    sandbox evidence. Retain only until legacy cleanup; add no new callers.
+
+    旧功能：website 来源套用图审计结果，其它旧分支走轻量结果审计。
+    当前调用者：无。
     直接调用：
     - _finalize_website_audit(...)：规整 website 图审计结果。
     - _audit_lightweight_result(...)：对微信等做轻量结果审计。
@@ -140,7 +143,7 @@ def _finalize_website_audit(
     input_type: str,
     discovered_count: int,
 ) -> dict[str, Any]:
-    """把网站图审计结果规整为统一审计结构。
+    """DEPRECATED helper used only by the unused ``audit_discovery_recipe``.
 
     功能：依据 passed/errors/decision 推导 reason，补齐 audit_kind、method_status、required_count 等字段。
     谁会调用：audit_discovery_recipe 的 website 分支调用。
@@ -179,7 +182,7 @@ def _audit_lightweight_result(
     discovered_count: int,
     status: str | None,
 ) -> dict[str, Any]:
-    """对微信等确定性分支按运行结果做轻量审计。
+    """DEPRECATED helper used only by the unused ``audit_discovery_recipe``.
 
     功能：先识别鉴权失效/限流等失败状态映射到对应 method_status，否则按 discovered_count 是否达标判定通过与否。
     谁会调用：audit_discovery_recipe 的非 website 分支调用。

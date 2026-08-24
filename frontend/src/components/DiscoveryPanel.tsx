@@ -113,12 +113,19 @@ export function DiscoveryPanel({ onMethodAdded }: { onMethodAdded?: (methodId: n
   });
   const discoveryLogs = useDiscoveryLogs(runId, runId != null, "run");
   const manualMethodLogs = useDiscoveryLogs(0, true, true);
-  const combinedLogs = useMemo(() => [
-    ...discoveryLogs,
-    ...manualMethodLogs
-      .filter((log) => typeof log.method_id === "number")
-      .map((log) => ({ ...log, id: -log.id, sequence: -log.sequence })),
-  ].sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts)), [discoveryLogs, manualMethodLogs]);
+  const combinedLogs = useMemo(
+    () => [
+      ...discoveryLogs,
+      ...manualMethodLogs
+        .filter(
+          (log) =>
+            typeof log.method_id === "number" &&
+            (log.trigger_type === "manual" || log.trigger_type === "manual_method"),
+        )
+        .map((log) => ({ ...log, id: -log.id, sequence: -log.sequence })),
+    ].sort((left, right) => Date.parse(left.ts) - Date.parse(right.ts)),
+    [discoveryLogs, manualMethodLogs],
+  );
   const logs = logsResetAt == null
     ? combinedLogs
     : combinedLogs.filter((log) => Date.parse(log.ts) > logsResetAt);

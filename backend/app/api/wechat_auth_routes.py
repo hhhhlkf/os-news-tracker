@@ -1,3 +1,10 @@
+"""DEPRECATED / DORMANT HTTP compatibility for WeChat MP authentication.
+
+These authenticated endpoints remain registered so existing operators are not
+broken, but the active WeChat Discovery and formal connector never use them.
+Do not add new product dependencies; removal is a separately gated cleanup.
+"""
+
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -27,7 +34,7 @@ def _profile_name(requested: str | None) -> str:
     return resolved
 
 
-@router.get("/profile")
+@router.get("/profile", deprecated=True)
 def get_wechat_auth_profile(
     response: Response,
     profile_name: str | None = None,
@@ -37,7 +44,7 @@ def get_wechat_auth_profile(
     return profile_public_status(_profile_name(profile_name))
 
 
-@router.post("/profile/verify")
+@router.post("/profile/verify", deprecated=True)
 def verify_wechat_auth_profile(
     response: Response,
     profile_name: str | None = None,
@@ -48,7 +55,7 @@ def verify_wechat_auth_profile(
     return verify_profile(_profile_name(profile_name))
 
 
-@router.post("/profile/logout")
+@router.post("/profile/logout", deprecated=True)
 def logout_wechat_auth_profile(
     response: Response,
     profile_name: str | None = None,
@@ -62,7 +69,7 @@ def logout_wechat_auth_profile(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@router.post("/qr-sessions", status_code=202)
+@router.post("/qr-sessions", status_code=202, deprecated=True)
 def start_wechat_qr_session(
     request: WechatQrStartRequest,
     response: Response,
@@ -75,7 +82,7 @@ def start_wechat_qr_session(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@router.get("/qr-sessions/{session_id}")
+@router.get("/qr-sessions/{session_id}", deprecated=True)
 def get_wechat_qr_session(
     session_id: str,
     response: Response,
@@ -88,7 +95,7 @@ def get_wechat_qr_session(
     return result
 
 
-@router.post("/qr-sessions/{session_id}/cancel")
+@router.post("/qr-sessions/{session_id}/cancel", deprecated=True)
 def cancel_wechat_qr_session(
     session_id: str,
     response: Response,

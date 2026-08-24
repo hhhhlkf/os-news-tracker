@@ -1,4 +1,11 @@
-"""DSL 规约：9 个原语的 Pydantic 模型 + 结构/语义校验 + 变量替换 + loop 条件求值。
+"""DEPRECATED / MIGRATION-ONLY: legacy website/WeChat DSL contracts.
+
+The Single Agent Loop emits versioned Python connectors and must not create a
+new ``DslRecipe``.  This module is retained only to execute or inspect stored
+legacy methods during migration, rollback, and retirement.  Remove it only
+after the legacy cleanup-readiness gate passes.
+
+DSL 规约：9 个原语的 Pydantic 模型 + 结构/语义校验 + 变量替换 + loop 条件求值。
 
 DSL 是受限动作语言，只表达爬取动作序列，不能写文件/执行命令（零沙箱负担）。
 Recipe = actions 顺序数组，由 DslInterpreter 解释执行。

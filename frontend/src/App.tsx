@@ -4,6 +4,7 @@ import { HomePage } from "./pages/HomePage";
 import { DiscoveryPage } from "./pages/DiscoveryPage";
 import { StatisticsDiscoveryPage } from "./pages/StatisticsDiscoveryPage";
 import { TrendWorkspacePage } from "./features/trends/TrendWorkspacePage";
+import { ArchitectureDiagramPrototype } from "./pages/ArchitectureDiagramPrototype";
 import { getAccessTokenExpiresAtMs, isSystemAuthenticated, logout, systemLogin } from "./auth";
 import { clampInput, INPUT_LIMITS } from "./inputLimits";
 
@@ -37,7 +38,22 @@ function TopNav({ authenticated, onAuthenticatedChange }: { authenticated: boole
     setError(null);
   }
   return (
-    <nav style={{ display: "flex", gap: 12, padding: "10px 24px", borderBottom: "1px solid #eaecf0", alignItems: "center", flexWrap: "wrap" }}>
+    <nav
+      style={{
+        display: "flex",
+        gap: 12,
+        padding: "10px 24px",
+        borderBottom: "1px solid #eaecf0",
+        alignItems: "center",
+        flexWrap: "wrap",
+        position: "sticky",
+        top: 0,
+        zIndex: 50,
+        background: "rgba(255, 255, 255, 0.68)",
+        backdropFilter: "blur(12px)",
+        WebkitBackdropFilter: "blur(12px)",
+      }}
+    >
       <div style={{ display: "flex", gap: 6 }}>
         <NavLink to="/" end style={linkStyle}>
           新闻流
@@ -133,6 +149,7 @@ export default function App() {
           path="/trends"
           element={authenticated ? <TrendWorkspacePage hasSystemAccess /> : <Navigate to="/" replace />}
         />
+        <Route path="/prototype/architecture" element={<ArchitectureDiagramPrototype />} />
       </Routes>
     </BrowserRouter>
   );

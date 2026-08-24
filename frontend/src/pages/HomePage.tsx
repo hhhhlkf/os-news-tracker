@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { fetchFacets, fetchItems, listDiscoveryMethods } from "../api/client";
 import { FacetSidebar } from "../components/FacetSidebar";
+import { EdgePageArrows } from "../components/EdgePageArrows";
 import { ItemList } from "../components/ItemList";
 import { ItemDetail } from "../components/ItemDetail";
 import { MailTaskCenter } from "../components/MailTaskCenter";
@@ -338,6 +339,7 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
   const selectedLiveItemId = mode === "live" ? openId ?? undefined : undefined;
 
   const hasLiveEmptyState = mode === "live" && listData?.total === 0;
+  const totalPages = Math.max(1, Math.ceil((listData?.total ?? 0) / PAGE_SIZE));
   const activeFilterCount = countActiveFilters(effectiveFilters);
   const crawlMethods = crawlMethodsQuery.data ?? [];
   const activeCrawlMethods = useMemo(
@@ -748,10 +750,12 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
           </div>
         </div>
 
+        <EdgePageArrows page={page} totalPages={totalPages} onPageChange={setPage} hidden={openId !== null} />
+
         {openId !== null && (
           <div onClick={() => setOpenId(null)} style={{
             position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.42)",
-            display: "flex", justifyContent: "flex-end",
+            display: "flex", justifyContent: "flex-end", zIndex: 55,
           }}>
             <div onClick={(e) => e.stopPropagation()} style={{
               width: 620, maxWidth: "92vw", background: "#fff",

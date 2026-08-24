@@ -1,3 +1,10 @@
+"""DEPRECATED / MIGRATION-ONLY article enrichment for legacy DSL recipes.
+
+Versioned Python connectors own their extraction behavior.  This module is
+reachable only from the old DSL tools/interpreter and must not be used as a
+shared-runtime fallback for generated connectors.
+"""
+
 from __future__ import annotations
 
 import html
