@@ -1,3 +1,9 @@
+"""DEPRECATED / MIGRATION-ONLY: interpreter for stored ``multi_dsl`` recipes.
+
+No new website or WeChat path may call this module.  It is loaded lazily only
+through ``execution._run_legacy_compatibility`` for migration and rollback.
+"""
+
 from __future__ import annotations
 
 from typing import Any, Callable

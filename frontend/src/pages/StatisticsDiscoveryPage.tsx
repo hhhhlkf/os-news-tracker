@@ -295,7 +295,7 @@ function StackedBarChart({
     // Few series → soft gradient area; many series → flatter stacked area (less mud).
     const fewSeries = legend.length <= 3;
     const seriesValues = (item: LegendItem) => points.map((point) => {
-      const segment = point.segments.find((entry) => entry.key === item.key || entry.label === item.label);
+      const segment = point.segments.find((entry) => entry.key === item.key);
       return segment?.value ?? 0;
     });
     const series = legend.map((item) => {

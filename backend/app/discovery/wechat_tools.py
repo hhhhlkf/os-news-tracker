@@ -1,7 +1,12 @@
-"""微信抓取工具集。
+"""DEPRECATED / DORMANT: legacy WeChat search, MP-history, and enrich tools.
 
-功能：提供微信公众号文章的检索、账号解析、历史文章抓取、单篇正文补抓与批量富化能力，覆盖搜狗检索与公众号后台 API 两种来源，并把抓取结果整理成统一的条目结构。
-谁会调用：多源发现图（multi_graph / multi_interpreter）在路由到微信分支时调用这里的入口函数（wechat_search_articles、wechat_fetch_account_history、wechat_enrich_articles 等）。
+Active WeChat Discovery/formal fetch uses the reviewed shared
+``wechat_sogou`` Python connector.  This module is retained for stored
+``multi_dsl`` rollback, diagnostics, and the dormant authenticated MP-history
+HTTP compatibility surface.  New Discovery code must not call or extend it.
+
+旧功能：搜狗检索、公众号后台 API 历史、单篇正文补抓与批量富化。
+当前调用者：仅旧 ``multi_interpreter``、兼容配方准备、诊断脚本与微信登录态兼容接口。
 直接调用：
 - httpx / Playwright：发起检索与抓取的网络请求。
 - app.wechat_auth：读取与失效微信公众号登录态。

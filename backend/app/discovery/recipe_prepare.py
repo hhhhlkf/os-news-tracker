@@ -91,7 +91,10 @@ def prepare_fetch_recipe(recipe: dict[str, Any], request: ManualNewsRunRequest |
 
 
 def ensure_aggregator_feed_article_enrich(recipe: dict[str, Any]) -> None:
-    """为聚合器类 feed（如 HN RSS）自动插入「补抓文章正文」动作。
+    """DEPRECATED / MIGRATION-ONLY mutation for stored legacy DSL recipes.
+
+    Python connectors own article enrichment. This remains only so an old
+    HN-style DSL can be replayed during migration or rollback.
 
     功能：若 recipe 尚无 enrich_article_pages 且首个 feed 动作指向 hnrss/news.ycombinator，则在 dedup_by 之后追加补抓动作。
     谁会调用：prepare_fetch_recipe 在补全 recipe 时调用。
@@ -127,7 +130,10 @@ def ensure_aggregator_feed_article_enrich(recipe: dict[str, Any]) -> None:
 
 
 def attach_wechat_skip_keys(recipe: dict[str, Any], urls: list[str]) -> dict[str, Any]:
-    """把已有文章 URL 的微信去重键注入 recipe，避免重复补抓。
+    """DEPRECATED / MIGRATION-ONLY mutation for legacy WeChat DSL recipes.
+
+    The active shared WeChat connector performs deterministic de-duplication
+    itself; its ``python_plugin`` recipe returns before importing legacy code.
 
     功能：从已有 urls 推导出微信文章去重键，合并到 recipe 的 enrich_wechat_articles 动作的 skip_url_keys 中。
     谁会调用：runner.execute_discovery_fetch、morning_crawl/service.py 在补抓前用已存 URL 去重。
@@ -155,7 +161,10 @@ def attach_wechat_skip_keys(recipe: dict[str, Any], urls: list[str]) -> dict[str
 
 
 def ensure_wechat_history_article_enrich(actions: list[dict[str, Any]]) -> None:
-    """为公众号历史抓取自动补上「补抓微信文章正文」动作。
+    """DEPRECATED / DORMANT mutation for authenticated WeChat-history DSL.
+
+    New WeChat discovery uses the anonymous shared connector and must not
+    generate ``wechat_fetch_account_history`` actions.
 
     功能：当 recipe 含 wechat_fetch_account_history 但还没有 enrich_wechat_articles 时，在 dedup_by 处或末尾插入补抓动作。
     谁会调用：prepare_fetch_recipe 在处理 multi_dsl 时调用。
@@ -195,7 +204,8 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-# Backward-compatible aliases while callers migrate off app.api.discovery_routes.
+# DEPRECATED compatibility aliases for historical discovery_routes imports.
+# Do not add new callers; use the public functions above where still required.
 _apply_fetch_limits = apply_fetch_limits
 _prepare_fetch_recipe = prepare_fetch_recipe
 _attach_wechat_skip_keys = attach_wechat_skip_keys

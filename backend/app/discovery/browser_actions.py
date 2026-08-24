@@ -1,4 +1,9 @@
-"""Shared Playwright page actions for discovery and DSL execution."""
+"""DEPRECATED / MIGRATION-ONLY Playwright helpers for the old DSL stack.
+
+Active exploration runs through the gVisor ``ProbeTools`` implementation in
+``loop.explore_tools``.  Keep this module only while stored DSL methods can be
+executed for migration or rollback; do not call it from new connector paths.
+"""
 
 from __future__ import annotations
 

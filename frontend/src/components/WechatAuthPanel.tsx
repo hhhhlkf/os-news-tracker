@@ -21,6 +21,9 @@ const SECTION: CSSProperties = {
 
 const STORAGE_KEY = "discovery.wechat-auth-panel.expanded";
 
+// DEPRECATED / DORMANT compatibility UI. Active WeChat Discovery uses the
+// anonymous shared connector and does not consume this MP login state.
+
 const terminalStatuses = new Set<WechatQrSessionStatus>([
   "success",
   "expired",

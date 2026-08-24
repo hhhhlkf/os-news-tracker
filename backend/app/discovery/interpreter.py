@@ -1,4 +1,11 @@
-"""DSL 解释执行器，按 actions 顺序执行 DSL，零 LLM。
+"""DEPRECATED / MIGRATION-ONLY: interpreter for stored legacy DSL methods.
+
+New Discovery and formal Python-connector execution must never import this
+module.  The only supported caller is the explicit legacy compatibility seam
+used for migration shadow runs and rollback.  Keep until cleanup readiness is
+true; do not extend it with new source behavior.
+
+DSL 解释执行器，按 actions 顺序执行 DSL，零 LLM。
 
 维护一个 context（vars/items/last_fetch/browser），每个 action 读/写 context，
 最后吐 {"items": [...], "stats": {...}} 给 CrawlOutputIngester。

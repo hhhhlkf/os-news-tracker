@@ -219,6 +219,7 @@ def _execute_discovery_fetch_impl(
         副作用：写运行日志（队列或本地缓冲）。
         """
         fields.setdefault("run_id", run_id)
+        fields.setdefault("trigger_type", log_trigger_type)
         if log_queue is not None:
             log_queue.put(
                 {
@@ -245,6 +246,7 @@ def _execute_discovery_fetch_impl(
         "manual_method",
     }:
         trigger_type = str(request_payload["trigger_type"])
+    log_trigger_type = "scheduled" if log_stage == "定时抓取" else trigger_type
     owns_session = db is None
     db = db or SessionLocal()
     usage_token = (

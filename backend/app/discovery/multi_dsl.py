@@ -1,4 +1,10 @@
-"""多来源探查配方的正式数据合同。
+"""DEPRECATED / MIGRATION-ONLY: stored multi-source DSL contract.
+
+Website and WeChat discovery now produce Python-plugin recipes.  These models
+remain solely for legacy migration/rollback records; the internal-forum seam
+is represented by ``SourceRoute`` and does not justify new ``multi_dsl`` use.
+
+多来源探查配方的旧数据合同。
 
 功能：定义网站、微信公众号和内部来源共用的 ``multi_dsl`` 存储格式。
 由谁调用：``multi_graph`` 生成/保存配方，``execution`` 与解释器执行配方。

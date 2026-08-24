@@ -27,7 +27,7 @@ export function CrawlMethodDetail({ methodId, onClose, allowManage = false }: { 
   });
 
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.42)", display: "flex", justifyContent: "flex-end" }}>
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.42)", display: "flex", justifyContent: "flex-end", zIndex: 55 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: 560, maxWidth: "92vw", background: "#fff", height: "100%", overflowY: "auto", boxShadow: "-24px 0 48px rgba(16,24,40,0.16)", padding: 20 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <div style={{ fontSize: 18, fontWeight: 800 }}>{q.data?.domain ?? "加载中…"}</div>

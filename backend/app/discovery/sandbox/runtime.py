@@ -37,13 +37,17 @@ from app.discovery.plugin.artifact import (
     ConnectorArtifact,
     load_connector_artifact,
 )
-from app.discovery.plugin.contracts import ConnectorInvocation, ConnectorOutput
+from app.discovery.plugin.contracts import (
+    MAX_CONNECTOR_TEXT_CHARS,
+    ConnectorInvocation,
+    ConnectorOutput,
+)
 from app.discovery.plugin.errors import (
     ConnectorErrorCode,
     ConnectorExitCode,
     ConnectorProtocolError,
 )
-from app.discovery.redaction import redact_discovery_data
+from app.discovery.redaction import DiscoveryDataBoundsError, redact_discovery_data
 from app.discovery.sandbox.capacity import (
     CapacityQueue,
     SandboxJobPriority,
@@ -86,6 +90,20 @@ def connector_audit_projection(value: BaseModel) -> dict[str, Any]:
     )
     if not isinstance(projected, dict):
         raise ValueError("connector audit projection must be an object")
+    if isinstance(value, ConnectorOutput):
+        items = projected.get("items")
+        if isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                for field in ("summary", "content"):
+                    field_value = item.get(field)
+                    if isinstance(field_value, str):
+                        # Redaction may expand a short secret into "[redacted]".
+                        # Keep the persisted audit copy inside the same connector
+                        # contract as the original output without changing the
+                        # output handed to the ingestion pipeline.
+                        item[field] = field_value[:MAX_CONNECTOR_TEXT_CHARS]
     return projected
 
 
@@ -826,9 +844,26 @@ class SandboxRuntime:
                     connector_audit_projection(output)
                 )
             except (ValidationError, ValueError) as exc:
+                audit_details: dict[str, Any] = {
+                    "reason": "audit_output_validation_failed"
+                    if isinstance(exc, ValidationError)
+                    else "audit_projection_failed",
+                    "approx_bytes": None,
+                    "node_count": None,
+                    "depth": None,
+                    "item_count": len(output.items),
+                }
+                if isinstance(exc, DiscoveryDataBoundsError):
+                    audit_details.update(exc.details)
+                if isinstance(exc, ValidationError):
+                    audit_details["validation_errors"] = exc.errors(
+                        include_url=False,
+                        include_input=False,
+                    )
                 raise ConnectorProtocolError(
                     ConnectorErrorCode.INVALID_OUTPUT,
                     "connector output cannot be represented safely for audit",
+                    details={"audit": audit_details},
                 ) from exc
             output_sha256 = canonical_connector_digest(audit_output)
             try:

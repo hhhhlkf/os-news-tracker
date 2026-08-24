@@ -1,3 +1,10 @@
+"""DEPRECATED / DORMANT WeChat MP credential and QR-login implementation.
+
+Retained only for the authenticated compatibility endpoints and diagnostics.
+The active anonymous shared WeChat connector receives no cookie/token and must
+not import this module.
+"""
+
 from __future__ import annotations
 
 import base64

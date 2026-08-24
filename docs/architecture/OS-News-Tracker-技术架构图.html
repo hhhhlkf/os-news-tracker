@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OS News Tracker 技术架构图</title>
+  <style>
+    :root {
+      --ink: #1c3047;
+      --muted: #586b80;
+      --line: #365774;
+      --blue: #337fc8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-width: 1100px;
+      color: var(--ink);
+      background: #eef3f7;
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+    }
+    .sheet {
+      width: 1440px;
+      margin: 34px auto;
+      padding: 38px 40px 44px;
+      border-radius: 30px;
+      background: transparent;
+      box-shadow: 0 20px 64px rgba(28, 55, 86, .15);
+    }
+    header { text-align: center; margin-bottom: 26px; }
+    .eyebrow {
+      color: #3278bd;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .16em;
+    }
+    h1 { margin: 9px 0 8px; font-size: 36px; letter-spacing: .03em; }
+    header p { margin: 0; color: var(--muted); font-size: 15px; }
+    .band {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 168px;
+      gap: 24px;
+      padding: 25px 24px;
+      border: 1px solid;
+      border-radius: 25px;
+    }
+    .source { background: linear-gradient(135deg, #fff4cf, #fffaf0); border-color: #edd58f; }
+    .control { background: linear-gradient(135deg, #e4f1ff, #f2f8ff); border-color: #b2d5f8; }
+    .orchestration { background: linear-gradient(135deg, #dcf6fb, #effcff); border-color: #a2dfe9; }
+    .item { background: linear-gradient(135deg, #e5f7e5, #f5fff3); border-color: #b8dfb3; }
+    .consume { background: linear-gradient(135deg, #eee9ff, #f8f6ff); border-color: #cfc1f1; }
+    .runtime { background: linear-gradient(135deg, #edf1f6, #fafcff); border-color: #cbd7e5; }
+    .cards {
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+      gap: 16px;
+    }
+    .card {
+      flex: 1 1 0;
+      min-height: 123px;
+      padding: 17px 18px;
+      border: 1.6px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255,255,255,.94);
+      box-shadow: 0 5px 13px rgba(37, 68, 101, .08);
+    }
+    .card.focus {
+      border: 2px solid #2475bd;
+      box-shadow: 0 0 0 4px rgba(36,117,189,.10), 0 7px 16px rgba(37, 89, 145, .13);
+    }
+    .card h2 {
+      margin: 0 0 8px;
+      color: #203b58;
+      font-size: 18px;
+      line-height: 1.25;
+    }
+    .card p {
+      margin: 4px 0 0;
+      color: #566b82;
+      font-size: 13px;
+      line-height: 1.48;
+    }
+    .icon {
+      display: inline-grid;
+      width: 27px;
+      height: 27px;
+      place-items: center;
+      margin-right: 7px;
+      border-radius: 7px;
+      color: #fff;
+      background: #3983cb;
+      font-size: 15px;
+      vertical-align: -3px;
+    }
+    .side {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+    .layer-label {
+      width: 146px;
+      padding: 12px 10px;
+      border-radius: 10px;
+      color: #fff;
+      background: linear-gradient(135deg, #4b98df, #2871b8);
+      box-shadow: 0 7px 15px rgba(38,104,176,.18);
+      font-size: 17px;
+      font-weight: 800;
+    }
+    .side small {
+      display: block;
+      margin-top: 11px;
+      color: #536a81;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .arrow {
+      position: relative;
+      z-index: 2;
+      width: 56px;
+      height: 35px;
+      margin: -4px 0 -9px 68%;
+      display: grid;
+      place-items: center;
+      border-radius: 0 0 13px 13px;
+      color: #276eaa;
+      background: #fff;
+      font-size: 31px;
+      font-weight: 900;
+      line-height: 1;
+    }
+    .inner {
+      padding: 16px;
+      border: 1.5px dashed #6598ad;
+      border-radius: 16px;
+    }
+    .inner .cards { gap: 13px; }
+    .inner .card { min-height: 113px; }
+    .wide { flex-basis: 42%; }
+    .runtime .card { min-height: 94px; padding: 14px; }
+    .runtime .card h2 { font-size: 15px; }
+    .runtime .card p { font-size: 12px; }
+    .note {
+      margin-top: 26px;
+      padding: 14px 16px;
+      border-left: 4px solid #69a4db;
+      border-radius: 0 10px 10px 0;
+      color: #52677e;
+      background: #f6faff;
+      font-size: 13px;
+      line-height: 1.65;
+    }
+    @media print {
+      body { background: #fff; }
+      .sheet { width: auto; margin: 0; box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="sheet">
+    <header>
+      <div class="eyebrow">OS NEWS TRACKER · TECHNICAL ARCHITECTURE</div>
+      <h1>OS News Tracker 技术架构</h1>
+      <p>多源技术情报从受控接入、统一处理，到趋势分析与邮件分发的模块化架构</p>
+    </header>
+
+    <section class="band source">
+      <div class="cards">
+        <article class="card">
+          <h2><span class="icon">◫</span>常规新闻源</h2>
+          <p>RSS、页面监测</p>
+          <p>关键词搜索、公开 API</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">✉</span>技术邮件列表</h2>
+          <p>IMAP 增量收取</p>
+          <p>Header 规则匹配</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">◆</span>GitHub 技术讨论</h2>
+          <p>Issue、Discussion</p>
+          <p>评论与更新时间水位</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">◷</span>任务触发</h2>
+          <p>管理员手动执行</p>
+          <p>定时任务与巡检补跑</p>
+        </article>
+      </div>
+      <aside class="side">
+        <div class="layer-label">信息入口层</div>
+        <small>技术新闻<br>技术讨论<br>任务入口</small>
+      </aside>
+    </section>
+
+    <div class="arrow">↓</div>
+
+    <section class="band control">
+      <div class="cards">
+        <article class="card">
+          <h2><span class="icon">⌕</span>智能探查</h2>
+          <p>Context、Explore、Build</p>
+          <p>真实执行、确定性验收、打包</p>
+        </article>
+        <article class="card focus">
+          <h2><span class="icon">✓</span>Connector 审核与版本</h2>
+          <p>Manifest、校验和、运行时版本</p>
+          <p>待审核 → 已启用</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">⇣</span>正式 Connector 查取</h2>
+          <p>gVisor 沙箱内执行</p>
+          <p>运行记录、取消与单方法隔离</p>
+        </article>
+      </div>
+      <aside class="side">
+        <div class="layer-label">探查与查取层</div>
+        <small>生成可审核能力<br>只执行已启用制品</small>
+      </aside>
+    </section>
+
+    <div class="arrow">↓</div>
+
+    <section class="band orchestration">
+      <div class="inner">
+        <div class="cards">
+          <article class="card focus">
+            <h2><span class="icon">⌘</span>技术讨论整理</h2>
+            <p>重建邮件与 GitHub 真实讨论关系</p>
+            <p>候选分组、结构化总结与证据关联</p>
+          </article>
+          <article class="card">
+            <h2><span class="icon">▣</span>新闻处理 Pipeline</h2>
+            <p>normalize · relevance-filter · dedup</p>
+            <p>enrich · 来源关联 · 幂等存储</p>
+          </article>
+          <article class="card">
+            <h2><span class="icon">◴</span>任务控制与状态</h2>
+            <p>运行状态、事件、检查点与失败恢复</p>
+            <p>手动任务、定时任务与巡检任务</p>
+          </article>
+        </div>
+      </div>
+      <aside class="side">
+        <div class="layer-label">整理编排层</div>
+        <small>讨论与新闻<br>分别整理<br>共享运行治理</small>
+      </aside>
+    </section>
+
+    <div class="arrow">↓</div>
+
+    <section class="band item">
+      <div class="cards">
+        <article class="card wide focus">
+          <h2><span class="icon">●</span>统一 Item 情报库</h2>
+          <p>网页新闻、邮件讨论和 GitHub 技术讨论统一为可检索、可追溯的情报条目。</p>
+          <p>保留来源、证据消息、标签实体、重要性、运行记录与时间边界。</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">↔</span>统一复用边界</h2>
+          <p>新闻流、趋势、邮件、统计</p>
+          <p>均以 Item 作为事实输入</p>
+        </article>
+      </div>
+      <aside class="side">
+        <div class="layer-label">统一情报层</div>
+        <small>跨来源数据汇合<br>可追溯事实底座</small>
+      </aside>
+    </section>
+
+    <div class="arrow">↓</div>
+
+    <section class="band consume">
+      <div class="cards">
+        <article class="card">
+          <h2><span class="icon">▤</span>新闻流与讨论详情</h2>
+          <p>筛选、排序、来源追溯</p>
+          <p>邮件/GitHub 回复拓扑图</p>
+        </article>
+        <article class="card focus">
+          <h2><span class="icon">⌁</span>趋势分析</h2>
+          <p>解释卡、向量、候选聚类</p>
+          <p>故事线、身份模板与趋势轮播</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">✉</span>邮件分发</h2>
+          <p>模板预览、即时发送</p>
+          <p>趋势分发、预定发送与巡检补发</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">◴</span>统计与运营</h2>
+          <p>入库量、Token 用量、运行状态</p>
+          <p>审核提醒与投递日志</p>
+        </article>
+      </div>
+      <aside class="side">
+        <div class="layer-label">分析与分发层</div>
+        <small>面向阅读、分析<br>运营与触达</small>
+      </aside>
+    </section>
+
+    <div class="arrow">↓</div>
+
+    <section class="band runtime">
+      <div class="cards">
+        <article class="card"><h2>FastAPI 与访问控制</h2><p>接口、输入约束、状态事件</p></article>
+        <article class="card"><h2>任务调度器</h2><p>新闻源、系统查取、趋势、邮件</p></article>
+        <article class="card"><h2>Sandbox Runtime</h2><p>Docker + gVisor、容量与网络策略</p></article>
+        <article class="card"><h2>PostgreSQL 与制品目录</h2><p>业务数据、运行记录、版本化 Connector</p></article>
+        <article class="card"><h2>LLM 与 Embedding</h2><p>探查、讨论整理与趋势计算</p></article>
+      </div>
+      <aside class="side">
+        <div class="layer-label">平台运行底座</div>
+        <small>安全隔离<br>持久化与调度</small>
+      </aside>
+    </section>
+
+    <div class="note">
+      说明：探查用于生成可审核的采集能力；正式查取只运行审核通过且启用的 Connector。
+      技术邮件与 GitHub 讨论先整理为统一 Item，再与网页新闻共同参与趋势计算、邮件分发和统计。
+    </div>
+  </main>
+</body>
+</html>
