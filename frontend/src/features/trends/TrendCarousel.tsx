@@ -28,6 +28,8 @@ export interface TrendCarouselProps {
   activeResultId?: string | null;
   /** item_id of the source pill currently driving the news list, if any. */
   activeItemId?: number | null;
+  /** Stretch the panel to fill a homepage module viewport. */
+  fillHeight?: boolean;
 }
 
 export function TrendCarousel({
@@ -35,6 +37,7 @@ export function TrendCarousel({
   onSelectSource,
   activeResultId = null,
   activeItemId = null,
+  fillHeight = false,
 }: TrendCarouselProps) {
   const [templateId, setTemplateId] = useState<string | null>(null);
   const [direction, setDirection] = useState<string | null>(null);
@@ -167,7 +170,7 @@ export function TrendCarousel({
 
   return (
     <section
-      style={panel}
+      style={fillHeight ? { ...panel, ...panelFill } : panel}
       aria-label="趋势轮播"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
@@ -261,11 +264,12 @@ export function TrendCarousel({
       ) : items.length === 0 ? (
         <div style={emptyState}>{carouselQuery.data?.message ?? "当前范围内暂无可验证趋势"}</div>
       ) : (
-        <div style={viewport} aria-live="polite">
+        <div style={fillHeight ? { ...viewport, ...viewportFill } : viewport} aria-live="polite">
           <div
             className="trend-carousel-track"
             style={{
               ...track,
+              ...(fillHeight ? trackFill : null),
               transform: `translate3d(-${slideIndex * 100}%, 0, 0)`,
               transition: transitionOn ? `transform ${SLIDE_MS}ms ${SLIDE_EASE}` : "none",
             }}
@@ -450,8 +454,22 @@ const panel: CSSProperties = {
   border: "1px solid #d0d5dd",
   borderRadius: 8,
   background: "#fff",
-  padding: 16,
-  marginBottom: 16,
+  padding: 22,
+  marginBottom: 0,
+};
+const panelFill: CSSProperties = {
+  height: "100%",
+  marginBottom: 0,
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
+};
+const viewportFill: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+};
+const trackFill: CSSProperties = {
+  height: "100%",
 };
 const header: CSSProperties = {
   display: "flex",
@@ -461,17 +479,17 @@ const header: CSSProperties = {
   flexWrap: "wrap",
   marginBottom: 12,
 };
-const eyebrow: CSSProperties = { fontSize: 14, fontWeight: 800, color: "#101828" };
-const meta: CSSProperties = { fontSize: 12, color: "#667085", marginTop: 4, lineHeight: 1.55 };
+const eyebrow: CSSProperties = { fontSize: 20, fontWeight: 800, color: "#101828", letterSpacing: "0.01em" };
+const meta: CSSProperties = { fontSize: 14, color: "#667085", marginTop: 6, lineHeight: 1.6 };
 const controls: CSSProperties = { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" };
 const select: CSSProperties = {
   border: "1px solid #d0d5dd",
   borderRadius: 8,
-  padding: "8px 10px",
-  fontSize: 13,
+  padding: "10px 13px",
+  fontSize: 15,
   background: "#fff",
   color: "#344054",
-  maxWidth: 240,
+  maxWidth: 260,
 };
 const pager: CSSProperties = { display: "flex", alignItems: "center", gap: 6 };
 const pagerButton: CSSProperties = {
@@ -479,8 +497,8 @@ const pagerButton: CSSProperties = {
   borderRadius: 8,
   background: "#fff",
   color: "#344054",
-  padding: "6px 12px",
-  fontSize: 14,
+  padding: "7px 13px",
+  fontSize: 16,
   fontWeight: 700,
   cursor: "pointer",
   lineHeight: 1,
@@ -490,8 +508,8 @@ const pagerButtonDisabled: CSSProperties = {
   opacity: 0.55,
   cursor: "default",
 };
-const pagerLabel: CSSProperties = { fontSize: 12, color: "#667085", minWidth: 38, textAlign: "center" };
-const autoScrollHint: CSSProperties = { fontSize: 11, color: "#98a2b3", whiteSpace: "nowrap", marginRight: 2 };
+const pagerLabel: CSSProperties = { fontSize: 14, color: "#667085", minWidth: 42, textAlign: "center" };
+const autoScrollHint: CSSProperties = { fontSize: 13, color: "#98a2b3", whiteSpace: "nowrap", marginRight: 2 };
 const viewport: CSSProperties = {
   overflow: "hidden",
   width: "100%",
@@ -513,7 +531,7 @@ const grid: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
   gridTemplateRows: "1fr",
-  gap: 12,
+  gap: 14,
   width: "100%",
   height: "100%",
   minHeight: "100%",
@@ -522,11 +540,11 @@ const grid: CSSProperties = {
 const card: CSSProperties = {
   border: "1px solid #eaecf0",
   borderRadius: 8,
-  padding: 14,
+  padding: 22,
   background: "#fcfcfd",
   display: "flex",
   flexDirection: "column",
-  gap: 8,
+  gap: 12,
   cursor: "pointer",
   minWidth: 0,
   height: "100%",
@@ -542,16 +560,16 @@ const cardHeader: CSSProperties = { display: "flex", justifyContent: "space-betw
 const badges: CSSProperties = { display: "flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" };
 const categoryBadge: CSSProperties = {
   border: "1px solid",
-  fontSize: 11,
+  fontSize: 13,
   fontWeight: 700,
   borderRadius: 999,
-  padding: "3px 8px",
+  padding: "5px 11px",
   whiteSpace: "nowrap",
 };
-const directionBadge: CSSProperties = { border: "1px solid", borderRadius: 999, padding: "3px 6px", fontSize: 10, fontWeight: 800 };
-const cardScore: CSSProperties = { fontSize: 11, color: "#98a2b3", whiteSpace: "nowrap" };
-const cardTopic: CSSProperties = { fontSize: 14, fontWeight: 800, color: "#101828", lineHeight: 1.4 };
-const cardSummary: CSSProperties = { fontSize: 12, color: "#475467", lineHeight: 1.6 };
+const directionBadge: CSSProperties = { border: "1px solid", borderRadius: 999, padding: "5px 10px", fontSize: 13, fontWeight: 800 };
+const cardScore: CSSProperties = { fontSize: 14, color: "#98a2b3", whiteSpace: "nowrap", fontWeight: 600 };
+const cardTopic: CSSProperties = { fontSize: 21, fontWeight: 800, color: "#101828", lineHeight: 1.45, letterSpacing: "0.01em" };
+const cardSummary: CSSProperties = { fontSize: 16, color: "#475467", lineHeight: 1.7 };
 const sourceRowShell: CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -599,9 +617,9 @@ const sourcePill: CSSProperties = {
   borderRadius: 999,
   background: "#fff",
   color: "#475467",
-  fontSize: 11,
-  padding: "3px 9px",
-  maxWidth: 150,
+  fontSize: 13,
+  padding: "5px 11px",
+  maxWidth: 168,
   flex: "0 0 auto",
   overflow: "hidden",
   textOverflow: "ellipsis",
@@ -620,7 +638,7 @@ const emptyState: CSSProperties = {
   borderRadius: 8,
   color: "#667085",
   background: "#fcfcfd",
-  padding: "20px 16px",
-  fontSize: 13,
+  padding: "22px 18px",
+  fontSize: 14,
   textAlign: "center",
 };

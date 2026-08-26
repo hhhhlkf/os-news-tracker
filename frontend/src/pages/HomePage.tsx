@@ -3,6 +3,8 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { fetchFacets, fetchItems, listDiscoveryMethods } from "../api/client";
 import { FacetSidebar } from "../components/FacetSidebar";
 import { EdgePageArrows } from "../components/EdgePageArrows";
+import { HomeFilterDrawer, HomeFilterTrigger } from "../components/HomeFilterDrawer";
+import { HomeModuleDeck, homeModuleIndex } from "../components/HomeModuleDeck";
 import { ItemList } from "../components/ItemList";
 import { ItemDetail } from "../components/ItemDetail";
 import { MailTaskCenter } from "../components/MailTaskCenter";
@@ -173,6 +175,8 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
   const [mailOpen, setMailOpen] = useState(false);
   const [morningCrawlOpen, setMorningCrawlOpen] = useState(false);
   const [trendSelection, setTrendSelection] = useState<TrendSelection | null>(null);
+  const [moduleIndex, setModuleIndex] = useState(() => homeModuleIndex("news"));
+  const [filterOpen, setFilterOpen] = useState(false);
   const searchParams = useMemo(() => new URLSearchParams(locationSearch), [locationSearch]);
   const openId = parseItemId(searchParams.get("item"));
   const page = parsePage(searchParams.get("page"));
@@ -235,6 +239,7 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
       restoreQuery: trendSelection?.restoreQuery ?? null,
     });
     setFilters((f) => ({ ...f, item_ids: trend.itemIds.join(",") }));
+    setModuleIndex(homeModuleIndex("news"));
   };
 
   const applyTrendSourceFilter = (source: { itemId: number; title: string }) => {
@@ -249,6 +254,7 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
       restoreQuery: trendSelection?.restoreQuery ?? filters.q ?? "",
     });
     setFilters((f) => ({ ...f, item_ids: String(source.itemId), q: source.title }));
+    setModuleIndex(homeModuleIndex("news"));
   };
 
   const clearTrendFilter = () => {
@@ -381,394 +387,448 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
     }
   }, [activeCrawlMethods, crawlMethodsQuery.data, filters.source_id]);
 
-  return (
-    <div style={{ minHeight: "100vh", background: "#f5f7fb" }}>
-      <div style={{ maxWidth: 1280, margin: "0 auto", padding: 24 }}>
-        <header
+  const searchToolbar = (
+    <section
+      style={{
+        border: "1px solid #d0d5dd",
+        borderRadius: 8,
+        background: "#fff",
+        padding: 16,
+        flexShrink: 0,
+      }}
+    >
+      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <input
+          placeholder="搜索标题、摘要、分类…"
+          value={filters.q ?? ""}
+          maxLength={INPUT_LIMITS.searchQuery}
+          onChange={(e) => setSearchQuery(clampInput(e.target.value, INPUT_LIMITS.searchQuery))}
           style={{
-            background: "#101828",
-            color: "#f8fafc",
+            flex: "1 1 420px",
+            minWidth: 260,
+            padding: "12px 14px",
+            border: "1px solid #d0d5dd",
             borderRadius: 8,
-            padding: 24,
-            minHeight: 160,
-            marginBottom: 20,
+            fontSize: 14,
           }}
-        >
-          <div style={{ fontSize: 13, color: "#98a2b3", marginBottom: 10 }}>OS News Tracker</div>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: 16,
-              alignItems: "flex-end",
-              flexWrap: "wrap",
-            }}
-          >
-            <div style={{ maxWidth: 720 }}>
-              <h1 style={{ margin: 0, fontSize: 32, lineHeight: 1.2 }}>技术新闻追踪</h1>
-              <p style={{ marginTop: 10, color: "#d0d5dd" }}>
-                汇总 OS、兼容性、安全与内部 AI 相关动态，支持搜索、筛选与详情查看。
-              </p>
-            </div>
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              <div style={{ minWidth: 140, background: "#182230", borderRadius: 8, padding: 14 }}>
-                <div style={{ fontSize: 12, color: "#98a2b3", marginBottom: 6 }}>当前数据源</div>
-                <div style={{ fontSize: 24, fontWeight: 700 }}>{mode === "demo" ? "演示" : "实时"}</div>
-              </div>
-              <div style={{ minWidth: 140, background: "#182230", borderRadius: 8, padding: 14 }}>
-                <div style={{ fontSize: 12, color: "#98a2b3", marginBottom: 6 }}>当前条目数</div>
-                <div style={{ fontSize: 24, fontWeight: 700 }}>{listData?.total ?? 0}</div>
-              </div>
-              <div style={{ minWidth: 140, background: "#182230", borderRadius: 8, padding: 14 }}>
-                <div style={{ fontSize: 12, color: "#98a2b3", marginBottom: 6 }}>激活筛选</div>
-                <div style={{ fontSize: 24, fontWeight: 700 }}>{activeFilterCount}</div>
-              </div>
-            </div>
-          </div>
-        </header>
-
-        {mode === "demo" && (
-          <div
-            style={{
-              marginBottom: 16,
-              border: "1px solid #bfd7ff",
-              background: "#eff6ff",
-              color: "#175cd3",
-              borderRadius: 8,
-              padding: "12px 14px",
-            }}
-          >
-            当前未连接到后端 API，页面自动切换为演示数据，方便先检查交互和布局。
-          </div>
-        )}
-
-        <TrendCarousel
-          onSelectTrend={applyTrendFilter}
-          onSelectSource={applyTrendSourceFilter}
-          activeResultId={trendSelection?.resultId ?? null}
-          activeItemId={trendSelection?.itemId ?? null}
         />
-
-        <section
+        <select
+          value={`${filters.sort_by ?? "published_at"}:${filters.sort_dir ?? "desc"}`}
+          onChange={(e) => {
+            const [sort_by, sort_dir] = e.target.value.split(":") as ["published_at" | "fetched_at" | "last_activity_at", "desc" | "asc"];
+            setPage(1);
+            setFilters((f) => ({ ...f, sort_by, sort_dir }));
+          }}
           style={{
             border: "1px solid #d0d5dd",
             borderRadius: 8,
+            padding: "12px 14px",
+            fontSize: 14,
             background: "#fff",
-            padding: 16,
-            marginBottom: 16,
+            color: "#344054",
           }}
         >
-          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-            <input
-              placeholder="搜索标题、摘要、分类…"
-              value={filters.q ?? ""}
-              maxLength={INPUT_LIMITS.searchQuery}
-              onChange={(e) => setSearchQuery(clampInput(e.target.value, INPUT_LIMITS.searchQuery))}
-              style={{
-                flex: "1 1 420px",
-                minWidth: 260,
-                padding: "12px 14px",
-                border: "1px solid #d0d5dd",
-                borderRadius: 8,
-                fontSize: 14,
-              }}
-            />
-            <select
-              value={`${filters.sort_by ?? "published_at"}:${filters.sort_dir ?? "desc"}`}
-              onChange={(e) => {
-                const [sort_by, sort_dir] = e.target.value.split(":") as ["published_at" | "fetched_at" | "last_activity_at", "desc" | "asc"];
-                setPage(1);
-                setFilters((f) => ({ ...f, sort_by, sort_dir }));
-              }}
-              style={{
-                border: "1px solid #d0d5dd",
-                borderRadius: 8,
-                padding: "12px 14px",
-                fontSize: 14,
-                background: "#fff",
-                color: "#344054",
-              }}
-            >
-              <option value="last_activity_at:desc">最近活动 最新优先</option>
-              <option value="last_activity_at:asc">最近活动 最早优先</option>
-              <option value="published_at:desc">发布时间 最新优先</option>
-              <option value="published_at:asc">发布时间 最早优先</option>
-              <option value="fetched_at:desc">入库时间 最新优先</option>
-              <option value="fetched_at:asc">入库时间 最早优先</option>
-            </select>
-            <select
-              value={filters.item_kind ?? ""}
-              onChange={(event) => setFilter("item_kind", event.target.value)}
-              style={{ border: "1px solid #d0d5dd", borderRadius: 8, padding: "12px 14px", fontSize: 14, background: "#fff", color: "#344054" }}
-            >
-              <option value="">全部条目</option>
-              <option value="news">新闻</option>
-              <option value="discussion">技术讨论</option>
-            </select>
-            <button
-              onClick={() => {
-                setPage(1);
-                setFilters({ q: "", sort_by: "last_activity_at", sort_dir: "desc" });
-                setOpenId(null);
-                setTrendSelection(null);
-              }}
-              style={{
-                border: "1px solid #d0d5dd",
-                background: "#fff",
-                borderRadius: 8,
-                padding: "12px 14px",
-                cursor: "pointer",
-                color: "#344054",
-              }}
-            >
-              清空筛选
-            </button>
+          <option value="last_activity_at:desc">最近活动 最新优先</option>
+          <option value="last_activity_at:asc">最近活动 最早优先</option>
+          <option value="published_at:desc">发布时间 最新优先</option>
+          <option value="published_at:asc">发布时间 最早优先</option>
+          <option value="fetched_at:desc">入库时间 最新优先</option>
+          <option value="fetched_at:asc">入库时间 最早优先</option>
+        </select>
+        <select
+          value={filters.item_kind ?? ""}
+          onChange={(event) => setFilter("item_kind", event.target.value)}
+          style={{ border: "1px solid #d0d5dd", borderRadius: 8, padding: "12px 14px", fontSize: 14, background: "#fff", color: "#344054" }}
+        >
+          <option value="">全部条目</option>
+          <option value="news">新闻</option>
+          <option value="discussion">技术讨论</option>
+        </select>
+        <HomeFilterTrigger activeCount={activeFilterCount} onClick={() => setFilterOpen(true)} />
+        <button
+          onClick={() => {
+            setPage(1);
+            setFilters({ q: "", sort_by: "last_activity_at", sort_dir: "desc" });
+            setOpenId(null);
+            setTrendSelection(null);
+          }}
+          style={{
+            border: "1px solid #d0d5dd",
+            background: "#fff",
+            borderRadius: 8,
+            padding: "12px 14px",
+            cursor: "pointer",
+            color: "#344054",
+          }}
+        >
+          清空筛选
+        </button>
+      </div>
+      {trendSelection && (
+        <div
+          style={{
+            marginTop: 12,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap",
+            border: "1px solid #d3e3fb",
+            background: "#eff6ff",
+            borderRadius: 8,
+            padding: "10px 12px",
+          }}
+        >
+          <div style={{ fontSize: 12, color: "#175cd3", minWidth: 0 }}>
+            趋势筛选：{trendSelection.label}
+            <span style={{ color: "#667085" }}>
+              {" "}
+              · 按 {splitItemIds(filters.item_ids).length} 条新闻 ID 精确匹配
+            </span>
           </div>
-          {trendSelection && (
-            <div
-              style={{
-                marginTop: 12,
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                gap: 12,
-                flexWrap: "wrap",
-                border: "1px solid #d3e3fb",
-                background: "#eff6ff",
-                borderRadius: 8,
-                padding: "10px 12px",
-              }}
-            >
-              <div style={{ fontSize: 12, color: "#175cd3", minWidth: 0 }}>
-                趋势筛选：{trendSelection.label}
-                <span style={{ color: "#667085" }}>
-                  {" "}
-                  · 按 {splitItemIds(filters.item_ids).length} 条新闻 ID 精确匹配
-                </span>
-              </div>
-              <button
-                onClick={clearTrendFilter}
-                style={{
-                  border: "1px solid #84adff",
-                  background: "#fff",
-                  color: "#175cd3",
-                  borderRadius: 8,
-                  padding: "6px 12px",
-                  fontSize: 12,
-                  fontWeight: 700,
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                清除趋势筛选
-              </button>
-            </div>
-          )}
-        </section>
-
-        <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
-          <div
+          <button
+            onClick={clearTrendFilter}
             style={{
-              width: 260,
-              flexShrink: 0,
-              display: "grid",
-              gap: 16,
-              alignContent: "start",
+              border: "1px solid #84adff",
+              background: "#fff",
+              color: "#175cd3",
+              borderRadius: 8,
+              padding: "6px 12px",
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
             }}
           >
-            <div
+            清除趋势筛选
+          </button>
+        </div>
+      )}
+    </section>
+  );
+
+  const facetSidebar = (
+    <FacetSidebar
+      facets={facets ?? { main_category: [], info_type: [], importance: [], sub_tags: [] }}
+      crawlMethods={activeCrawlMethods}
+      isLoading={mode === "live" && facetsQuery.isLoading}
+      isMethodsLoading={crawlMethodsQuery.isLoading}
+      selected={filters}
+      onSelect={setFilter}
+    />
+  );
+
+  const mailCard = (
+    <div
+      style={{
+        border: "1px solid #bfd7ff",
+        background: "linear-gradient(180deg,#f8fbff 0%,#ffffff 100%)",
+        borderRadius: 8,
+        padding: 28,
+        minHeight: ENTRY_CARD_MIN_HEIGHT + 160,
+        width: 560,
+        maxWidth: "100%",
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      <div style={{ fontSize: 21, fontWeight: 800, color: "#101828", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, letterSpacing: "0.01em" }}>
+        邮件任务中心
+        <span style={{ fontSize: 13, fontWeight: 700, borderRadius: 999, padding: "5px 11px", background: mailBadge.bg, color: mailBadge.color }}>
+          {mailBadge.text}
+        </span>
+      </div>
+
+      <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+        <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "14px 16px" }}>
+          <div style={{ fontSize: 36, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{templateCount}</div>
+          <div style={{ fontSize: 15, color: "#667085", marginTop: 6 }}>模板</div>
+        </div>
+        <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "14px 16px" }}>
+          <div style={{ fontSize: 36, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{scheduleCount}</div>
+          <div style={{ fontSize: 15, color: "#667085", marginTop: 6 }}>已预定</div>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 14, fontWeight: 700, color: "#98a2b3", marginBottom: 8 }}>当前筛选</div>
+      {filterChips.length > 0 ? (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {filterChips.map((chip) => (
+            <span
+              key={chip}
               style={{
-                border: "1px solid #bfd7ff",
-                background: "linear-gradient(180deg,#f8fbff 0%,#ffffff 100%)",
-                borderRadius: 8,
-                padding: 14,
-                minHeight: ENTRY_CARD_MIN_HEIGHT,
-                display: "flex",
-                flexDirection: "column",
+                fontSize: 14,
+                color: "#344054",
+                background: "#eff6ff",
+                border: "1px solid #d3e3fb",
+                borderRadius: 6,
+                padding: "4px 8px",
+                wordBreak: "break-all",
               }}
             >
-              <div style={{ fontSize: 14, fontWeight: 800, color: "#101828", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                邮件任务中心
-                <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "3px 8px", background: mailBadge.bg, color: mailBadge.color }}>
-                  {mailBadge.text}
-                </span>
-              </div>
+              {chip}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div style={{ fontSize: 15, color: "#98a2b3" }}>全部条目（未设置筛选）</div>
+      )}
 
-              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-                <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "8px 10px" }}>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{templateCount}</div>
-                  <div style={{ fontSize: 11, color: "#667085", marginTop: 2 }}>模板</div>
-                </div>
-                <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "8px 10px" }}>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{scheduleCount}</div>
-                  <div style={{ fontSize: 11, color: "#667085", marginTop: 2 }}>已预定</div>
-                </div>
-              </div>
+      <button
+        onClick={() => {
+          setMailOpen(true);
+          setFilterOpen(true);
+        }}
+        style={{
+          marginTop: "auto",
+          width: "100%",
+          border: "none",
+          borderRadius: 8,
+          padding: "14px 16px",
+          fontSize: 16,
+          fontWeight: 700,
+          color: "#fff",
+          background: "#175cd3",
+          cursor: "pointer",
+        }}
+      >
+        打开邮件任务中心
+      </button>
+    </div>
+  );
 
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#98a2b3", marginBottom: 6 }}>当前筛选</div>
-              {filterChips.length > 0 ? (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  {filterChips.map((chip) => (
-                    <span
-                      key={chip}
-                      style={{
-                        fontSize: 11,
-                        color: "#344054",
-                        background: "#eff6ff",
-                        border: "1px solid #d3e3fb",
-                        borderRadius: 6,
-                        padding: "3px 7px",
-                        wordBreak: "break-all",
-                      }}
-                    >
-                      {chip}
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <div style={{ fontSize: 12, color: "#98a2b3" }}>全部条目（未设置筛选）</div>
-              )}
+  const morningCard = hasSystemAccess ? (
+    <div
+      style={{
+        border: "1px solid #cbd9ea",
+        background: "linear-gradient(180deg,#f7faff 0%,#ffffff 100%)",
+        borderRadius: 8,
+        padding: 28,
+        minHeight: ENTRY_CARD_MIN_HEIGHT + 160,
+        width: 560,
+        maxWidth: "100%",
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      <div style={{ fontSize: 21, fontWeight: 800, color: "#101828", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, letterSpacing: "0.01em" }}>
+        系统定时抓取
+        <span style={{ fontSize: 13, fontWeight: 700, borderRadius: 999, padding: "5px 11px", background: morningStatusMeta.bg, color: morningStatusMeta.color }}>
+          {morningStatusMeta.text}
+        </span>
+      </div>
 
-              <button
-                onClick={() => setMailOpen(true)}
-                style={{
-                  marginTop: "auto",
-                  paddingTop: 12,
-                  width: "100%",
-                  border: "none",
-                  borderRadius: 8,
-                  padding: "8px 14px",
-                  fontSize: 12,
-                  fontWeight: 700,
-                  color: "#fff",
-                  background: "#175cd3",
-                  cursor: "pointer",
-                }}
-              >
-                打开邮件任务中心
-              </button>
-            </div>
+      <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+        <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "14px 16px" }}>
+          <div style={{ fontSize: 36, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{morningDashboard?.active_method_count ?? 0}</div>
+          <div style={{ fontSize: 15, color: "#667085", marginTop: 6 }}>爬取方式</div>
+        </div>
+        <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "14px 16px" }}>
+          <div style={{ fontSize: 36, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{morningDashboard?.today_run?.stored_count ?? 0}</div>
+          <div style={{ fontSize: 15, color: "#667085", marginTop: 6 }}>今日入库</div>
+        </div>
+      </div>
 
-            {hasSystemAccess && (
-              <div
-                style={{
-                  border: "1px solid #cbd9ea",
-                  background: "linear-gradient(180deg,#f7faff 0%,#ffffff 100%)",
-                  borderRadius: 8,
-                  padding: 14,
-                  minHeight: ENTRY_CARD_MIN_HEIGHT,
-                  display: "flex",
-                  flexDirection: "column",
-                }}
-              >
-                <div style={{ fontSize: 14, fontWeight: 800, color: "#101828", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                  系统定时抓取
-                  <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "3px 8px", background: morningStatusMeta.bg, color: morningStatusMeta.color }}>
-                    {morningStatusMeta.text}
-                  </span>
-                </div>
+      <div style={{ fontSize: 14, fontWeight: 700, color: "#98a2b3", marginBottom: 8 }}>下次执行</div>
+      <div style={{ fontSize: 15, color: "#344054" }}>
+        {morningDashboard?.config.next_run_at
+          ? `${morningDashboard.config.next_run_at.split("T")[0]} ${morningDashboard.config.next_run_at.split("T")[1]?.slice(0, 5) ?? ""}（北京时间）`
+          : "未排程"}
+      </div>
 
-                <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-                  <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "8px 10px" }}>
-                    <div style={{ fontSize: 20, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{morningDashboard?.active_method_count ?? 0}</div>
-                    <div style={{ fontSize: 11, color: "#667085", marginTop: 2 }}>爬取方式</div>
-                  </div>
-                  <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "8px 10px" }}>
-                    <div style={{ fontSize: 20, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{morningDashboard?.today_run?.stored_count ?? 0}</div>
-                    <div style={{ fontSize: 11, color: "#667085", marginTop: 2 }}>今日入库</div>
-                  </div>
-                </div>
+      <button
+        onClick={() => setMorningCrawlOpen(true)}
+        style={{
+          marginTop: "auto",
+          width: "100%",
+          border: "none",
+          borderRadius: 8,
+          padding: "14px 16px",
+          fontSize: 16,
+          fontWeight: 700,
+          color: "#fff",
+          background: "#0e7090",
+          cursor: "pointer",
+        }}
+      >
+        打开系统定时抓取
+      </button>
+    </div>
+  ) : null;
 
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#98a2b3", marginBottom: 6 }}>下次执行</div>
-                <div style={{ fontSize: 12, color: "#344054" }}>
-                  {morningDashboard?.config.next_run_at
-                    ? `${morningDashboard.config.next_run_at.split("T")[0]} ${morningDashboard.config.next_run_at.split("T")[1]?.slice(0, 5) ?? ""}（北京时间）`
-                    : "未排程"}
-                </div>
-
-                <button
-                  onClick={() => setMorningCrawlOpen(true)}
-                  style={{
-                    marginTop: "auto",
-                    paddingTop: 12,
-                    width: "100%",
-                    border: "none",
-                    borderRadius: 8,
-                    padding: "8px 14px",
-                    fontSize: 12,
-                    fontWeight: 700,
-                    color: "#fff",
-                    background: "#0e7090",
-                    cursor: "pointer",
-                  }}
-                >
-                  打开系统定时抓取
-                </button>
-              </div>
-            )}
-            <FacetSidebar
-              facets={facets ?? { main_category: [], info_type: [], importance: [], sub_tags: [] }}
-              crawlMethods={activeCrawlMethods}
-              isLoading={mode === "live" && facetsQuery.isLoading}
-              isMethodsLoading={crawlMethodsQuery.isLoading}
-              selected={filters}
-              onSelect={setFilter}
-            />
+  const renderTitleCard = (opts?: { compact?: boolean }) => {
+    const compact = Boolean(opts?.compact);
+    return (
+    <header className={`home-title-card${compact ? " home-title-card--compact" : ""}`}>
+      <div style={{ fontSize: compact ? 11 : 13, color: "#98a2b3", marginBottom: compact ? 6 : 10 }}>OS News Tracker</div>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: compact ? 10 : 16,
+          alignItems: compact ? "center" : "flex-end",
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ maxWidth: compact ? "100%" : 720, minWidth: 0, flex: compact ? "1 1 180px" : undefined }}>
+          <h1 style={{ margin: 0, fontSize: compact ? 22 : 32, lineHeight: 1.2 }}>技术新闻追踪</h1>
+          <p style={{ marginTop: compact ? 4 : 10, marginBottom: 0, color: "#d0d5dd", fontSize: compact ? 12 : undefined, lineHeight: compact ? 1.45 : undefined }}>
+            汇总 OS、兼容性、安全与内部 AI 相关动态，支持搜索、筛选与详情查看。
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: compact ? 6 : 12, flexWrap: compact ? "nowrap" : "wrap" }}>
+          <div style={{ minWidth: compact ? 72 : 140, background: "#182230", borderRadius: 8, padding: compact ? "8px 10px" : 14 }}>
+            <div style={{ fontSize: compact ? 10 : 12, color: "#98a2b3", marginBottom: compact ? 3 : 6 }}>当前数据源</div>
+            <div style={{ fontSize: compact ? 16 : 24, fontWeight: 700 }}>{mode === "demo" ? "演示" : "实时"}</div>
           </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            {hasLiveEmptyState && (
-              <div
-                style={{
-                  marginBottom: 16,
-                  border: "1px dashed #d0d5dd",
-                  background: "#fcfcfd",
-                  color: "#667085",
-                  borderRadius: 8,
-                  padding: 16,
-                }}
-              >
-                数据库里还没有已入库条目。后端目前只会 seed 数据源，不会自动生成新闻样例，所以前端会显得很空。
-              </div>
-            )}
-            <ItemList
-              items={listData?.items ?? []}
-              total={listData?.total ?? 0}
-              page={page}
-              pageSize={PAGE_SIZE}
-              isLoading={mode === "live" && itemsQuery.isLoading}
-              isFetching={
-                mode === "live" &&
-                (itemsQuery.isFetching || itemsQuery.isPlaceholderData) &&
-                !itemsQuery.isLoading
-              }
-              emptyMessage="没有匹配的条目，试试放宽搜索词或取消筛选条件。"
-              sortBy={(filters.sort_by as "published_at" | "fetched_at") ?? "published_at"}
-              openId={openId}
-              onOpen={setOpenId}
-              onPageChange={setPage}
-            />
+          <div style={{ minWidth: compact ? 72 : 140, background: "#182230", borderRadius: 8, padding: compact ? "8px 10px" : 14 }}>
+            <div style={{ fontSize: compact ? 10 : 12, color: "#98a2b3", marginBottom: compact ? 3 : 6 }}>当前条目数</div>
+            <div style={{ fontSize: compact ? 16 : 24, fontWeight: 700 }}>{listData?.total ?? 0}</div>
+          </div>
+          <div style={{ minWidth: compact ? 72 : 140, background: "#182230", borderRadius: 8, padding: compact ? "8px 10px" : 14 }}>
+            <div style={{ fontSize: compact ? 10 : 12, color: "#98a2b3", marginBottom: compact ? 3 : 6 }}>激活筛选</div>
+            <div style={{ fontSize: compact ? 16 : 24, fontWeight: 700 }}>{activeFilterCount}</div>
           </div>
         </div>
+      </div>
+    </header>
+    );
+  };
 
-        <EdgePageArrows page={page} totalPages={totalPages} onPageChange={setPage} hidden={openId !== null} />
-
-        {openId !== null && (
-          <div onClick={() => setOpenId(null)} style={{
-            position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.42)",
-            display: "flex", justifyContent: "flex-end", zIndex: 55,
-          }}>
-            <div onClick={(e) => e.stopPropagation()} style={{
-              width: 620, maxWidth: "92vw", background: "#fff",
-              height: "100%", overflowY: "auto", boxShadow: "-24px 0 48px rgba(16, 24, 40, 0.16)",
-            }}>
-              <ItemDetail id={selectedLiveItemId} item={selectedDemoItem} />
+  return (
+    <div className="home-shell">
+      <div className="home-deck-host">
+        <HomeModuleDeck
+          index={moduleIndex}
+          onIndexChange={(next) => {
+            setModuleIndex(next);
+            setFilterOpen(false);
+          }}
+          locked={openId !== null || mailOpen || morningCrawlOpen || filterOpen}
+        >
+          <div className="home-module__frame home-module__frame--news">
+            <div className="home-module__stack">
+              {renderTitleCard()}
+              {searchToolbar}
+              {hasLiveEmptyState && (
+                <div
+                  style={{
+                    flexShrink: 0,
+                    border: "1px dashed #d0d5dd",
+                    background: "#fcfcfd",
+                    color: "#667085",
+                    borderRadius: 8,
+                    padding: 16,
+                  }}
+                >
+                  数据库里还没有已入库条目。后端目前只会 seed 数据源，不会自动生成新闻样例，所以前端会显得很空。
+                </div>
+              )}
+              <div className="home-module__news" data-home-scroll="true">
+                <ItemList
+                  items={listData?.items ?? []}
+                  total={listData?.total ?? 0}
+                  page={page}
+                  pageSize={PAGE_SIZE}
+                  isLoading={mode === "live" && itemsQuery.isLoading}
+                  isFetching={
+                    mode === "live" &&
+                    (itemsQuery.isFetching || itemsQuery.isPlaceholderData) &&
+                    !itemsQuery.isLoading
+                  }
+                  emptyMessage="没有匹配的条目，试试放宽搜索词或取消筛选条件。"
+                  sortBy={(filters.sort_by as "published_at" | "fetched_at") ?? "published_at"}
+                  openId={openId}
+                  onOpen={setOpenId}
+                  onPageChange={setPage}
+                />
+              </div>
             </div>
           </div>
-        )}
 
-        <MailTaskCenter open={mailOpen} onClose={() => setMailOpen(false)} homeFilters={mailFilters} />
-        {hasSystemAccess && <MorningCrawlModal open={morningCrawlOpen} onClose={() => setMorningCrawlOpen(false)} />}
+          <div className="home-module__frame">
+            <div className="home-module__stack">
+              {renderTitleCard()}
+              {mode === "demo" && (
+                <div
+                  style={{
+                    border: "1px solid #bfd7ff",
+                    background: "#eff6ff",
+                    color: "#175cd3",
+                    borderRadius: 8,
+                    padding: "12px 14px",
+                  }}
+                >
+                  当前未连接到后端 API，页面自动切换为演示数据，方便先检查交互和布局。
+                </div>
+              )}
+              <TrendCarousel
+                onSelectTrend={applyTrendFilter}
+                onSelectSource={applyTrendSourceFilter}
+                activeResultId={trendSelection?.resultId ?? null}
+                activeItemId={trendSelection?.itemId ?? null}
+              />
+            </div>
+          </div>
+
+          <div className="home-module__frame" style={{ position: "relative" }}>
+            <div className={`home-module__stack home-module__stack--subscribe${hasSystemAccess ? "" : " is-single-card"}`}>
+              {renderTitleCard({ compact: !hasSystemAccess })}
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "center",
+                  alignItems: "stretch",
+                  gap: 20,
+                  flexWrap: "wrap",
+                  width: "100%",
+                }}
+              >
+                {mailCard}
+                {morningCard}
+              </div>
+            </div>
+          </div>
+        </HomeModuleDeck>
+
+        <HomeFilterDrawer
+          open={filterOpen}
+          quiet={mailOpen}
+          activeCount={activeFilterCount}
+          onOpen={() => setFilterOpen(true)}
+          onClose={() => setFilterOpen(false)}
+        >
+          {facetSidebar}
+        </HomeFilterDrawer>
       </div>
+
+      <EdgePageArrows page={page} totalPages={totalPages} onPageChange={setPage} hidden={openId !== null || moduleIndex !== homeModuleIndex("news")} />
+
+      {openId !== null && (
+        <div onClick={() => setOpenId(null)} style={{
+          position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.42)",
+          display: "flex", justifyContent: "flex-end", zIndex: 55,
+        }}>
+          <div onClick={(e) => e.stopPropagation()} style={{
+            width: 620, maxWidth: "92vw", background: "#fff",
+            height: "100%", overflowY: "auto", boxShadow: "-24px 0 48px rgba(16, 24, 40, 0.16)",
+          }}>
+            <ItemDetail id={selectedLiveItemId} item={selectedDemoItem} />
+          </div>
+        </div>
+      )}
+
+      <MailTaskCenter
+        open={mailOpen}
+        onClose={() => {
+          setMailOpen(false);
+          setFilterOpen(false);
+        }}
+        homeFilters={mailFilters}
+      />
+      {hasSystemAccess && <MorningCrawlModal open={morningCrawlOpen} onClose={() => setMorningCrawlOpen(false)} />}
     </div>
   );
 }

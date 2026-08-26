@@ -1,0 +1,12 @@
+{
+  "allowed_domains": [
+    "cachyos.org"
+  ],
+  "checksum": "5d8f867e78998f7d04ab2f8ac9c1fb49c062642182fd5a8830d7565e7360bc8b",
+  "connector_key": "cachyos_org_849113e9",
+  "entry": "https://cachyos.org/rss.xml",
+  "entrypoint": "crawler:crawl",
+  "recipe_type": "python_plugin",
+  "runtime_version": "crawler-runtime:2",
+  "version": 1
+}

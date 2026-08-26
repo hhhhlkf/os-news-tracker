@@ -868,6 +868,7 @@ class SiteDiscoveryRun(Base):
         ForeignKey("crawl_methods.id", ondelete="SET NULL"), nullable=True, index=True
     )
     runtime_version: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    viewer_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     event_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     node_trace: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     resulting_method_id: Mapped[int | None] = mapped_column(ForeignKey("crawl_methods.id"), nullable=True)

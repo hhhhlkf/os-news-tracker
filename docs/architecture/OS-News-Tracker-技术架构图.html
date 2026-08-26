@@ -24,7 +24,7 @@
       margin: 34px auto;
       padding: 38px 40px 44px;
       border-radius: 30px;
-      background: transparent;
+      background: #fff;
       box-shadow: 0 20px 64px rgba(28, 55, 86, .15);
     }
     header { text-align: center; margin-bottom: 26px; }
@@ -38,19 +38,18 @@
     header p { margin: 0; color: var(--muted); font-size: 15px; }
     .band {
       position: relative;
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 168px;
-      gap: 24px;
+      display: block;
       padding: 25px 24px;
       border: 1px solid;
       border-radius: 25px;
     }
-    .source { background: linear-gradient(135deg, #fff4cf, #fffaf0); border-color: #edd58f; }
-    .control { background: linear-gradient(135deg, #e4f1ff, #f2f8ff); border-color: #b2d5f8; }
-    .orchestration { background: linear-gradient(135deg, #dcf6fb, #effcff); border-color: #a2dfe9; }
-    .item { background: linear-gradient(135deg, #e5f7e5, #f5fff3); border-color: #b8dfb3; }
-    .consume { background: linear-gradient(135deg, #eee9ff, #f8f6ff); border-color: #cfc1f1; }
-    .runtime { background: linear-gradient(135deg, #edf1f6, #fafcff); border-color: #cbd7e5; }
+    .entry { background: linear-gradient(135deg, #e4f1ff, #f2f8ff); border-color: #b2d5f8; }
+    .discovery { background: linear-gradient(135deg, #dcf6fb, #effcff); border-color: #a2dfe9; }
+    .security { background: linear-gradient(135deg, #ffe8ec, #fff5f1); border-color: #f0b4be; }
+    .crawl { background: linear-gradient(135deg, #fff4cf, #fffaf0); border-color: #edd58f; }
+    .distribute { background: linear-gradient(135deg, #e5f7e5, #f5fff3); border-color: #b8dfb3; }
+    .stats { background: linear-gradient(135deg, #eee9ff, #f8f6ff); border-color: #cfc1f1; }
+    .tech { background: linear-gradient(135deg, #edf1f6, #fafcff); border-color: #cbd7e5; }
     .cards {
       display: flex;
       align-items: stretch;
@@ -70,6 +69,93 @@
       border: 2px solid #2475bd;
       box-shadow: 0 0 0 4px rgba(36,117,189,.10), 0 7px 16px rgba(37, 89, 145, .13);
     }
+    .module-group {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 14px 14px 16px;
+      border: 1px solid;
+      border-radius: 20px;
+    }
+    .module-a { border-color: #8fd2e0; background: linear-gradient(135deg, #d0f0f7, #e9fcff); }
+    .module-b { border-color: #8fd2e0; background: linear-gradient(135deg, #d0f0f7, #e9fcff); }
+    .discovery-stack { display: grid; gap: 16px; }
+    .discovery-flow { display: block; width: 100%; height: auto; }
+    .flow-caption { text-align: center; color: #536a81; font-size: 11px; }
+    .module-group .cards { gap: 13px; }
+    .module-group .card { min-width: 0; min-height: 118px; padding: 15px 16px; }
+    .module-title {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: #203b58;
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: .02em;
+    }
+    .module-title::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      background: #2b8fb8;
+    }
+    .module-title .module-sub {
+      margin-left: auto;
+      color: #536a81;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .tag {
+      display: inline-block;
+      padding: 1px 8px 2px;
+      margin-right: 5px;
+      border: 1px solid;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1.5;
+    }
+    .tag-manual { color: #9a5b13; background: #ffe9c2; border-color: #eec887; }
+    .tag-auto { color: #175cd3; background: #e0efff; border-color: #aed4f7; }
+    .tech-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 1px 0 9px; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px 3px 6px;
+      border: 1px solid #d8e2ec;
+      border-radius: 999px;
+      background: #fff;
+      color: #33506b;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.4;
+    }
+    .chip i {
+      display: inline-grid;
+      width: 15px;
+      height: 15px;
+      place-items: center;
+      border-radius: 50%;
+      color: #fff;
+      font-size: 8px;
+      font-weight: 800;
+      font-style: normal;
+    }
+    .chip img {
+      width: 15px;
+      height: 15px;
+      object-fit: contain;
+      display: block;
+    }
+    .chip img.wide { width: auto; height: 13px; }
+    .security .card { border-color: #bd4a5e; }
+    .security .card.focus {
+      border: 2px solid #b4233a;
+      box-shadow: 0 0 0 4px rgba(180,35,58,.10), 0 7px 16px rgba(145, 37, 60, .13);
+    }
+    .security .icon { background: #c0445c; }
     .card h2 {
       margin: 0 0 8px;
       color: #203b58;
@@ -94,56 +180,83 @@
       font-size: 15px;
       vertical-align: -3px;
     }
-    .side {
+    .architecture-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 184px;
+      grid-template-rows: auto 22px auto 22px auto 22px auto 22px auto 22px auto 22px auto;
+      row-gap: 0;
+      column-gap: 24px;
+      align-items: start;
+    }
+    .flow-stack,
+    .layer-rail {
+      display: contents;
+    }
+    .layer-label {
+      box-sizing: border-box;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
+      width: 100%;
+      height: 100%;
+      padding: 16px 14px;
+      border: 1px solid;
+      border-radius: 14px;
+      color: #203b58;
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.25;
+      align-self: stretch;
       text-align: center;
     }
-    .layer-label {
-      width: 146px;
-      padding: 12px 10px;
-      border-radius: 10px;
-      color: #fff;
-      background: linear-gradient(135deg, #4b98df, #2871b8);
-      box-shadow: 0 7px 15px rgba(38,104,176,.18);
-      font-size: 17px;
-      font-weight: 800;
-    }
-    .side small {
+    .layer-label small {
       display: block;
-      margin-top: 11px;
+      margin-top: 8px;
       color: #536a81;
-      font-size: 12px;
-      line-height: 1.55;
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 1.45;
+      text-wrap: balance;
     }
+    .entry { grid-column: 1; grid-row: 1; }
+    .entry + .arrow { grid-column: 1; grid-row: 2; }
+    .discovery { grid-column: 1; grid-row: 3; }
+    .discovery + .arrow { grid-column: 1; grid-row: 4; }
+    .security { grid-column: 1; grid-row: 5; }
+    .security + .arrow { grid-column: 1; grid-row: 6; }
+    .crawl { grid-column: 1; grid-row: 7; }
+    .crawl + .arrow { grid-column: 1; grid-row: 8; }
+    .distribute { grid-column: 1; grid-row: 9; }
+    .distribute + .arrow { grid-column: 1; grid-row: 10; }
+    .stats { grid-column: 1; grid-row: 11; }
+    .stats + .arrow { grid-column: 1; grid-row: 12; }
+    .tech { grid-column: 1; grid-row: 13; }
+    .layer-entry { grid-column: 2; grid-row: 1; border-color: #b2d5f8; background: linear-gradient(135deg, #e4f1ff, #f2f8ff); }
+    .layer-discovery { grid-column: 2; grid-row: 3; border-color: #a2dfe9; background: linear-gradient(135deg, #dcf6fb, #effcff); }
+    .layer-security { grid-column: 2; grid-row: 5; border-color: #f0b4be; background: linear-gradient(135deg, #ffe8ec, #fff5f1); }
+    .layer-crawl { grid-column: 2; grid-row: 7; border-color: #edd58f; background: linear-gradient(135deg, #fff4cf, #fffaf0); }
+    .layer-distribute { grid-column: 2; grid-row: 9; border-color: #b8dfb3; background: linear-gradient(135deg, #e5f7e5, #f5fff3); }
+    .layer-stats { grid-column: 2; grid-row: 11; border-color: #cfc1f1; background: linear-gradient(135deg, #eee9ff, #f8f6ff); }
+    .layer-tech { grid-column: 2; grid-row: 13; border-color: #cbd7e5; background: linear-gradient(135deg, #edf1f6, #fafcff); }
     .arrow {
       position: relative;
       z-index: 2;
       width: 56px;
       height: 35px;
-      margin: -4px 0 -9px 68%;
+      margin: -4px auto -9px;
       display: grid;
       place-items: center;
       border-radius: 0 0 13px 13px;
       color: #276eaa;
-      background: #fff;
+      background: transparent;
       font-size: 31px;
       font-weight: 900;
       line-height: 1;
     }
-    .inner {
-      padding: 16px;
-      border: 1.5px dashed #6598ad;
-      border-radius: 16px;
-    }
-    .inner .cards { gap: 13px; }
-    .inner .card { min-height: 113px; }
-    .wide { flex-basis: 42%; }
-    .runtime .card { min-height: 94px; padding: 14px; }
-    .runtime .card h2 { font-size: 15px; }
-    .runtime .card p { font-size: 12px; }
+    .tech .card { min-height: 94px; padding: 14px; }
+    .tech .card h2 { font-size: 15px; }
+    .tech .card p { font-size: 12px; }
     .note {
       margin-top: 26px;
       padding: 14px 16px;
@@ -165,163 +278,353 @@
     <header>
       <div class="eyebrow">OS NEWS TRACKER · TECHNICAL ARCHITECTURE</div>
       <h1>OS News Tracker 技术架构</h1>
-      <p>多源技术情报从受控接入、统一处理，到趋势分析与邮件分发的模块化架构</p>
+      <p>信息入口 → 探查 → 安全 → 批量爬取 → 收集分发 → 统计发现 → 技术底座的七层架构</p>
     </header>
 
-    <section class="band source">
-      <div class="cards">
-        <article class="card">
-          <h2><span class="icon">◫</span>常规新闻源</h2>
-          <p>RSS、页面监测</p>
-          <p>关键词搜索、公开 API</p>
-        </article>
-        <article class="card">
-          <h2><span class="icon">✉</span>技术邮件列表</h2>
-          <p>IMAP 增量收取</p>
-          <p>Header 规则匹配</p>
-        </article>
-        <article class="card">
-          <h2><span class="icon">◆</span>GitHub 技术讨论</h2>
-          <p>Issue、Discussion</p>
-          <p>评论与更新时间水位</p>
-        </article>
-        <article class="card">
-          <h2><span class="icon">◷</span>任务触发</h2>
-          <p>管理员手动执行</p>
-          <p>定时任务与巡检补跑</p>
-        </article>
-      </div>
-      <aside class="side">
-        <div class="layer-label">信息入口层</div>
-        <small>技术新闻<br>技术讨论<br>任务入口</small>
-      </aside>
-    </section>
+    <div class="architecture-layout">
+      <div class="flow-stack">
 
-    <div class="arrow">↓</div>
-
-    <section class="band control">
+    <!-- 第一层：信息入口层 -->
+    <section class="band entry">
       <div class="cards">
-        <article class="card">
-          <h2><span class="icon">⌕</span>智能探查</h2>
-          <p>Context、Explore、Build</p>
-          <p>真实执行、确定性验收、打包</p>
-        </article>
         <article class="card focus">
-          <h2><span class="icon">✓</span>Connector 审核与版本</h2>
-          <p>Manifest、校验和、运行时版本</p>
-          <p>待审核 → 已启用</p>
+          <h2><span class="icon">◫</span>新闻流页面</h2>
+          <p>多源情报筛选、排序与关键词搜索</p>
+          <p>条目详情、来源追溯与重要性标注</p>
         </article>
         <article class="card">
-          <h2><span class="icon">⇣</span>正式 Connector 查取</h2>
-          <p>gVisor 沙箱内执行</p>
-          <p>运行记录、取消与单方法隔离</p>
+          <h2><span class="icon">⌕</span>站点发现页面</h2>
+          <p>智能探查与技术探查统一入口</p>
+          <p>待审核方式、方式库与运行限制管理</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">⌁</span>趋势总结页面</h2>
+          <p>趋势工作台、故事线与趋势轮播</p>
+          <p>趋势设置与分发（管理密码解锁）</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">▤</span>统计与发现页面</h2>
+          <p>Token 用量与每日消息量看板</p>
+          <p>查询 / 探查任务明细（管理密码解锁）</p>
         </article>
       </div>
-      <aside class="side">
-        <div class="layer-label">探查与查取层</div>
-        <small>生成可审核能力<br>只执行已启用制品</small>
-      </aside>
     </section>
 
     <div class="arrow">↓</div>
 
-    <section class="band orchestration">
-      <div class="inner">
-        <div class="cards">
-          <article class="card focus">
-            <h2><span class="icon">⌘</span>技术讨论整理</h2>
-            <p>重建邮件与 GitHub 真实讨论关系</p>
-            <p>候选分组、结构化总结与证据关联</p>
-          </article>
-          <article class="card">
-            <h2><span class="icon">▣</span>新闻处理 Pipeline</h2>
-            <p>normalize · relevance-filter · dedup</p>
-            <p>enrich · 来源关联 · 幂等存储</p>
-          </article>
-          <article class="card">
-            <h2><span class="icon">◴</span>任务控制与状态</h2>
-            <p>运行状态、事件、检查点与失败恢复</p>
-            <p>手动任务、定时任务与巡检任务</p>
-          </article>
+    <!-- 第二层：探查层 -->
+    <section class="band discovery">
+      <div class="discovery-stack">
+        <div class="module-group module-a">
+          <div class="module-title">智能探查模块<span class="module-sub">Single Agent Loop · RAG 经验库全程参与</span></div>
+          <svg class="discovery-flow" viewBox="0 0 1240 272" role="img" aria-label="智能探查流程图" font-family="Inter, 'PingFang SC', 'Microsoft YaHei', sans-serif">
+            <defs>
+              <marker id="arrBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0L10 5L0 10z" fill="#2475bd"/>
+              </marker>
+              <marker id="arrTeal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0L10 5L0 10z" fill="#0e7490"/>
+              </marker>
+              <marker id="arrAmber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0L10 5L0 10z" fill="#b54708"/>
+              </marker>
+            </defs>
+
+            <!-- RAG 经验库节点 -->
+            <rect x="380" y="14" width="240" height="52" rx="12" fill="#f0fdfa" stroke="#0e7490" stroke-width="1.6" stroke-dasharray="5 4"/>
+            <g fill="none" stroke="#0e7490" stroke-width="1.5">
+              <ellipse cx="404" cy="30" rx="9" ry="3.6"/>
+              <path d="M395 30 v14 a9 3.6 0 0 0 18 0 v-14"/>
+              <path d="M395 37 a9 3.6 0 0 0 18 0"/>
+            </g>
+            <text x="506" y="36" text-anchor="middle" font-size="13" font-weight="800" fill="#0e7490">RAG 经验库</text>
+            <text x="506" y="53" text-anchor="middle" font-size="10" fill="#5b7a86">已批准 Connector · 确认修复经验</text>
+
+            <!-- RAG 与主流程的连接 -->
+            <path d="M380 40 H80 V112" fill="none" stroke="#0e7490" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrTeal)"/>
+            <text x="230" y="33" text-anchor="middle" font-size="10" font-weight="700" fill="#0e7490">经验注入</text>
+            <path d="M450 66 V112" fill="none" stroke="#0e7490" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrTeal)"/>
+            <text x="458" y="86" font-size="10" font-weight="700" fill="#0e7490">检索复用</text>
+            <path d="M1112 118 V40 H624" fill="none" stroke="#0e7490" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrTeal)"/>
+            <text x="869" y="33" text-anchor="middle" font-size="10" font-weight="700" fill="#0e7490">审核确认 · 经验沉淀</text>
+
+            <!-- CONTROLLED LOOP 容器 -->
+            <rect x="172" y="92" width="676" height="120" rx="14" fill="none" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="6 5"/>
+            <rect x="186" y="84" width="118" height="16" rx="8" fill="#fcfcfd" stroke="#cbd5e1"/>
+            <text x="245" y="96" text-anchor="middle" font-size="9" font-weight="800" fill="#475467" letter-spacing="1">CONTROLLED LOOP</text>
+            <rect x="700" y="84" width="134" height="16" rx="8" fill="#eef4ff" stroke="#b9d4ff"/>
+            <text x="767" y="96" text-anchor="middle" font-size="9" font-weight="800" fill="#175cd3">20 分钟</text>
+
+            <!-- 主流程节点 -->
+            <g>
+              <rect x="16" y="118" width="128" height="56" rx="12" fill="#ffffff" stroke="#2475bd" stroke-width="1.6"/>
+              <text x="80" y="142" text-anchor="middle" font-size="13" font-weight="800" fill="#203b58">Context</text>
+              <text x="80" y="160" text-anchor="middle" font-size="10" fill="#667085">目标与经验</text>
+            </g>
+            <g>
+              <rect x="188" y="118" width="128" height="56" rx="12" fill="#ffffff" stroke="#2475bd" stroke-width="1.6"/>
+              <text x="252" y="142" text-anchor="middle" font-size="13" font-weight="800" fill="#203b58">Explore</text>
+              <text x="252" y="160" text-anchor="middle" font-size="10" fill="#667085">受控探查</text>
+            </g>
+            <g>
+              <rect x="360" y="118" width="128" height="56" rx="12" fill="#ffffff" stroke="#2475bd" stroke-width="1.6"/>
+              <text x="424" y="142" text-anchor="middle" font-size="13" font-weight="800" fill="#203b58">Build</text>
+              <text x="424" y="160" text-anchor="middle" font-size="10" fill="#667085">编写连接器</text>
+            </g>
+            <g>
+              <rect x="532" y="118" width="128" height="56" rx="12" fill="#ffffff" stroke="#2475bd" stroke-width="1.6"/>
+              <text x="596" y="142" text-anchor="middle" font-size="13" font-weight="800" fill="#203b58">Execute</text>
+              <text x="596" y="160" text-anchor="middle" font-size="10" fill="#667085">gVisor 实跑</text>
+            </g>
+            <g>
+              <rect x="704" y="118" width="128" height="56" rx="12" fill="#ffffff" stroke="#2475bd" stroke-width="1.6"/>
+              <text x="768" y="142" text-anchor="middle" font-size="13" font-weight="800" fill="#203b58">Evaluate</text>
+              <text x="768" y="160" text-anchor="middle" font-size="10" fill="#667085">确定性验收</text>
+            </g>
+            <g>
+              <rect x="876" y="118" width="128" height="56" rx="12" fill="#ffffff" stroke="#2475bd" stroke-width="1.6"/>
+              <text x="940" y="142" text-anchor="middle" font-size="13" font-weight="800" fill="#203b58">Package</text>
+              <text x="940" y="160" text-anchor="middle" font-size="10" fill="#667085">固化制品</text>
+            </g>
+            <g>
+              <rect x="1048" y="118" width="128" height="56" rx="12" fill="#fffaeb" stroke="#f59e0b" stroke-width="1.6"/>
+              <text x="1112" y="142" text-anchor="middle" font-size="13" font-weight="800" fill="#92590b">Pending review</text>
+              <text x="1112" y="160" text-anchor="middle" font-size="10" fill="#a87c1f">等待人工审核</text>
+            </g>
+
+            <!-- 主流程箭头 -->
+            <path d="M146 146 H182" fill="none" stroke="#2475bd" stroke-width="1.6" marker-end="url(#arrBlue)"/>
+            <path d="M318 146 H354" fill="none" stroke="#2475bd" stroke-width="1.6" marker-end="url(#arrBlue)"/>
+            <path d="M490 146 H526" fill="none" stroke="#2475bd" stroke-width="1.6" marker-end="url(#arrBlue)"/>
+            <path d="M662 146 H698" fill="none" stroke="#2475bd" stroke-width="1.6" marker-end="url(#arrBlue)"/>
+            <path d="M834 146 H870" fill="none" stroke="#2475bd" stroke-width="1.6" marker-end="url(#arrBlue)"/>
+            <text x="852" y="138" text-anchor="middle" font-size="9" font-weight="700" fill="#059669">通过</text>
+            <path d="M1006 146 H1042" fill="none" stroke="#2475bd" stroke-width="1.6" marker-end="url(#arrBlue)"/>
+
+            <!-- Repair 回路 -->
+            <path d="M768 174 V236 H424 V178" fill="none" stroke="#b54708" stroke-width="1.5" stroke-dasharray="6 5" marker-end="url(#arrAmber)"/>
+            <text x="596" y="254" text-anchor="middle" font-size="10" font-weight="700" fill="#b54708">验收失败 · Repair ↺ Build</text>
+          </svg>
+          <div class="flow-caption">一个 Agent 串行推进 · 阶段由后端 phase / round 驱动 · Agent 不自证执行与验收结果</div>
+        </div>
+        <div class="module-group module-b">
+          <div class="module-title">技术探查模块<span class="module-sub">邮件列表 · GitHub 仓库</span></div>
+          <div class="cards">
+            <article class="card">
+              <h2><span class="icon">✉</span>邮件探查</h2>
+              <p>IMAP 连接管理 · Header 规则匹配</p>
+              <p>邮件列表源发现与审核入库</p>
+            </article>
+            <article class="card">
+              <h2><span class="icon">◆</span>GitHub 探查</h2>
+              <p>仓库发现与规模估量</p>
+              <p>Issue · Discussion · 评论水位</p>
+            </article>
+            <article class="card">
+              <h2><span class="icon">▤</span>讨论运行治理</h2>
+              <p>增量抓取 · 运行事件流</p>
+              <p>手动停止与定时调度配置</p>
+            </article>
+            <article class="card">
+              <h2><span class="icon">▦</span>源与仓库台账</h2>
+              <p>邮件源库 · GitHub 仓库库</p>
+              <p>Token 状态监测与估量记录</p>
+            </article>
+          </div>
         </div>
       </div>
-      <aside class="side">
-        <div class="layer-label">整理编排层</div>
-        <small>讨论与新闻<br>分别整理<br>共享运行治理</small>
-      </aside>
     </section>
 
     <div class="arrow">↓</div>
 
-    <section class="band item">
+    <!-- 安全层：位于探查层与批量爬取层之间 -->
+    <section class="band security">
       <div class="cards">
-        <article class="card wide focus">
-          <h2><span class="icon">●</span>统一 Item 情报库</h2>
-          <p>网页新闻、邮件讨论和 GitHub 技术讨论统一为可检索、可追溯的情报条目。</p>
-          <p>保留来源、证据消息、标签实体、重要性、运行记录与时间边界。</p>
+        <article class="card focus">
+          <h2><span class="icon">✓</span>审核门禁</h2>
+          <p>爬取方式 / 邮件源 / GitHub 仓库：待审核 → 已启用</p>
+          <p>修复版本重新送审，绝不自动发布</p>
         </article>
         <article class="card">
-          <h2><span class="icon">↔</span>统一复用边界</h2>
-          <p>新闻流、趋势、邮件、统计</p>
-          <p>均以 Item 作为事实输入</p>
+          <h2><span class="icon">⬢</span>沙箱隔离</h2>
+          <p>Docker + gVisor（runsc）临时容器执行</p>
+          <p>不静默回退普通 Docker，全局容量上限</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">◈</span>制品校验与密钥隔离</h2>
+          <p>Manifest 路径、入口、校验和、允许域名</p>
+          <p>Connector 不接触数据库与后端密钥</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">◉</span>访问控制</h2>
+          <p>JWT 认证与管理密码解锁</p>
+          <p>页面级权限与接口输入约束</p>
         </article>
       </div>
-      <aside class="side">
-        <div class="layer-label">统一情报层</div>
-        <small>跨来源数据汇合<br>可追溯事实底座</small>
-      </aside>
     </section>
 
     <div class="arrow">↓</div>
 
-    <section class="band consume">
+    <!-- 第三层：批量爬取层 -->
+    <section class="band crawl">
       <div class="cards">
-        <article class="card">
-          <h2><span class="icon">▤</span>新闻流与讨论详情</h2>
-          <p>筛选、排序、来源追溯</p>
-          <p>邮件/GitHub 回复拓扑图</p>
-        </article>
         <article class="card focus">
-          <h2><span class="icon">⌁</span>趋势分析</h2>
-          <p>解释卡、向量、候选聚类</p>
-          <p>故事线、身份模板与趋势轮播</p>
+          <h2><span class="icon">◫</span>网站爬取</h2>
+          <p>方式库 Connector 沙箱批量执行</p>
+          <p><span class="tag tag-manual">手动</span>一键批量 · 单方式</p>
+          <p><span class="tag tag-auto">自动</span>晨间定时 · 巡检补跑</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">✉</span>邮件爬取</h2>
+          <p>IMAP 增量收取 · Header 规则匹配</p>
+          <p><span class="tag tag-manual">手动</span>手动运行收取</p>
+          <p><span class="tag tag-auto">自动</span>定时调度收取</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">◆</span>GitHub 爬取</h2>
+          <p>Issue / Discussion · 评论水位</p>
+          <p><span class="tag tag-manual">手动</span>手动触发同步</p>
+          <p><span class="tag tag-auto">自动</span>定时调度同步</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">▣</span>筛选整理</h2>
+          <p>normalize → relevance-filter → dedup → enrich</p>
+          <p>来源关联 · 幂等入库</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">◴</span>趋势总结</h2>
+          <p>解释卡 · Embedding 向量 · 候选聚类</p>
+          <p>故事线与身份模板生成</p>
+        </article>
+      </div>
+    </section>
+
+    <div class="arrow">↓</div>
+
+    <!-- 第四层：收集和分发层 -->
+    <section class="band distribute">
+      <div class="cards">
+        <article class="card focus">
+          <h2><span class="icon">●</span>新闻信息组织</h2>
+          <p>统一 Item 情报库，网页新闻可检索、可追溯</p>
+          <p>标签实体、重要性、时间边界与来源关联</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">⌘</span>技术讨论组织</h2>
+          <p>重建邮件与 GitHub 真实讨论关系</p>
+          <p>回复拓扑、候选分组与证据消息关联</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">⌁</span>趋势信息组织</h2>
+          <p>趋势卡片与故事线轮播</p>
+          <p>候选聚类结果与趋势解释</p>
         </article>
         <article class="card">
           <h2><span class="icon">✉</span>邮件分发</h2>
           <p>模板预览、即时发送</p>
           <p>趋势分发、预定发送与巡检补发</p>
         </article>
-        <article class="card">
-          <h2><span class="icon">◴</span>统计与运营</h2>
-          <p>入库量、Token 用量、运行状态</p>
-          <p>审核提醒与投递日志</p>
-        </article>
       </div>
-      <aside class="side">
-        <div class="layer-label">分析与分发层</div>
-        <small>面向阅读、分析<br>运营与触达</small>
-      </aside>
     </section>
 
     <div class="arrow">↓</div>
 
-    <section class="band runtime">
+    <!-- 第五层：统计与发现层 -->
+    <section class="band stats">
       <div class="cards">
-        <article class="card"><h2>FastAPI 与访问控制</h2><p>接口、输入约束、状态事件</p></article>
-        <article class="card"><h2>任务调度器</h2><p>新闻源、系统查取、趋势、邮件</p></article>
-        <article class="card"><h2>Sandbox Runtime</h2><p>Docker + gVisor、容量与网络策略</p></article>
-        <article class="card"><h2>PostgreSQL 与制品目录</h2><p>业务数据、运行记录、版本化 Connector</p></article>
-        <article class="card"><h2>LLM 与 Embedding</h2><p>探查、讨论整理与趋势计算</p></article>
+        <article class="card focus">
+          <h2><span class="icon">▤</span>Token 用量总览</h2>
+          <p>总 / 输入 / 输出 Token 与模型调用次数</p>
+          <p>查询消耗 · 探查消耗分项统计</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">↗</span>消耗趋势分析</h2>
+          <p>每次探查 Token · 每次查询 Token</p>
+          <p>单条均 Token · 时间段趋势（柱状 / 面积切换）</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">●</span>每日消息量</h2>
+          <p>按入库日期分桶统计</p>
+          <p>高 / 中 / 低重要性堆叠分布</p>
+        </article>
+        <article class="card">
+          <h2><span class="icon">⌕</span>任务明细与筛选</h2>
+          <p>查询任务明细 · 探查任务明细</p>
+          <p>24h / 7d / 30d / 自定义 + 定时 / 手动类型筛选</p>
+        </article>
       </div>
-      <aside class="side">
-        <div class="layer-label">平台运行底座</div>
-        <small>安全隔离<br>持久化与调度</small>
-      </aside>
     </section>
 
+    <div class="arrow">↓</div>
+
+    <!-- 第六层：技术层 -->
+    <section class="band tech">
+      <div class="cards">
+        <article class="card">
+          <h2>模型与 Agent 技术</h2>
+          <div class="tech-chips">
+            <span class="chip"><img src="icons/openai.svg" alt="">OpenAI 兼容 LLM</span>
+            <span class="chip"><img src="icons/huggingface.svg" alt="">Embedding 向量</span>
+            <span class="chip"><i style="background:#b45309">AL</i>Single Agent Loop</span>
+          </div>
+          <p>内部 LLM 网关 · 可配置模型；探查 Agent + 确定性 Pipeline</p>
+        </article>
+        <article class="card">
+          <h2>前端框架</h2>
+          <div class="tech-chips">
+            <span class="chip"><img src="icons/react.svg" alt="">React 19</span>
+            <span class="chip"><img src="icons/vite.svg" alt="">Vite</span>
+            <span class="chip"><img src="icons/typescript.svg" alt="">TypeScript</span>
+            <span class="chip"><img src="icons/tanstack.svg" alt="">TanStack Query</span>
+            <span class="chip"><img src="icons/reactrouter.svg" alt="">React Router</span>
+            <span class="chip"><img src="icons/apacheecharts.svg" alt="">ECharts</span>
+          </div>
+          <p>组件化单页应用 · 服务端状态缓存 · 图表可视化</p>
+        </article>
+        <article class="card">
+          <h2>后端框架</h2>
+          <div class="tech-chips">
+            <span class="chip"><img src="icons/python.svg" alt="">Python 3.11</span>
+            <span class="chip"><img src="icons/fastapi.svg" alt="">FastAPI</span>
+            <span class="chip"><img src="icons/sqlalchemy.svg" alt="">SQLAlchemy 2.0</span>
+            <span class="chip"><i style="background:#795548">Al</i>Alembic</span>
+            <span class="chip"><i style="background:#455a64">AP</i>APScheduler</span>
+            <span class="chip"><img src="icons/pydantic.svg" alt="">Pydantic v2</span>
+          </div>
+          <p>REST API · ORM 与迁移 · 定时任务调度</p>
+        </article>
+        <article class="card">
+          <h2>数据与运行</h2>
+          <div class="tech-chips">
+            <span class="chip"><img src="icons/postgresql.svg" alt="">PostgreSQL</span>
+            <span class="chip"><img src="icons/docker.svg" alt="">Docker</span>
+            <span class="chip"><img class="wide" src="icons/gvisor.png" alt="">gVisor runsc</span>
+            <span class="chip"><img src="icons/rss.svg" alt="">feedparser</span>
+            <span class="chip"><img src="icons/scrapling.png" alt="">Scrapling</span>
+            <span class="chip"><img src="icons/playwright.svg" alt="">Playwright</span>
+            <span class="chip"><img src="icons/httpx.png" alt="">httpx</span>
+            <span class="chip"><i style="background:#6d4c41">IM</i>IMAP</span>
+          </div>
+          <p>持久化 · 沙箱运行 · 多协议采集</p>
+        </article>
+      </div>
+    </section>
+
+      </div>
+      <aside class="layer-rail" aria-label="系统层级">
+        <div class="layer-label layer-entry">信息入口层<small>新闻流 · 站点发现<br>趋势总结 · 统计与发现</small></div>
+        <div class="layer-label layer-discovery">探查层<small>智能探查模块<br>技术探查模块</small></div>
+        <div class="layer-label layer-security">安全层<small>审核门禁 · 沙箱隔离<br>制品校验 · 访问控制</small></div>
+        <div class="layer-label layer-crawl">批量爬取层<small>网站 / 邮件 / GitHub<br>手动 + 自动 双模式</small></div>
+        <div class="layer-label layer-distribute">收集和分发层<small>新闻 · 讨论 · 趋势组织<br>邮件分发触达</small></div>
+        <div class="layer-label layer-stats">统计与发现层<small>Token 用量 · 消息量<br>任务明细与筛选</small></div>
+        <div class="layer-label layer-tech">技术层<small>模型 · Agent 技术<br>前后端框架与存储</small></div>
+      </aside>
+    </div>
+
     <div class="note">
-      说明：探查用于生成可审核的采集能力；正式查取只运行审核通过且启用的 Connector。
-      技术邮件与 GitHub 讨论先整理为统一 Item，再与网页新闻共同参与趋势计算、邮件分发和统计。
+      说明：页面按权限开放，趋势总结与统计与发现需管理密码解锁；探查产物必须经安全层审核与沙箱校验后方可进入批量爬取。
+      网站、邮件、GitHub 三条爬取通道均支持手动触发与自动调度；所有来源统一整理为 Item 后，再进入收集分发与统计发现。
     </div>
   </main>
 </body>

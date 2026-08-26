@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OS News Tracker｜项目介绍</title>
+<style>
+  :root{--blue:#125ddd;--blue-d:#0958cf;--ink:#15233c;--muted:#66758c;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{min-height:100vh;display:grid;place-items:center;padding:24px;background:#eef0f4;font-family:"TencentSans W3","TencentSans","PingFang SC","Microsoft YaHei",sans-serif;}
+  .slide{position:relative;width:1280px;height:720px;overflow:hidden;border-radius:18px;background:#fff;box-shadow:0 24px 60px rgba(15,40,90,.14);}
+  .glow{position:absolute;border-radius:50%;pointer-events:none;}.glow.one{top:-180px;right:-120px;width:510px;height:510px;background:radial-gradient(circle,rgba(20,100,232,.15),rgba(20,100,232,.04) 48%,transparent 70%);}.glow.two{bottom:-225px;left:-175px;width:500px;height:500px;background:radial-gradient(circle,rgba(9,88,207,.12),rgba(9,88,207,.035) 48%,transparent 70%);}
+  .top-rule{position:absolute;top:53px;left:0;width:100%;height:24px;object-fit:fill;}.brand{position:absolute;top:14px;right:19px;width:207px;z-index:2;}
+  .content{position:absolute;inset:122px 74px 66px;z-index:1;display:grid;grid-template-columns:1.08fr .92fr;gap:62px;align-items:center;}.eyebrow{display:flex;align-items:center;gap:9px;color:var(--blue);font-size:13px;font-weight:800;letter-spacing:1.6px;}.eyebrow:before{content:"";width:30px;height:3px;border-radius:3px;background:var(--blue);}.hero h1{margin-top:19px;color:var(--ink);font-family:"TencentSans W7","TencentSans","PingFang SC",sans-serif;font-size:49px;line-height:1.15;letter-spacing:.3px;}.hero h1 span{color:var(--blue);}.hero p{max-width:610px;margin-top:18px;color:var(--muted);font-size:18px;line-height:1.7;}.hero p b{color:#2458a7;font-weight:800;}.chips{display:flex;gap:9px;margin-top:27px;}.chips span{padding:7px 12px;border:1px solid #cfe1ff;border-radius:99px;background:#f5f9ff;color:#3568ae;font-size:12px;font-weight:700;}
+  .visual{position:relative;height:416px;display:grid;align-content:center;gap:18px;}.visual:before{content:"";position:absolute;inset:24px 6px;background:rgba(255,255,255,.35);border:1px solid #c7ced8;border-radius:25px;transform:rotate(-3deg);}.visual:after{content:"";position:absolute;inset:37px 20px;background:#fff;border:1px solid #101828;border-radius:22px;box-shadow:0 18px 35px rgba(16,24,40,.14);}.visual-head,.flow,.result{position:relative;z-index:1;margin:0 45px;}.visual-head{display:flex;justify-content:space-between;align-items:center;padding:11px 13px;border:1px solid #101828;border-radius:9px 9px 0 0;background:#101828;color:#fff;font-size:12px;font-weight:800;letter-spacing:.4px;}.visual-head i{width:8px;height:8px;border-radius:50%;background:#fff;box-shadow:0 0 0 4px rgba(255,255,255,.14);}.flow{display:grid;gap:11px;}.node{display:grid;grid-template-columns:40px 1fr auto;align-items:center;min-height:61px;padding:10px 13px;border:1px solid #d0d5dd;border-radius:5px;background:#fff;}.node-icon{display:grid;place-items:center;width:27px;height:27px;border-radius:5px;background:#101828;color:#fff;font-weight:800;font-size:13px;}.node strong{font-size:13px;color:#101828;}.node small{display:block;margin-top:3px;color:#667085;font-size:10px;}.node em{font-style:normal;color:#475467;font-size:10px;font-weight:800;}.result{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px;}.result div{padding:10px 11px;border:1px solid #d0d5dd;border-radius:5px;background:#fff;color:#667085;font-size:10px;line-height:1.45;}.result b{display:block;color:#101828;font-size:15px;}
+  .bottom{position:absolute;left:74px;right:74px;bottom:34px;z-index:2;display:flex;align-items:center;gap:13px;color:#95a0b1;font-size:11px;}.bottom:before{content:"";height:1px;flex:1;background:#e2e9f3;}.bottom span{white-space:nowrap;}.bottom:after{content:"";height:1px;width:122px;background:#e2e9f3;}@media(max-width:1300px){body{padding:0}.slide{transform:scale(min(1,100vw / 1280));transform-origin:center;}}
+</style>
+</head>
+<body>
+<main class="slide">
+  <div class="glow one"></div><div class="glow two"></div>
+  <img class="top-rule" src="_ref_x-0.01_y0.51_w13.35_h0.2.png" alt="">
+  <img class="brand" src="_ref_x11.76_y0.35_w1.33_h0.24.png" alt="云架构平台部">
+  <section class="content">
+    <div class="hero">
+      <div class="eyebrow">PROJECT INTRODUCTION</div>
+      <h1><span>OS News Tracker</span><br>操作系统技术情报平台</h1>
+      <p>聚合开源社区、技术新闻、邮件列表与 GitHub 讨论，<b>将分散的技术动态转化为可追溯、可分析、可行动的情报。</b></p>
+      <div class="chips"><span>智能探查</span><span>确定性采集</span><span>趋势洞察</span></div>
+    </div>
+    <div class="visual" aria-label="OS News Tracker 工作流程">
+      <div class="visual-head"><span>OS NEWS TRACKER</span><i></i></div>
+      <div class="flow">
+        <div class="node"><div class="node-icon">01</div><div><strong>多源技术信息接入</strong><small>网站 · RSS · 邮件列表 · GitHub</small></div><em>COLLECT</em></div>
+        <div class="node"><div class="node-icon">02</div><div><strong>统一处理与可信沉淀</strong><small>探查 · 过滤 · 去重 · 富化 · 审核</small></div><em>PROCESS</em></div>
+        <div class="node"><div class="node-icon">03</div><div><strong>趋势分析与精准分发</strong><small>新闻流 · 讨论拓扑 · 趋势轮播 · 邮件简报</small></div><em>INSIGHT</em></div>
+      </div>
+      <div class="result"><div><b>统一情报底座</b>跨来源信息形成同一条目语言</div><div><b>持续技术洞察</b>从信号发现到团队行动</div></div>
+    </div>
+  </section>
+  <div class="bottom"><span>腾讯云架构平台部 · OS News Tracker</span></div>
+</main>
+</body>
+</html>

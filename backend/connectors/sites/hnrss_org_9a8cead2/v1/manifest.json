@@ -1,0 +1,12 @@
+{
+  "allowed_domains": [
+    "hnrss.org"
+  ],
+  "checksum": "0de19d302f538c4e079321caf6c1bf08d6db2655724dfdb1dcc81ab7f479c531",
+  "connector_key": "hnrss_org_9a8cead2",
+  "entry": "https://hnrss.org/best",
+  "entrypoint": "crawler:crawl",
+  "recipe_type": "python_plugin",
+  "runtime_version": "crawler-runtime:2",
+  "version": 1
+}

@@ -16,3 +16,8 @@ dist/
 .agents/
 .cursor/
 db/
+
+# Connector source is versioned; runtime coordination files are not.
+backend/connectors/sites/**/.version.lock
+backend/connectors/sites/**/.staging/
+backend/connectors/sites/**/.restore-*/

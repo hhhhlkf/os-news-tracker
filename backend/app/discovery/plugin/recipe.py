@@ -61,8 +61,8 @@ class WechatSogouConfig(BaseModel):
 
     account_name: str = Field(default="", max_length=120)
     keywords: tuple[str, ...] = Field(default_factory=tuple, max_length=8)
-    max_pages: int = Field(default=2, ge=1, le=10)
-    limit: int = Field(default=20, ge=5, le=50)
+    max_pages: int = Field(default=6, ge=1, le=10)
+    limit: int = Field(default=120, ge=5, le=120)
 
     @field_validator("account_name")
     @classmethod

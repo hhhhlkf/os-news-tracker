@@ -1,0 +1,12 @@
+{
+  "allowed_domains": [
+    "www.oschina.net"
+  ],
+  "checksum": "4f184c5d5b29bfe3f2b57f7cf7980cb3877ce90f0a2494e76ba9937eb10cc7a7",
+  "connector_key": "www_oschina_net_eb465ee8",
+  "entry": "https://www.oschina.net/news/rss",
+  "entrypoint": "crawler:crawl",
+  "recipe_type": "python_plugin",
+  "runtime_version": "crawler-runtime:2",
+  "version": 3
+}

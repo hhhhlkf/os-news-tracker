@@ -36,6 +36,51 @@ _FORBIDDEN_SOURCE_MARKERS = (
     "os.environ",
 )
 
+
+def _observed_explore_hosts(observations: list[dict[str, Any]]) -> set[str]:
+    """Return hosts from concrete URLs emitted by completed sandbox tools only."""
+    hosts: set[str] = set()
+
+    def visit(value: Any, key: str | None = None) -> None:
+        if isinstance(value, dict):
+            for child_key, child_value in value.items():
+                visit(child_value, str(child_key).lower())
+            return
+        if isinstance(value, list):
+            for item in value:
+                visit(item, key)
+            return
+        if key not in {"url", "href", "canonical", "entry"} or not isinstance(value, str):
+            return
+        host = (urlsplit(value).hostname or "").lower().rstrip(".")
+        if host:
+            hosts.add(host)
+
+    for observation in observations:
+        result = observation.get("result")
+        if isinstance(result, dict):
+            visit(result)
+    return hosts
+
+
+def _validate_explore_allowed_domains(
+    requested_domains: list[str],
+    *,
+    site_url: str,
+    observations: list[dict[str, Any]],
+) -> tuple[str, ...]:
+    """Keep only entry and evidenced extra domains without blocking a valid finish decision."""
+    entry_host = (urlsplit(site_url).hostname or "").lower().rstrip(".")
+    validated = ConnectorManifest.validate_allowed_domains(
+        tuple([*requested_domains, entry_host])
+    )
+    evidenced_hosts = _observed_explore_hosts(observations)
+    return tuple(
+        domain
+        for domain in validated
+        if domain == entry_host or domain in evidenced_hosts
+    )
+
 _PROBE_SDK_CONTRACT = r'''
 ProbeTools 精确契约（必须按此调用，不得按 requests/httpx/Playwright 习惯猜测）：
 
@@ -469,9 +514,11 @@ class WebsiteConnectorAgent:
             response_format={"type": "json_object"},
             timeout=max(0.1, timeout_seconds),
         )
-        entry_host = (urlsplit(site_url).hostname or "").lower().rstrip(".")
-        domains = [*decision.allowed_domains, entry_host]
-        validated = ConnectorManifest.validate_allowed_domains(tuple(domains))
+        validated = _validate_explore_allowed_domains(
+            decision.allowed_domains,
+            site_url=site_url,
+            observations=observations,
+        )
         return decision.model_copy(update={"allowed_domains": list(validated)})
 
     def decide_explore_native(
@@ -497,7 +544,6 @@ class WebsiteConnectorAgent:
                 session_id=session_id,
             )
         session = self._get_session(session_id)
-        entry_host = (urlsplit(site_url).hostname or "").lower().rstrip(".")
         with self._sessions_lock:
             if not session.explore_messages:
                 session.explore_messages = [
@@ -538,8 +584,11 @@ class WebsiteConnectorAgent:
             )
             try:
                 decision, call_id = self._decision_from_tool_message(message)
-                domains = [*decision.allowed_domains, entry_host]
-                validated = ConnectorManifest.validate_allowed_domains(tuple(domains))
+                validated = _validate_explore_allowed_domains(
+                    decision.allowed_domains,
+                    site_url=site_url,
+                    observations=observations,
+                )
                 decision = decision.model_copy(update={"allowed_domains": list(validated)})
             except (ValueError, ValidationError) as exc:
                 last_error = exc

@@ -1,0 +1,1 @@
+{"recipe_type": "python_plugin", "connector_key": "www_lmsys_org_b6ca6377", "version": 1, "entry": "https://www.lmsys.org/blog", "entrypoint": "crawler:crawl", "runtime_version": "crawler-runtime:2", "checksum": "2643133541c69b653817a6f59ac4b2f837a48dec5e1abffc85091e469c0ba280", "allowed_domains": ["www.lmsys.org"]}

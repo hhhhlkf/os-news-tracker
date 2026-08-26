@@ -210,38 +210,84 @@ def _list_active_methods(db: Session) -> list[CrawlMethod]:
     return current
 
 
-def _list_retry_methods_from_run(db: Session, previous_run: MorningCrawlRun) -> list[CrawlMethod]:
-    """Return active methods that failed or were not reached by one completed run.
+def _schedule_window_start(config: MorningCrawlConfig, now: datetime) -> datetime:
+    """Return the start of the current configured crawl period in Beijing time.
 
-    A patrol run is a recovery pass, not a second full crawl: methods that
-    already finished as ``ok``, ``empty``, or ``partial`` keep their result.
+    Patrol recovers methods not reached in a period and failures whose retry
+    interval elapsed.  The boundary must be derived from the configured cadence
+    rather than the latest retry's finish time, otherwise each failed retry
+    creates a new moving retry window.
     """
-    active_methods = _list_active_methods(db)
-    completed_method_ids = set(
-        db.scalars(
-            select(MorningCrawlRunMethod.method_id).where(
-                MorningCrawlRunMethod.run_id == previous_run.id,
-                MorningCrawlRunMethod.status.in_(("ok", "empty", "partial")),
-            )
+    try:
+        hour_str, minute_str = (config.run_time or "07:00").split(":", 1)
+        hour, minute = int(hour_str), int(minute_str)
+    except (ValueError, AttributeError):
+        hour, minute = 7, 0
+
+    if config.frequency == "hourly":
+        anchor = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        interval = max(1, int(config.interval_hours or 1))
+        elapsed_hours = int((now - anchor).total_seconds() // 3600)
+        return anchor + timedelta(hours=(elapsed_hours // interval) * interval)
+
+    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    while candidate > now or not _is_schedule_day(config, candidate):
+        candidate -= timedelta(days=1)
+    return candidate
+
+
+def list_retryable_methods_in_window(
+    db: Session,
+    *,
+    config: MorningCrawlConfig,
+    now: datetime | None = None,
+) -> list[CrawlMethod]:
+    """Return unattempted methods and failures whose retry interval elapsed.
+
+    A patrol must recover both sources skipped by an interrupted run and sources
+    whose latest formal attempt failed.  The latest failure is subject to the
+    configured patrol interval, so repeated failures remain retryable without
+    turning each failed run into an immediate retry loop.
+    """
+    current_time = now or beijing_now()
+    window_start = _schedule_window_start(config, current_time)
+    retry_after = current_time - timedelta(hours=max(1, int(config.patrol_interval_hours or 3)))
+    latest_attempt_by_method: dict[int, MorningCrawlRunMethod] = {}
+    completed_attempts = db.scalars(
+        select(MorningCrawlRunMethod)
+        .where(
+            MorningCrawlRunMethod.finished_at.is_not(None),
+            MorningCrawlRunMethod.finished_at >= window_start,
+            MorningCrawlRunMethod.method_id.is_not(None),
         )
+        .order_by(MorningCrawlRunMethod.method_id, MorningCrawlRunMethod.finished_at.desc())
     )
-    return [method for method in active_methods if method.id not in completed_method_ids]
+    for attempt in completed_attempts:
+        if attempt.method_id is not None:
+            latest_attempt_by_method.setdefault(attempt.method_id, attempt)
+
+    retryable: list[CrawlMethod] = []
+    for method in _list_active_methods(db):
+        latest_attempt = latest_attempt_by_method.get(method.id)
+        if latest_attempt is None:
+            retryable.append(method)
+            continue
+        if (
+            latest_attempt.status in {"failed", "cancelled"}
+            and latest_attempt.finished_at is not None
+            and latest_attempt.finished_at <= retry_after
+        ):
+            retryable.append(method)
+    return retryable
 
 
 def _list_patrol_retry_methods(db: Session, run: MorningCrawlRun) -> list[CrawlMethod]:
-    """Return only methods that failed or were not reached by the previous run today."""
-    previous_run = db.scalar(
-        select(MorningCrawlRun)
-        .where(
-            MorningCrawlRun.run_date == run.run_date,
-            MorningCrawlRun.id < run.id,
-        )
-        .order_by(MorningCrawlRun.id.desc())
-        .limit(1)
+    """Return active methods due for retry in the current configured period."""
+    return list_retryable_methods_in_window(
+        db,
+        config=get_or_create_config(db),
+        now=run.started_at or beijing_now(),
     )
-    if previous_run is None:
-        return _list_active_methods(db)
-    return _list_retry_methods_from_run(db, previous_run)
 
 
 def _reclaim_stale_runs(db: Session) -> None:
@@ -455,7 +501,7 @@ def get_morning_crawl_dashboard(db: Session) -> MorningCrawlDashboardResponse:
     else:
         today_status = "not_run"
     retryable_method_count = (
-        len(_list_retry_methods_from_run(db, today_run))
+        len(list_retryable_methods_in_window(db, config=config))
         if today_run is not None and today_run.status in ("partial", "failed", "cancelled") and running_run is None
         else 0
     )
@@ -813,7 +859,7 @@ def trigger_morning_crawl_async(db: Session, *, trigger_type: str) -> MorningCra
 
 
 def retry_today_failed_methods_async(db: Session) -> MorningCrawlRun:
-    """Start one recovery pass containing only today's unfinished methods."""
+    """Start one interval-bounded pass for unattempted and failed methods."""
     _reclaim_stale_runs(db)
     if is_running(db):
         raise MorningCrawlRetryNotAvailableError("当前已有定时抓取在执行，请先等待其结束")
@@ -828,8 +874,9 @@ def retry_today_failed_methods_async(db: Session) -> MorningCrawlRun:
         raise MorningCrawlRetryNotAvailableError("今日尚无定时抓取记录，无法重试")
     if previous_run.status not in ("partial", "failed", "cancelled"):
         raise MorningCrawlRetryNotAvailableError("今日抓取已成功完成，没有需要重试的方式")
-    if not _list_retry_methods_from_run(db, previous_run):
-        raise MorningCrawlRetryNotAvailableError("今日没有未成功的抓取方式")
+    config = get_or_create_config(db)
+    if not list_retryable_methods_in_window(db, config=config):
+        raise MorningCrawlRetryNotAvailableError("当前巡检间隔内没有待查取或到期重试的活跃信息源")
     return trigger_morning_crawl_async(db, trigger_type="patrol_resend")
 
 

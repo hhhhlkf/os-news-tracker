@@ -397,6 +397,7 @@ export interface MultiDiscoveryNameRequest extends DiscoveryRouteInfo {
 export interface MultiDiscoveryStartResponse {
   status: "started" | "duplicate" | "completed" | "accepted";
   run_id?: number | null;
+  viewer_token?: string;
   method_id?: number | null;
   name?: string;
   route?: {

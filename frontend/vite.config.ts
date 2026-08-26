@@ -6,7 +6,7 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     port: 5173,
-    allowedHosts: ["news.tencentos.woa.com"],
+    allowedHosts: ["news.tencentos.woa.com", "21.214.142.167"],
     watch: {
       usePolling: true,
     },

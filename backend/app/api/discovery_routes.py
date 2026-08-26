@@ -6,8 +6,11 @@
 import asyncio
 from datetime import datetime, timezone
 from enum import Enum
+import hashlib
+import hmac
 import json
 import logging
+import secrets
 import threading
 import time
 from typing import Any, AsyncIterator
@@ -19,6 +22,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_system_access
+from app.auth import verify_access_token
 
 from app.discovery.cancel import request_cancel
 from app.discovery.checkpoints import CheckpointStore
@@ -147,12 +151,18 @@ def discover_run(body: DiscoverRequest, db: Session = Depends(get_db)):
         run_id = start_website_discovery_run(site_url, force=body.force, name=name)
     except DiscoveryCapacityExceeded as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
-    return {"status": "started", "run_id": run_id, "name": name}
+    return {
+        "status": "started",
+        "run_id": run_id,
+        "name": name,
+        "viewer_token": _issue_discovery_viewer_token(db, run_id),
+    }
 
 
 @router.post("/multi-run")
 def discover_multi_run(
     body: MultiDiscoverRequest,
+    db: Session = Depends(get_db),
 ):
     effective_route = body.resolved_route_type or body.selected_route_type
     hints = _route_type_to_hints(effective_route)
@@ -177,6 +187,9 @@ def discover_multi_run(
     # Attach resolved route metadata to response
     result["resolved_route_type"] = effective_route.value if effective_route else None
     result["route_source"] = body.route_source.value
+    run_id = result.get("run_id")
+    if result.get("status") == "started" and isinstance(run_id, int):
+        result["viewer_token"] = _issue_discovery_viewer_token(db, run_id)
     return result
 
 
@@ -343,6 +356,51 @@ def _parse_event_cursor(last_event_id: str | None, cursor: int | None) -> int:
     return max(header_cursor, cursor or 0)
 
 
+def _hash_discovery_viewer_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _issue_discovery_viewer_token(db: Session, run_id: int) -> str:
+    viewer_token = secrets.token_urlsafe(32)
+    run = db.get(SiteDiscoveryRun, run_id)
+    if run is None:
+        raise HTTPException(404, "run not found")
+    run.viewer_token_hash = _hash_discovery_viewer_token(viewer_token)
+    db.commit()
+    return viewer_token
+
+
+def _has_system_access(authorization: str | None) -> bool:
+    if not authorization or not authorization.startswith("Bearer "):
+        return False
+    payload = verify_access_token(authorization.removeprefix("Bearer ").strip())
+    return payload is not None and payload.get("role") in {"system_admin", "admin"}
+
+
+def _authorize_discovery_event_stream(
+    run_id: int,
+    viewer_token: str | None,
+    authorization: str | None,
+) -> None:
+    from app.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        run = db.get(SiteDiscoveryRun, run_id)
+        if run is None:
+            raise HTTPException(404, "run not found")
+        if _has_system_access(authorization):
+            return
+        if viewer_token and run.viewer_token_hash and hmac.compare_digest(
+            run.viewer_token_hash,
+            _hash_discovery_viewer_token(viewer_token),
+        ):
+            return
+        raise HTTPException(403, "Discovery run log access denied")
+    finally:
+        db.close()
+
+
 def _discovery_event_page(run_id: int, after_sequence: int) -> tuple[list[dict[str, Any]], str]:
     """Load one bounded, already-redacted replay page in an isolated DB session."""
     from app.db import SessionLocal
@@ -378,10 +436,16 @@ async def stream_discovery_run_events(
     request: Request,
     cursor: int | None = Query(default=None, ge=0),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
-    _system_access: dict = Depends(require_system_access),
+    viewer_token: str | None = Header(default=None, alias="X-Discovery-Viewer-Token"),
+    authorization: str | None = Header(default=None),
 ) -> StreamingResponse:
-    """Replay and tail one run's persisted, redacted event stream as authenticated SSE."""
-    del _system_access
+    """Replay persisted redacted events for the initiating browser or a system admin."""
+    await asyncio.to_thread(
+        _authorize_discovery_event_stream,
+        run_id,
+        viewer_token,
+        authorization,
+    )
     initial_cursor = _parse_event_cursor(last_event_id, cursor)
     if not _SSE_CONNECTION_SLOTS.acquire(blocking=False):
         raise HTTPException(429, "too many active Discovery event streams")
