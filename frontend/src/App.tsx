@@ -82,7 +82,7 @@ function TopNav({ authenticated, onAuthenticatedChange }: { authenticated: boole
           <>
             <input
               type="password"
-              placeholder="管理密码"
+              placeholder="管理员：普通用户无需登陆"
               value={password}
               maxLength={INPUT_LIMITS.password}
               onChange={(event) => setPassword(clampInput(event.target.value, INPUT_LIMITS.password))}
@@ -137,20 +137,24 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <TopNav authenticated={authenticated} onAuthenticatedChange={setAuthenticated} />
-      <Routes>
-        <Route path="/" element={<HomePage hasSystemAccess={authenticated} />} />
-        <Route path="/discover" element={<DiscoveryPage hasSystemAccess={authenticated} />} />
-        <Route
-          path="/statistics"
-          element={authenticated ? <StatisticsDiscoveryPage hasSystemAccess /> : <Navigate to="/" replace />}
-        />
-        <Route
-          path="/trends"
-          element={authenticated ? <TrendWorkspacePage hasSystemAccess /> : <Navigate to="/" replace />}
-        />
-        <Route path="/prototype/architecture" element={<ArchitectureDiagramPrototype />} />
-      </Routes>
+      <div className="app-frame">
+        <TopNav authenticated={authenticated} onAuthenticatedChange={setAuthenticated} />
+        <div className="app-frame__main">
+          <Routes>
+            <Route path="/" element={<HomePage hasSystemAccess={authenticated} />} />
+            <Route path="/discover" element={<DiscoveryPage hasSystemAccess={authenticated} />} />
+            <Route
+              path="/statistics"
+              element={authenticated ? <StatisticsDiscoveryPage hasSystemAccess /> : <Navigate to="/" replace />}
+            />
+            <Route
+              path="/trends"
+              element={authenticated ? <TrendWorkspacePage hasSystemAccess /> : <Navigate to="/" replace />}
+            />
+            <Route path="/prototype/architecture" element={<ArchitectureDiagramPrototype />} />
+          </Routes>
+        </div>
+      </div>
     </BrowserRouter>
   );
 }

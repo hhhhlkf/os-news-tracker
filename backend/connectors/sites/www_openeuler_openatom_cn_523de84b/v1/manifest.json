@@ -1,0 +1,12 @@
+{
+  "allowed_domains": [
+    "www.openeuler.openatom.cn"
+  ],
+  "checksum": "c98e4770f10971f1d36ab06244a4f6196f07077b1faf28f700e471176bee2c38",
+  "connector_key": "www_openeuler_openatom_cn_523de84b",
+  "entry": "https://www.openeuler.openatom.cn/zh/interaction/blog-list/",
+  "entrypoint": "crawler:crawl",
+  "recipe_type": "python_plugin",
+  "runtime_version": "crawler-runtime:2",
+  "version": 1
+}

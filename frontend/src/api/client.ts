@@ -397,7 +397,11 @@ export async function startDiscoveryRun(
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(request),
   });
-  return expectOk<MultiDiscoveryStartResponse>(r, "failed to start discovery run");
+  const result = await expectOk<MultiDiscoveryStartResponse>(r, "failed to start discovery run");
+  if (result.run_id != null && result.viewer_token) {
+    sessionStorage.setItem(discoveryViewerTokenKey(result.run_id), result.viewer_token);
+  }
+  return result;
 }
 
 export async function getDiscoveryRun(runId: number): Promise<DiscoveryRun> {
@@ -405,17 +409,23 @@ export async function getDiscoveryRun(runId: number): Promise<DiscoveryRun> {
   return expectOk<DiscoveryRun>(r, "failed to load discovery run");
 }
 
-/** Open an authenticated SSE response. The caller owns parsing, reconnect and cancellation. */
+function discoveryViewerTokenKey(runId: number): string {
+  return `discovery-run-viewer-token:${runId}`;
+}
+
+/** Open a Discovery SSE response for the initiating browser or a system administrator. */
 export async function openDiscoveryEventStream(
   runId: number,
   cursor: number,
   signal: AbortSignal,
 ): Promise<Response> {
   const params = new URLSearchParams({ cursor: String(Math.max(0, cursor)) });
+  const viewerToken = sessionStorage.getItem(discoveryViewerTokenKey(runId));
   const response = await fetch(`${DISCOVERY_BASE}/runs/${runId}/events?${params}`, {
     headers: {
       Accept: "text/event-stream",
       "Last-Event-ID": String(Math.max(0, cursor)),
+      ...(viewerToken ? { "X-Discovery-Viewer-Token": viewerToken } : {}),
       ...authHeaders(),
     },
     cache: "no-store",

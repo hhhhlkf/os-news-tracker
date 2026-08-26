@@ -1,0 +1,55 @@
+services:
+  backend-prod:
+    build:
+      context: ${PRODUCTION_WORKTREE:-./.worktrees/production-b4b067c}/backend
+      dockerfile: Dockerfile
+    command: sh -c 'chmod 700 /var/lib/os-news-tracker/discovery-attestation && exec uvicorn app.entry:app --host 0.0.0.0 --port 8000'
+    env_file: .env
+    volumes:
+      - ./backend/connectors/sites:/var/lib/os-news-tracker/connectors/sites
+      - wechat_browser_data_dev:/var/lib/os-news-tracker/wechat-browser
+      - discovery_attestation_keys_dev:/var/lib/os-news-tracker/discovery-attestation
+      - discovery_checkpoints_dev:/var/lib/os-news-tracker/discovery-checkpoints
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/local/bin/runsc:/usr/local/bin/runsc:ro
+      - /usr/local/bin/gvisor-bin:/usr/local/bin/gvisor-bin:ro
+      - /etc/docker/daemon.json:/etc/docker/daemon.json:ro
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
+      ENABLE_SCHEDULER: "1"
+      ENABLE_MAIL_SCHEDULER: "1"
+      ENABLE_MORNING_CRAWL_SCHEDULER: "1"
+      ENABLE_TREND_SCHEDULER: "1"
+      RUN_STARTUP_BACKFILL: "0"
+      TRENDS_EMBEDDING_WORKER_BASE_URL: http://embedding-worker:8100
+    networks:
+      default:
+        aliases:
+          - backend-prod
+
+  frontend-prod:
+    build:
+      context: ${PRODUCTION_WORKTREE:-./.worktrees/production-b4b067c}/frontend
+      dockerfile: Dockerfile
+    volumes:
+      - ./deploy/nginx.production.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend-prod
+    ports:
+      - "80:80"
+
+networks:
+  default:
+    external: true
+    name: os-news-tracker_default
+
+volumes:
+  wechat_browser_data_dev:
+    external: true
+    name: os-news-tracker_wechat_browser_data_dev
+  discovery_attestation_keys_dev:
+    external: true
+    name: os-news-tracker_discovery_attestation_keys_dev
+  discovery_checkpoints_dev:
+    external: true
+    name: os-news-tracker_discovery_checkpoints_dev

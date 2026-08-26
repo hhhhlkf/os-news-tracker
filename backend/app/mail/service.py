@@ -269,7 +269,24 @@ class MailService:
             config.include_on_send = payload.include_on_send
         if payload.include_on_template is not None:
             config.include_on_template = payload.include_on_template
-        config.updated_at = beijing_now()
+        now = beijing_now()
+        config.updated_at = now
+
+        # Notice content is a delivery snapshot so that preview and scheduled
+        # delivery need no additional configuration lookup.  Keep every
+        # existing snapshot aligned when the singleton changes: otherwise old
+        # templates and schedules continue to render stale header content.
+        snapshot = _snapshot_notice_from_config(
+            config,
+            include=bool(config.include_on_template),
+        )
+        for template in self._db.scalars(select(MailTemplate)):
+            template.notice_json = snapshot.copy()
+            template.updated_at = now
+        for schedule in self._db.scalars(select(MailSchedule)):
+            schedule.notice_json = snapshot.copy()
+            schedule.updated_at = now
+
         self._db.commit()
         self._db.refresh(config)
         return config

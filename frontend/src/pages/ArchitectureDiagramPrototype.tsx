@@ -50,7 +50,7 @@ export function ArchitectureDiagramPrototype() {
 
 function DiagramHeader({ eyebrow, title, children }: { eyebrow: string; title: string; children: ReactNode }) {
   return <header style={header}>
-    <div style={eyebrow}>{eyebrow}</div>
+    <div style={eyebrowStyle}>{eyebrow}</div>
     <h1 style={titleStyle}>{title}</h1>
     <p style={subtitle}>{children}</p>
   </header>;
@@ -217,7 +217,7 @@ function PrototypeSwitcher({ selected, onCycle }: { selected: { key: VariantKey;
 const page: CSSProperties = { minHeight: "100vh", padding: "36px 24px 80px", background: "#f2f5f8", boxSizing: "border-box", color: "#14243a", fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" };
 const canvas: CSSProperties = { maxWidth: 1280, margin: "0 auto", padding: "38px", borderRadius: 28, background: "#fff", boxShadow: "0 20px 60px rgba(27, 48, 81, .14)", overflow: "hidden" };
 const header: CSSProperties = { padding: "0 8px 28px", textAlign: "center" };
-const eyebrow: CSSProperties = { color: "#3379c7", fontSize: 12, letterSpacing: ".14em", fontWeight: 800 };
+const eyebrowStyle: CSSProperties = { color: "#3379c7", fontSize: 12, letterSpacing: ".14em", fontWeight: 800 };
 const titleStyle: CSSProperties = { margin: "9px 0 10px", color: "#172c47", fontSize: 34, letterSpacing: ".02em" };
 const subtitle: CSSProperties = { margin: "0 auto", maxWidth: 760, color: "#5c6c81", fontSize: 15, lineHeight: 1.7 };
 const band: CSSProperties = { position: "relative", display: "grid", gridTemplateColumns: "160px minmax(0, 1fr)", gap: 22, marginTop: 14, padding: "23px 24px", border: "1px solid", borderRadius: 24 };

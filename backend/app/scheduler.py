@@ -261,6 +261,7 @@ def _run_system_morning_crawl(*, trigger_type: str, patrol: bool) -> None:
         execute_morning_crawl,
         get_or_create_config,
         is_running,
+        list_retryable_methods_in_window,
         patrol_due_now,
         schedule_due_now,
     )
@@ -273,6 +274,9 @@ def _run_system_morning_crawl(*, trigger_type: str, patrol: bool) -> None:
         if not due:
             return
         if is_running(session):
+            return
+        if patrol and not list_retryable_methods_in_window(session, config=config, now=now):
+            logger.info("system morning crawl patrol skipped: no active method is unattempted or due for retry")
             return
         try:
             # Technical discussions share the system schedule.  Run the

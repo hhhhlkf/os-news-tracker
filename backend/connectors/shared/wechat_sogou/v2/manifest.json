@@ -1,0 +1,12 @@
+{
+  "allowed_domains": [
+    "weixin.sogou.com"
+  ],
+  "checksum": "4a355972cf7ebe1fa41873e034289dfbe32a6b1cac160bd2456ade1fd4c5dd83",
+  "connector_key": "wechat_sogou",
+  "entry": "https://weixin.sogou.com/weixin",
+  "entrypoint": "crawler:crawl",
+  "recipe_type": "python_plugin",
+  "runtime_version": "crawler-runtime:2",
+  "version": 2
+}

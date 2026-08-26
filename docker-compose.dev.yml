@@ -26,7 +26,6 @@ services:
       - ./backend:/app
       - wechat_browser_data_dev:/var/lib/os-news-tracker/wechat-browser
       - discovery_attestation_keys_dev:/var/lib/os-news-tracker/discovery-attestation
-      - discovery_connectors_dev:/var/lib/os-news-tracker/connectors
       - ./backend/connectors/sites:/var/lib/os-news-tracker/connectors/sites
       - discovery_checkpoints_dev:/var/lib/os-news-tracker/discovery-checkpoints
       - /var/run/docker.sock:/var/run/docker.sock
@@ -37,9 +36,9 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
       ENABLE_SCHEDULER: "0"
-      ENABLE_MAIL_SCHEDULER: "1"
-      ENABLE_MORNING_CRAWL_SCHEDULER: "1"
-      ENABLE_TREND_SCHEDULER: "1"
+      ENABLE_MAIL_SCHEDULER: "0"
+      ENABLE_MORNING_CRAWL_SCHEDULER: "0"
+      ENABLE_TREND_SCHEDULER: "0"
       RUN_STARTUP_BACKFILL: "0"
       WATCHFILES_FORCE_POLLING: "true"
       TRENDS_EMBEDDING_WORKER_BASE_URL: http://embedding-worker:8100
@@ -88,13 +87,14 @@ services:
     depends_on:
       - backend
     ports:
-      - "80:5173"
+      - "5174:5173"
 
 volumes:
   pgdata_dev:
   frontend_node_modules:
   wechat_browser_data_dev:
   discovery_attestation_keys_dev:
-  discovery_connectors_dev:
   discovery_checkpoints_dev:
+    name: os-news-tracker_discovery_checkpoints_dev
+    external: true
   embedding_model_cache_dev:

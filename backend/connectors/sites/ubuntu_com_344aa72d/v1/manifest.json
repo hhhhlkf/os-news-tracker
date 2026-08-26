@@ -1,0 +1,12 @@
+{
+  "allowed_domains": [
+    "ubuntu.com"
+  ],
+  "checksum": "441a91082ba032cef52708b181448737829769b5b9ee8b1de9b2060a818d25e6",
+  "connector_key": "ubuntu_com_344aa72d",
+  "entry": "https://ubuntu.com/blog/feed",
+  "entrypoint": "crawler:crawl",
+  "recipe_type": "python_plugin",
+  "runtime_version": "crawler-runtime:2",
+  "version": 1
+}

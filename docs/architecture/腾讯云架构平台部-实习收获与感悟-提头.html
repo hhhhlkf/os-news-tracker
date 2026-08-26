@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>实习收获与感悟 · 提头｜腾讯云架构平台部</title>
+<style>
+  :root{
+    --blue:#125ddd;--ink:#172b4d;--muted:#5d6e85;--line:#d9e4f3;
+    --agent:#1769df;--backend:#168ba5;--package:#d66a22;--os:#6654bd;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"TencentSans W3","TencentSans","PingFang SC","Microsoft YaHei",sans-serif;background:#eef0f4;display:grid;place-items:center;min-height:100vh;padding:24px}
+  .slide{position:relative;width:1280px;height:720px;background:#fff;border-radius:18px;box-shadow:0 24px 60px rgba(15,40,90,.14);overflow:hidden}
+  .top-rule{position:absolute;inset:7.4% 0 auto;width:100%;height:3.32%;object-fit:fill}
+  .brand{position:absolute;top:1.95%;right:1.45%;width:16.2%;z-index:2}
+  .head{position:absolute;left:40px;top:1.95%;height:5.1%;display:flex;align-items:center;z-index:2}
+  .head h1{font-family:"TencentSans W7","TencentSans","PingFang SC",sans-serif;font-size:26px;font-weight:800;color:var(--blue);letter-spacing:2px}
+  .halo{position:absolute;right:-70px;top:72px;width:430px;height:430px;background:radial-gradient(circle,rgba(18,93,221,.08),transparent 70%);pointer-events:none}
+  .intro{position:absolute;left:41px;right:41px;top:94px;height:52px;display:flex;align-items:flex-end;justify-content:space-between;border-bottom:1px solid #e4ebf5;padding-bottom:10px}
+  .intro h2{font-family:"TencentSans W7","TencentSans","PingFang SC",sans-serif;color:var(--ink);font-size:22px;line-height:1.2;font-weight:800}
+  .intro h2 em{font-style:normal;color:var(--blue)}
+  .intro p{color:#7a8ba3;font-size:10px;letter-spacing:.8px;padding-bottom:2px}
+  .columns{position:absolute;left:41px;right:41px;top:164px;bottom:26px;display:grid;grid-template-columns:repeat(4,1fr);gap:13px}
+  .lane{--accent:var(--agent);position:relative;background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 5%,white),#fff 38%);border:1px solid var(--line);border-top:5px solid var(--accent);padding:18px 17px 14px;overflow:hidden;box-shadow:0 7px 22px rgba(39,69,118,.07)}
+  .lane.backend{--accent:var(--backend)}.lane.package{--accent:var(--package)}.lane.os{--accent:var(--os)}
+  .watermark{position:absolute;right:12px;top:0;font-family:"TencentSans W7","TencentSans","PingFang SC",sans-serif;color:color-mix(in srgb,var(--accent) 9%,white);font-size:76px;font-weight:900;line-height:1;letter-spacing:-5px;pointer-events:none}
+  .lane-head{position:relative;z-index:1;height:82px;min-width:0;border-bottom:1px solid color-mix(in srgb,var(--accent) 22%,white);padding-bottom:12px}
+  .eyebrow{display:flex;align-items:center;gap:7px;color:var(--accent);font-size:9px;font-weight:900;letter-spacing:1.3px}
+  .eyebrow:before{content:"";width:19px;height:3px;background:var(--accent)}
+  .lane h3{margin-top:8px;font-family:"TencentSans W7","TencentSans","PingFang SC",sans-serif;color:var(--ink);font-size:19px;font-weight:900;line-height:1.12}
+  .lane-head p{margin-top:5px;color:var(--muted);font-size:10px;line-height:1.4;white-space:normal;overflow-wrap:anywhere}
+  .track{position:relative;min-width:0;margin-top:15px;padding-left:16px;display:grid;grid-template-rows:142px 110px 110px;gap:9px;z-index:1}
+  .track:before{content:"";position:absolute;left:3px;top:5px;bottom:6px;width:1px;background:color-mix(in srgb,var(--accent) 32%,white)}
+  .step{position:relative;min-width:0}
+  .step:before{content:"";position:absolute;left:-16px;top:4px;width:7px;height:7px;border-radius:50%;background:#fff;border:2px solid var(--accent)}
+  .step h4{color:var(--accent);font-size:13.2px;font-weight:900;line-height:1.3;overflow-wrap:anywhere}
+  .step p{max-width:100%;margin-top:5px;color:#52647e;font-size:12.5px;line-height:1.48;white-space:normal;overflow-wrap:anywhere;word-break:break-word}
+  .flow{display:flex;align-items:center;gap:3px;flex-wrap:wrap;margin-top:6px}
+  .flow i{font-style:normal;padding:3px 4px;border:1px solid color-mix(in srgb,var(--accent) 25%,white);background:#fff;color:#435d82;font-size:9px;white-space:nowrap}
+  .flow b{font-size:10px;color:color-mix(in srgb,var(--accent) 55%,white)}
+</style>
+</head>
+<body>
+<div class="slide">
+  <div class="halo" aria-hidden="true"></div>
+  <img class="top-rule" src="_ref_x-0.01_y0.51_w13.35_h0.2.png" alt="">
+  <img class="brand" src="_ref_x11.76_y0.35_w1.33_h0.24.png" alt="云架构平台部">
+  <header class="head"><h1>实习收获与感悟</h1></header>
+  <section class="intro">
+    <h2>从项目实践中建立的<em>四类核心技术能力</em></h2>
+    <p>AGENT ENGINEERING · BACKEND · PACKAGING · OS INTELLIGENCE</p>
+  </section>
+
+  <main class="columns">
+    <section class="lane agent">
+      <div class="watermark">01</div>
+      <div class="lane-head"><div class="eyebrow">AGENT ENGINEERING</div><h3>Agent 技术</h3><p>以 Loop Engineering 与 Agent Harness 将模型能力收敛为可靠系统。</p></div>
+      <div class="track">
+        <div class="step"><h4>Single Agent Loop Engineering</h4><p>用程序控状态机组织 Agent Workflow；通过上下文累积、Checkpoint、取消与总时间预算实现可恢复闭环。</p><div class="flow"><i>Context</i><b>→</b><i>Explore</i><b>→</b><i>Build</i><b>→</b><i>Execute</i><b>→</b><i>Evaluate</i><b>↺</b><i>Repair</i></div></div>
+        <div class="step"><h4>Agent-Computer Interface</h4><p>参考 OpenHands / SWE-agent 的 ACI 思路，组合原生 Tool Calling 与自定义 probe.py；简单操作直调工具，复杂解析进入 gVisor 执行。</p></div>
+        <div class="step"><h4>Agent Harness 收紧</h4><p>以严格 Schema、工具参数校验、网络出口、容量/时间预算、双试跑和确定性 Evals 约束行为；错误证据回灌 Repair，模型不能自证成功。</p></div>
+      </div>
+    </section>
+
+    <section class="lane backend">
+      <div class="watermark">02</div>
+      <div class="lane-head"><div class="eyebrow">BACKEND SYSTEM</div><h3>后端技术</h3><p>将异步任务、状态流转、实时反馈和安全执行连成一体。</p></div>
+      <div class="track">
+        <div class="step"><h4>FastAPI 与实时交互</h4><p>对外提供探查、恢复、取消、审核与正式抓取接口；通过带认证的 SSE 重放持久化事件，前端实时更新日志和流程图。</p></div>
+        <div class="step"><h4>PostgreSQL 事务与并发</h4><p>用 SQLAlchemy/Alembic 管理版本、检查点和方法映射；以 CAS、唯一约束、行锁和幂等记账避免取消复活、重复运行和双入库。</p></div>
+        <div class="step"><h4>Docker + gVisor 沙箱</h4><p>生成代码只能在 runsc/systrap 容器内执行；全局容量队列、网络代理、资源清理和持久取消共同保证失败可收敛。</p></div>
+      </div>
+    </section>
+
+    <section class="lane package">
+      <div class="watermark">03</div>
+      <div class="lane-head"><div class="eyebrow">PACKAGE ENGINEERING</div><h3>打包技术</h3><p>从 RPM Spec 编写走向可复现构建、软件源维护和交付。</p></div>
+      <div class="track">
+        <div class="step"><h4>Python / pip 包构建</h4><p>拆解 sdist、wheel、PEP 517 Build Backend、构建依赖与运行依赖，再将它们映射为 RPM Spec 中的 Source、BuildRequires、Requires 和各构建阶段。</p><div class="flow"><i>sdist</i><b>→</b><i>PEP 517</i><b>→</b><i>Spec</i><b>→</b><i>Mock</i><b>→</b><i>RPM</i></div></div>
+        <div class="step"><h4>uv 与 Rust/Cargo</h4><p>针对 uv 处理 Cargo crate、vendor 离线依赖、lock 文件、Rust 构建产物和 Python 交付边界，使其能在无网络 Mock Buildroot 中稳定重建。</p></div>
+        <div class="step"><h4>软件源、Snap 与开源协作</h4><p>理解 Yum 源的版本、签名、元数据和分支维护，并对比 Snap 的自包含与跨发行版交付；通过补丁、PR、Review 和上游反馈完成社区协作。</p></div>
+      </div>
+    </section>
+
+    <section class="lane os">
+      <div class="watermark">04</div>
+      <div class="lane-head"><div class="eyebrow">OS INTELLIGENCE</div><h3>OS 动态追踪</h3><p>从真实技术新闻中理解 OS 软件栈与 AI 基础设施的演进。</p></div>
+      <div class="track">
+        <div class="step"><h4>OS 软件栈演进</h4><p>追踪内核、文件系统、编译器、包管理器、图形栈与驱动的版本变化；从 Linux 7.3、GCC、RPM、Mesa 和 OpenZFS 等新闻中理解兼容、安全与性能的联动。</p></div>
+        <div class="step"><h4>AI 底层支撑能力</h4><p>关注 GPU/NPU、RDMA/UALink、KV Cache、权重缓存和推理调度，理解 AI 负载如何对 OS 的异构计算、内存管理、网络传输与故障恢复提出新要求。</p></div>
+        <div class="step"><h4>从动态到维护行动</h4><p>不只记录“发布了什么”，还结合版本、ABI、硬件架构和影响范围，提炼为软件包升级、补丁回移、性能回归和上游跟进的具体关注点。</p></div>
+      </div>
+    </section>
+  </main>
+</div>
+</body>
+</html>

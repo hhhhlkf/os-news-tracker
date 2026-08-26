@@ -62,7 +62,7 @@ from app.models import CrawlMethod, CrawlMethodRun, SiteDiscoveryRun, Source
 
 logger = logging.getLogger(__name__)
 SHARED_CONNECTOR_KEY = "wechat_sogou"
-SHARED_CONNECTOR_VERSION = 1
+SHARED_CONNECTOR_VERSION = 2
 REVIEW_PENDING = "pending"
 WECHAT_PHASES = ("context", "execute", "evaluate", "package")
 WECHAT_EXECUTION_STATE_MAX_BYTES = 3 * 1024 * 1024
@@ -204,8 +204,8 @@ def public_wechat_config(
     return WechatSogouConfig(
         account_name=account_name,
         keywords=keywords,
-        max_pages=int(hints.get("max_pages") or 2),
-        limit=int(hints.get("limit") or 20),
+        max_pages=int(hints.get("max_pages") or 6),
+        limit=int(hints.get("limit") or 120),
     )
 
 

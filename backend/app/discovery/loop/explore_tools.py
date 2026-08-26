@@ -648,8 +648,20 @@ def validate_explore_decision(decision: AgentExploreDecision, *, site_url: str) 
         parsed = urlsplit(url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ValueError("Explore URL must be absolute HTTP(S)")
-        if parsed.username or parsed.password or parsed.hostname.lower() not in decision.allowed_domains:
-            raise ValueError("Explore URL host is not declared")
+        entry_host = (urlsplit(site_url).hostname or "").lower().rstrip(".")
+        target_host = parsed.hostname.lower().rstrip(".")
+        entry_aliases = {entry_host}
+        if entry_host.startswith("www."):
+            entry_aliases.add(entry_host.removeprefix("www."))
+        elif entry_host:
+            entry_aliases.add(f"www.{entry_host}")
+        if target_host in entry_aliases and target_host not in decision.allowed_domains:
+            decision.allowed_domains = [*decision.allowed_domains, target_host]
+        if parsed.username or parsed.password or target_host not in decision.allowed_domains:
+            raise ValueError(
+                "Explore URL host is not declared: "
+                f"{target_host}; allowed domains are {', '.join(decision.allowed_domains)}"
+            )
     elif decision.action == "probe":
         source = str(decision.args.get("probe_py") or "")
         validate_probe_source(source)

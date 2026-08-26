@@ -1,0 +1,12 @@
+{
+  "allowed_domains": [
+    "e2b.dev"
+  ],
+  "checksum": "c18757f8c10db485b7bba180b3e1620d0549eeabe5ba47cdcfab23a3db2ed681",
+  "connector_key": "e2b_dev_8c7f92e6",
+  "entry": "https://e2b.dev/blog",
+  "entrypoint": "crawler:crawl",
+  "recipe_type": "python_plugin",
+  "runtime_version": "crawler-runtime:2",
+  "version": 1
+}

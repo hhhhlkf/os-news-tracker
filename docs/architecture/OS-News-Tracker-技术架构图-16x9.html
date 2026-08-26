@@ -1,0 +1,698 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OS News Tracker 技术架构图 · 紧凑版</title>
+  <style>
+    :root {
+      --ink: #1c3047;
+      --muted: #586b80;
+      --line: #365774;
+      --font-bold: "TencentSans W7", "TencentSansW7", "TencentSans-W7", "腾讯体 W7", "腾讯体W7", TencentSans, "PingFang SC", "Microsoft YaHei", sans-serif;
+      --font-light: "TencentSans W3", "TencentSansW3", "TencentSans-W3", "腾讯体 W3", "腾讯体W3", TencentSans, "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    @font-face {
+      font-family: "TencentSans W7";
+      src: local("TencentSans W7"), local("TencentSansW7"), local("TencentSans-W7"), local("腾讯体 W7"), local("腾讯体W7"),
+           url("fonts/TencentSans-W7.otf") format("opentype"),
+           url("fonts/TencentSans-W7.ttf") format("truetype");
+      font-weight: 700;
+      font-style: normal;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: "TencentSans W3";
+      src: local("TencentSans W3"), local("TencentSansW3"), local("TencentSans-W3"), local("腾讯体 W3"), local("腾讯体W3"),
+           url("fonts/TencentSans-W3.otf") format("opentype"),
+           url("fonts/TencentSans-W3.ttf") format("truetype");
+      font-weight: 300;
+      font-style: normal;
+      font-display: swap;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      color: var(--ink);
+      background: #fff;
+      font-family: var(--font-light);
+      font-weight: 300;
+    }
+    .stage {
+      width: 100%;
+    }
+    .slide {
+      width: 100%;
+      min-height: 100vh;
+      padding: 12px 14px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      background: #fff;
+    }
+    header {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .eyebrow {
+      color: #3278bd;
+      font-family: var(--font-bold);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .16em;
+      white-space: nowrap;
+    }
+    h1 {
+      margin: 0;
+      font-family: var(--font-bold);
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: .02em;
+      line-height: 1;
+    }
+    header p {
+      margin: 0 0 0 auto;
+      color: var(--muted);
+      font-family: var(--font-light);
+      font-size: 13px;
+      font-weight: 300;
+      white-space: nowrap;
+    }
+    .architecture-layout {
+      flex: 1 1 auto;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 118px;
+      grid-template-rows: auto 22px auto 22px auto 22px auto 22px auto 22px auto 22px auto;
+      column-gap: 10px;
+      row-gap: 0;
+    }
+    .flow-stack,
+    .layer-rail { display: contents; }
+    .band {
+      display: flex;
+      flex-direction: column;
+      padding: 10px 10px;
+      border: 1px solid;
+      border-radius: 12px;
+    }
+    .entry { background: linear-gradient(135deg, #e4f1ff, #f2f8ff); border-color: #b2d5f8; }
+    .discovery { background: linear-gradient(135deg, #dcf6fb, #effcff); border-color: #a2dfe9; }
+    .security { background: linear-gradient(135deg, #ffe8ec, #fff5f1); border-color: #f0b4be; }
+    .crawl { background: linear-gradient(135deg, #fff4cf, #fffaf0); border-color: #edd58f; }
+    .distribute { background: linear-gradient(135deg, #e5f7e5, #f5fff3); border-color: #b8dfb3; }
+    .stats { background: linear-gradient(135deg, #eee9ff, #f8f6ff); border-color: #cfc1f1; }
+    .tech { background: linear-gradient(135deg, #edf1f6, #fafcff); border-color: #cbd7e5; }
+    .cards {
+      display: flex;
+      align-items: stretch;
+      gap: 8px;
+    }
+    .card {
+      flex: 1 1 0;
+      min-width: 0;
+      padding: 8px 10px;
+      border: 1.4px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255,255,255,.94);
+      box-shadow: 0 3px 8px rgba(37, 68, 101, .07);
+    }
+    .card.focus {
+      border: 1.8px solid #2475bd;
+      box-shadow: 0 0 0 3px rgba(36,117,189,.10);
+    }
+    .card h2 {
+      display: flex;
+      align-items: center;
+      margin: 0 0 3px;
+      color: #203b58;
+      font-family: var(--font-bold);
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+    .card p {
+      margin: 1px 0 0;
+      color: #566b82;
+      font-family: var(--font-light);
+      font-size: 11px;
+      font-weight: 300;
+      line-height: 1.35;
+    }
+    .icon {
+      display: inline-grid;
+      flex: 0 0 18px;
+      width: 18px;
+      height: 18px;
+      place-items: center;
+      margin-right: 5px;
+      border-radius: 5px;
+      color: #fff;
+      background: #3983cb;
+    }
+    .icon svg {
+      display: block;
+      width: 12px;
+      height: 12px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2.2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .security .card { border-color: #bd4a5e; }
+    .security .card.focus {
+      border: 1.8px solid #b4233a;
+      box-shadow: 0 0 0 3px rgba(180,35,58,.10);
+    }
+    .security .icon { background: #c0445c; }
+    .discovery-stack {
+      display: grid;
+      gap: 8px;
+    }
+    .module-group {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      padding: 7px 8px 8px;
+      border: 1px solid;
+      border-radius: 10px;
+    }
+    .module-a,
+    .module-b { border-color: #8fd2e0; background: linear-gradient(135deg, #d0f0f7, #e9fcff); }
+    .module-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #203b58;
+      font-family: var(--font-bold);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .module-title::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 2px;
+      background: #2b8fb8;
+    }
+    .module-title .module-sub {
+      margin-left: auto;
+      color: #536a81;
+      font-family: var(--font-light);
+      font-size: 10px;
+      font-weight: 300;
+    }
+    .discovery-flow {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+    .discovery-flow .ttl {
+      font-family: var(--font-bold);
+      font-weight: 700;
+    }
+    .discovery-flow .cap {
+      font-family: var(--font-light);
+      font-weight: 300;
+    }
+    .module-group .cards { height: auto; }
+    .module-group .card { padding: 6px 8px; }
+    .module-group .card h2 { font-size: 13px; }
+    .tag {
+      display: inline-block;
+      padding: 0 6px;
+      margin-right: 4px;
+      border: 1px solid;
+      border-radius: 999px;
+      font-family: var(--font-light);
+      font-size: 10px;
+      font-weight: 300;
+      line-height: 1.45;
+    }
+    .tag-manual { color: #9a5b13; background: #ffe9c2; border-color: #eec887; }
+    .tag-auto { color: #175cd3; background: #e0efff; border-color: #aed4f7; }
+    .tech-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 4px; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 7px 2px 4px;
+      border: 1px solid #d8e2ec;
+      border-radius: 999px;
+      background: #fff;
+      color: #33506b;
+      font-family: var(--font-light);
+      font-size: 10px;
+      font-weight: 300;
+      line-height: 1.3;
+    }
+    .chip i {
+      display: inline-grid;
+      width: 13px;
+      height: 13px;
+      place-items: center;
+      border-radius: 50%;
+      color: #fff;
+      font-family: var(--font-bold);
+      font-size: 7px;
+      font-weight: 700;
+      font-style: normal;
+      transform: translateY(-1px);
+    }
+    .chip img {
+      width: 13px;
+      height: 13px;
+      object-fit: contain;
+      display: block;
+      transform: translateY(-1px);
+    }
+    .chip img.wide { width: auto; height: 11px; }
+    .tech .card h2 { font-size: 13px; }
+    .tech .card p { font-size: 10px; }
+    .layer-label {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      align-self: stretch;
+      padding: 8px;
+      border: 1px solid;
+      border-radius: 10px;
+      color: #203b58;
+      font-family: var(--font-bold);
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.2;
+      text-align: center;
+    }
+    .layer-label small {
+      display: block;
+      margin-top: 4px;
+      color: #536a81;
+      font-family: var(--font-light);
+      font-size: 9px;
+      font-weight: 300;
+      line-height: 1.35;
+    }
+    .entry { grid-column: 1; grid-row: 1; }
+    .entry + .arrow { grid-column: 1; grid-row: 2; }
+    .discovery { grid-column: 1; grid-row: 3; }
+    .discovery + .arrow { grid-column: 1; grid-row: 4; }
+    .security { grid-column: 1; grid-row: 5; }
+    .security + .arrow { grid-column: 1; grid-row: 6; }
+    .crawl { grid-column: 1; grid-row: 7; }
+    .crawl + .arrow { grid-column: 1; grid-row: 8; }
+    .distribute { grid-column: 1; grid-row: 9; }
+    .distribute + .arrow { grid-column: 1; grid-row: 10; }
+    .stats { grid-column: 1; grid-row: 11; }
+    .stats + .arrow { grid-column: 1; grid-row: 12; }
+    .tech { grid-column: 1; grid-row: 13; }
+    .layer-entry { grid-column: 2; grid-row: 1; border-color: #b2d5f8; background: linear-gradient(135deg, #e4f1ff, #f2f8ff); }
+    .layer-discovery { grid-column: 2; grid-row: 3; border-color: #a2dfe9; background: linear-gradient(135deg, #dcf6fb, #effcff); }
+    .layer-security { grid-column: 2; grid-row: 5; border-color: #f0b4be; background: linear-gradient(135deg, #ffe8ec, #fff5f1); }
+    .layer-crawl { grid-column: 2; grid-row: 7; border-color: #edd58f; background: linear-gradient(135deg, #fff4cf, #fffaf0); }
+    .layer-distribute { grid-column: 2; grid-row: 9; border-color: #b8dfb3; background: linear-gradient(135deg, #e5f7e5, #f5fff3); }
+    .layer-stats { grid-column: 2; grid-row: 11; border-color: #cfc1f1; background: linear-gradient(135deg, #eee9ff, #f8f6ff); }
+    .layer-tech { grid-column: 2; grid-row: 13; border-color: #cbd7e5; background: linear-gradient(135deg, #edf1f6, #fafcff); }
+    .arrow {
+      position: relative;
+      z-index: 4;
+      height: 100%;
+      overflow: visible;
+      background: transparent;
+    }
+    .arrow span {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      color: #276eaa;
+      font-family: var(--font-bold);
+      font-size: 24px;
+      font-weight: 700;
+      line-height: 1;
+      background: transparent;
+    }
+    @media print {
+      html, body { background: #fff; }
+      .slide { min-height: 0; padding: 8px 10px; }
+      .arrow,
+      .arrow span {
+        background: transparent;
+        text-shadow: none;
+        box-shadow: none;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+    }
+  </style>
+</head>
+<body>
+  <svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden">
+    <symbol id="i-newspaper" viewBox="0 0 24 24"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8"/><path d="M15 18h-5"/><path d="M10 6h8v4h-8V6Z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+    <symbol id="i-trending" viewBox="0 0 24 24"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></symbol>
+    <symbol id="i-mail" viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></symbol>
+    <symbol id="i-github" viewBox="0 0 24 24"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></symbol>
+    <symbol id="i-messages" viewBox="0 0 24 24"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></symbol>
+    <symbol id="i-library" viewBox="0 0 24 24"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></symbol>
+    <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/></symbol>
+    <symbol id="i-branch" viewBox="0 0 24 24"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></symbol>
+    <symbol id="i-calendar" viewBox="0 0 24 24"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/></symbol>
+  </svg>
+  <div class="stage">
+    <main class="slide">
+      <header>
+        <div class="eyebrow">OS NEWS TRACKER · TECHNICAL ARCHITECTURE</div>
+        <h1>OS News Tracker 技术架构</h1>
+        <p>信息入口 → 探查 → 安全 → 批量爬取 → 收集分发 → 统计发现 → 技术底座</p>
+      </header>
+
+      <div class="architecture-layout">
+        <div class="flow-stack">
+
+          <section class="band entry">
+            <div class="cards">
+              <article class="card focus">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-newspaper"/></svg></span>新闻流页面</h2>
+                <p>多源情报筛选、排序与关键词搜索</p>
+                <p>条目详情、来源追溯与重要性标注</p>
+              </article>
+              <article class="card">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-search"/></svg></span>站点发现页面</h2>
+                <p>智能探查与技术探查统一入口</p>
+                <p>待审核方式、方式库与运行限制管理</p>
+              </article>
+              <article class="card">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-trending"/></svg></span>趋势总结页面</h2>
+                <p>趋势工作台、故事线与趋势轮播</p>
+                <p>趋势设置与分发（管理密码解锁）</p>
+              </article>
+              <article class="card">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chart"/></svg></span>统计与发现页面</h2>
+                <p>Token 用量与每日消息量看板</p>
+                <p>查询 / 探查任务明细（管理密码解锁）</p>
+              </article>
+            </div>
+          </section>
+
+          <div class="arrow" aria-hidden="true"><span>↓</span></div>
+
+          <section class="band discovery">
+            <div class="discovery-stack">
+              <div class="module-group module-a">
+                <div class="module-title">智能探查模块<span class="module-sub">Single Agent Loop · RAG 经验库全程参与 · 20 分钟</span></div>
+                <svg class="discovery-flow" viewBox="0 0 1240 156" preserveAspectRatio="xMidYMid meet" role="img" aria-label="智能探查流程图" font-family="'TencentSans W3', TencentSansW3, '腾讯体 W3', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+                  <defs>
+                    <marker id="arrBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                      <path d="M0 0L10 5L0 10z" fill="#2475bd"/>
+                    </marker>
+                    <marker id="arrTeal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                      <path d="M0 0L10 5L0 10z" fill="#0e7490"/>
+                    </marker>
+                    <marker id="arrAmber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                      <path d="M0 0L10 5L0 10z" fill="#b54708"/>
+                    </marker>
+                  </defs>
+
+                  <rect x="430" y="6" width="140" height="34" rx="9" fill="#f0fdfa" stroke="#0e7490" stroke-width="1.4" stroke-dasharray="4 3"/>
+                  <text class="ttl" x="500" y="27" text-anchor="middle" font-size="12" fill="#0e7490">RAG 经验库</text>
+
+                  <path d="M430 23 H80 V54" fill="none" stroke="#0e7490" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#arrTeal)"/>
+                  <text class="cap" x="220" y="18" text-anchor="middle" font-size="9" fill="#0e7490">经验注入</text>
+                  <path d="M500 40 V54" fill="none" stroke="#0e7490" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#arrTeal)"/>
+                  <path d="M1112 62 V23 H570" fill="none" stroke="#0e7490" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#arrTeal)"/>
+                  <text class="cap" x="860" y="18" text-anchor="middle" font-size="9" fill="#0e7490">审核确认 · 经验沉淀</text>
+
+                  <rect x="172" y="48" width="676" height="68" rx="10" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="5 4"/>
+                  <rect x="186" y="43" width="108" height="13" rx="6" fill="#fcfcfd" stroke="#cbd5e1"/>
+                  <text class="cap" x="240" y="53" text-anchor="middle" font-size="8" fill="#475467">CONTROLLED LOOP</text>
+
+                  <g>
+                    <rect x="16" y="62" width="128" height="40" rx="8" fill="#ffffff" stroke="#2475bd" stroke-width="1.4"/>
+                    <text class="ttl" x="80" y="79" text-anchor="middle" font-size="12" fill="#203b58">Context</text>
+                    <text class="cap" x="80" y="93" text-anchor="middle" font-size="9" fill="#667085">目标与经验</text>
+                  </g>
+                  <g>
+                    <rect x="188" y="62" width="128" height="40" rx="8" fill="#ffffff" stroke="#2475bd" stroke-width="1.4"/>
+                    <text class="ttl" x="252" y="79" text-anchor="middle" font-size="12" fill="#203b58">Explore</text>
+                    <text class="cap" x="252" y="93" text-anchor="middle" font-size="9" fill="#667085">受控探查</text>
+                  </g>
+                  <g>
+                    <rect x="360" y="62" width="128" height="40" rx="8" fill="#ffffff" stroke="#2475bd" stroke-width="1.4"/>
+                    <text class="ttl" x="424" y="79" text-anchor="middle" font-size="12" fill="#203b58">Build</text>
+                    <text class="cap" x="424" y="93" text-anchor="middle" font-size="9" fill="#667085">编写连接器</text>
+                  </g>
+                  <g>
+                    <rect x="532" y="62" width="128" height="40" rx="8" fill="#ffffff" stroke="#2475bd" stroke-width="1.4"/>
+                    <text class="ttl" x="596" y="79" text-anchor="middle" font-size="12" fill="#203b58">Execute</text>
+                    <text class="cap" x="596" y="93" text-anchor="middle" font-size="9" fill="#667085">gVisor 实跑</text>
+                  </g>
+                  <g>
+                    <rect x="704" y="62" width="128" height="40" rx="8" fill="#ffffff" stroke="#2475bd" stroke-width="1.4"/>
+                    <text class="ttl" x="768" y="79" text-anchor="middle" font-size="12" fill="#203b58">Evaluate</text>
+                    <text class="cap" x="768" y="93" text-anchor="middle" font-size="9" fill="#667085">确定性验收</text>
+                  </g>
+                  <g>
+                    <rect x="876" y="62" width="128" height="40" rx="8" fill="#ffffff" stroke="#2475bd" stroke-width="1.4"/>
+                    <text class="ttl" x="940" y="79" text-anchor="middle" font-size="12" fill="#203b58">Package</text>
+                    <text class="cap" x="940" y="93" text-anchor="middle" font-size="9" fill="#667085">固化制品</text>
+                  </g>
+                  <g>
+                    <rect x="1048" y="62" width="128" height="40" rx="8" fill="#fffaeb" stroke="#f59e0b" stroke-width="1.4"/>
+                    <text class="ttl" x="1112" y="79" text-anchor="middle" font-size="12" fill="#92590b">Pending review</text>
+                    <text class="cap" x="1112" y="93" text-anchor="middle" font-size="9" fill="#a87c1f">等待人工审核</text>
+                  </g>
+
+                  <path d="M146 82 H182" fill="none" stroke="#2475bd" stroke-width="1.4" marker-end="url(#arrBlue)"/>
+                  <path d="M318 82 H354" fill="none" stroke="#2475bd" stroke-width="1.4" marker-end="url(#arrBlue)"/>
+                  <path d="M490 82 H526" fill="none" stroke="#2475bd" stroke-width="1.4" marker-end="url(#arrBlue)"/>
+                  <path d="M662 82 H698" fill="none" stroke="#2475bd" stroke-width="1.4" marker-end="url(#arrBlue)"/>
+                  <path d="M834 82 H870" fill="none" stroke="#2475bd" stroke-width="1.4" marker-end="url(#arrBlue)"/>
+                  <text class="cap" x="852" y="74" text-anchor="middle" font-size="8" fill="#059669">通过</text>
+                  <path d="M1006 82 H1042" fill="none" stroke="#2475bd" stroke-width="1.4" marker-end="url(#arrBlue)"/>
+
+                  <path d="M768 102 V136 H424 V106" fill="none" stroke="#b54708" stroke-width="1.3" stroke-dasharray="5 4" marker-end="url(#arrAmber)"/>
+                  <text class="cap" x="596" y="150" text-anchor="middle" font-size="9" fill="#b54708">验收失败 · Repair ↺ Build</text>
+                </svg>
+              </div>
+              <div class="module-group module-b">
+                <div class="module-title">技术探查模块<span class="module-sub">邮件列表 · GitHub 仓库</span></div>
+                <div class="cards">
+                  <article class="card">
+                    <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"/></svg></span>邮件探查</h2>
+                    <p>IMAP 连接管理 · Header 规则匹配 · 源发现入库</p>
+                  </article>
+                  <article class="card">
+                    <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-github"/></svg></span>GitHub 探查</h2>
+                    <p>仓库发现与估量 · Issue / Discussion 水位</p>
+                  </article>
+                  <article class="card">
+                    <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-messages"/></svg></span>讨论运行治理</h2>
+                    <p>增量抓取 · 事件流 · 手动停止与定时调度</p>
+                  </article>
+                  <article class="card">
+                    <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-library"/></svg></span>源与仓库台账</h2>
+                    <p>邮件源库 · GitHub 仓库库 · Token 监测</p>
+                  </article>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <div class="arrow" aria-hidden="true"><span>↓</span></div>
+
+          <section class="band security">
+            <div class="cards">
+              <article class="card focus">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-shield"/></svg></span>审核门禁</h2>
+                <p>爬取方式 / 邮件源 / 仓库：待审核 → 已启用</p>
+                <p>修复版本重新送审，绝不自动发布</p>
+              </article>
+              <article class="card">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-box"/></svg></span>沙箱隔离</h2>
+                <p>Docker + gVisor（runsc）临时容器执行</p>
+                <p>不静默回退普通 Docker，全局容量上限</p>
+              </article>
+              <article class="card">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-key"/></svg></span>制品校验与密钥隔离</h2>
+                <p>Manifest 路径、入口、校验和、允许域名</p>
+                <p>Connector 不接触数据库与后端密钥</p>
+              </article>
+              <article class="card">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-lock"/></svg></span>访问控制</h2>
+                <p>JWT 认证与管理密码解锁</p>
+                <p>页面级权限与接口输入约束</p>
+              </article>
+            </div>
+          </section>
+
+          <div class="arrow" aria-hidden="true"><span>↓</span></div>
+
+          <section class="band crawl">
+            <div class="cards">
+              <article class="card focus">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-globe"/></svg></span>网站爬取</h2>
+                <p>方式库 Connector 沙箱批量执行</p>
+                <p><span class="tag tag-manual">手动</span>一键批量 · 单方式　<span class="tag tag-auto">自动</span>晨间定时 · 巡检补跑</p>
+              </article>
+              <article class="card">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mail"/></svg></span>邮件爬取</h2>
+                <p>IMAP 增量收取 · Header 规则匹配</p>
+                <p><span class="tag tag-manual">手动</span>手动运行收取　<span class="tag tag-auto">自动</span>定时调度收取</p>
+              </article>
+              <article class="card">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-github"/></svg></span>GitHub 爬取</h2>
+                <p>Issue / Discussion · 评论水位</p>
+                <p><span class="tag tag-manual">手动</span>手动触发同步　<span class="tag tag-auto">自动</span>定时调度同步</p>
+              </article>
+              <article class="card">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-filter"/></svg></span>筛选整理</h2>
+                <p>normalize → relevance-filter → dedup → enrich</p>
+                <p>来源关联 · 幂等入库</p>
+              </article>
+              <article class="card">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sparkles"/></svg></span>趋势总结</h2>
+                <p>解释卡 · Embedding 向量 · 候选聚类</p>
+                <p>故事线与身份模板生成</p>
+              </article>
+            </div>
+          </section>
+
+          <div class="arrow" aria-hidden="true"><span>↓</span></div>
+
+          <section class="band distribute">
+            <div class="cards">
+              <article class="card focus">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-layers"/></svg></span>新闻信息组织</h2>
+                <p>统一 Item 情报库，网页新闻可检索、可追溯</p>
+                <p>标签实体、重要性、时间边界与来源关联</p>
+              </article>
+              <article class="card">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-branch"/></svg></span>技术讨论组织</h2>
+                <p>重建邮件与 GitHub 真实讨论关系</p>
+                <p>回复拓扑、候选分组与证据消息关联</p>
+              </article>
+              <article class="card">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-trending"/></svg></span>趋势信息组织</h2>
+                <p>趋势卡片与故事线轮播</p>
+                <p>候选聚类结果与趋势解释</p>
+              </article>
+              <article class="card">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-send"/></svg></span>邮件分发</h2>
+                <p>模板预览、即时发送</p>
+                <p>趋势分发、预定发送与巡检补发</p>
+              </article>
+            </div>
+          </section>
+
+          <div class="arrow" aria-hidden="true"><span>↓</span></div>
+
+          <section class="band stats">
+            <div class="cards">
+              <article class="card focus">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chart"/></svg></span>Token 用量总览</h2>
+                <p>总 / 输入 / 输出 Token 与模型调用次数</p>
+                <p>查询消耗 · 探查消耗分项统计</p>
+              </article>
+              <article class="card">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-activity"/></svg></span>消耗趋势分析</h2>
+                <p>每次探查 / 每次查询 / 单条均 Token</p>
+                <p>时间段趋势（柱状 / 面积切换）</p>
+              </article>
+              <article class="card">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-calendar"/></svg></span>每日消息量</h2>
+                <p>按入库日期分桶统计</p>
+                <p>高 / 中 / 低重要性堆叠分布</p>
+              </article>
+              <article class="card">
+                <h2><span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-list"/></svg></span>任务明细与筛选</h2>
+                <p>查询任务明细 · 探查任务明细</p>
+                <p>24h / 7d / 30d / 自定义 + 定时 / 手动</p>
+              </article>
+            </div>
+          </section>
+
+          <div class="arrow" aria-hidden="true"><span>↓</span></div>
+
+          <section class="band tech">
+            <div class="cards">
+              <article class="card">
+                <h2>模型与 Agent 技术</h2>
+                <div class="tech-chips">
+                  <span class="chip"><img src="icons/openai.svg" alt="">OpenAI 兼容 LLM</span>
+                  <span class="chip"><img src="icons/huggingface.svg" alt="">Embedding 向量</span>
+                  <span class="chip"><i style="background:#b45309">AL</i>Single Agent Loop</span>
+                </div>
+                <p>内部 LLM 网关 · 探查 Agent + 确定性 Pipeline</p>
+              </article>
+              <article class="card">
+                <h2>前端框架</h2>
+                <div class="tech-chips">
+                  <span class="chip"><img src="icons/react.svg" alt="">React 19</span>
+                  <span class="chip"><img src="icons/vite.svg" alt="">Vite</span>
+                  <span class="chip"><img src="icons/typescript.svg" alt="">TypeScript</span>
+                  <span class="chip"><img src="icons/tanstack.svg" alt="">TanStack Query</span>
+                  <span class="chip"><img src="icons/reactrouter.svg" alt="">React Router</span>
+                  <span class="chip"><img src="icons/apacheecharts.svg" alt="">ECharts</span>
+                </div>
+                <p>组件化 SPA · 服务端状态缓存 · 图表可视化</p>
+              </article>
+              <article class="card">
+                <h2>后端框架</h2>
+                <div class="tech-chips">
+                  <span class="chip"><img src="icons/python.svg" alt="">Python 3.11</span>
+                  <span class="chip"><img src="icons/fastapi.svg" alt="">FastAPI</span>
+                  <span class="chip"><img src="icons/sqlalchemy.svg" alt="">SQLAlchemy 2.0</span>
+                  <span class="chip"><i style="background:#795548">Al</i>Alembic</span>
+                  <span class="chip"><i style="background:#455a64">AP</i>APScheduler</span>
+                  <span class="chip"><img src="icons/pydantic.svg" alt="">Pydantic v2</span>
+                </div>
+                <p>REST API · ORM 与迁移 · 定时任务调度</p>
+              </article>
+              <article class="card">
+                <h2>数据与运行</h2>
+                <div class="tech-chips">
+                  <span class="chip"><img src="icons/postgresql.svg" alt="">PostgreSQL</span>
+                  <span class="chip"><img src="icons/docker.svg" alt="">Docker</span>
+                  <span class="chip"><img class="wide" src="icons/gvisor.png" alt="">gVisor</span>
+                  <span class="chip"><img src="icons/rss.svg" alt="">feedparser</span>
+                  <span class="chip"><img src="icons/scrapling.png" alt="">Scrapling</span>
+                  <span class="chip"><img src="icons/playwright.svg" alt="">Playwright</span>
+                  <span class="chip"><img src="icons/httpx.png" alt="">httpx</span>
+                  <span class="chip"><i style="background:#6d4c41">IM</i>IMAP</span>
+                </div>
+                <p>持久化 · 沙箱运行 · 多协议采集</p>
+              </article>
+            </div>
+          </section>
+
+        </div>
+        <aside class="layer-rail" aria-label="系统层级">
+          <div class="layer-label layer-entry">信息入口层<small>新闻流 · 站点发现<br>趋势总结 · 统计发现</small></div>
+          <div class="layer-label layer-discovery">探查层<small>智能探查<br>技术探查</small></div>
+          <div class="layer-label layer-security">安全层<small>审核 · 沙箱<br>校验 · 访问控制</small></div>
+          <div class="layer-label layer-crawl">批量爬取层<small>网站 / 邮件 / GitHub<br>手动 + 自动</small></div>
+          <div class="layer-label layer-distribute">收集和分发层<small>新闻 · 讨论 · 趋势<br>邮件分发</small></div>
+          <div class="layer-label layer-stats">统计与发现层<small>Token · 消息量<br>任务明细</small></div>
+          <div class="layer-label layer-tech">技术层<small>模型 · Agent<br>前后端与存储</small></div>
+        </aside>
+      </div>
+    </main>
+  </div>
+</body>
+</html>
