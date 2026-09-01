@@ -13,7 +13,9 @@ from enum import IntEnum
 from functools import lru_cache
 from pathlib import Path
 from threading import Condition, Event
-from typing import Any
+from typing import Any, Literal
+
+CapacityClass = Literal["default", "agent"]
 
 from app.config import get_settings
 from app.discovery.plugin.errors import ConnectorErrorCode, ConnectorProtocolError
@@ -29,6 +31,7 @@ class _Waiter:
     job_id: str
     priority: SandboxJobPriority
     cancel_event: Event
+    capacity_class: CapacityClass = "default"
 
 class CapacityLease:
     def __init__(self, queue: "CapacityQueue", job_id: str, priority: SandboxJobPriority) -> None:
@@ -49,13 +52,19 @@ class _HostCapacityBroker:
         self._prepare_root()
         self.lock_path, self.state_path = self.root / "broker.lock", self.root / "tickets.json"
 
-    def register(self, job_id: str, priority: SandboxJobPriority) -> None:
+    def register(
+        self,
+        job_id: str,
+        priority: SandboxJobPriority,
+        capacity_class: CapacityClass = "default",
+    ) -> None:
         with self._locked_state() as state:
             tickets = self._clean_dead(state["tickets"])
             if any(ticket["job_id"] == job_id for ticket in tickets):
                 raise ValueError(f"duplicate global sandbox job id: {job_id}")
             tickets.append({"job_id": job_id, "priority": int(priority), "enqueued_at": time.time(),
-                            "pid": self.pid, "start_token": self.start_token, "state": "pending"})
+                            "pid": self.pid, "start_token": self.start_token, "state": "pending",
+                            "capacity_class": capacity_class})
             state["tickets"] = tickets
 
     def try_claim(self, job_id: str) -> bool:
@@ -66,13 +75,24 @@ class _HostCapacityBroker:
             if target["state"] == "active": return True
             pending = [ticket for ticket in tickets if ticket["state"] == "pending"]
             active = [ticket for ticket in tickets if ticket["state"] == "active"]
-            discovery_active = sum(ticket["priority"] in {2, 3} for ticket in active)
+            discovery_active = sum(
+                ticket["priority"] in {2, 3} and ticket.get("capacity_class") != "agent"
+                for ticket in active
+            )
+            agent_active = sum(ticket.get("capacity_class") == "agent" for ticket in active)
             if len(active) >= self.capacity:
                 state["tickets"] = tickets; return False
             eligible = [
                 ticket for ticket in pending
-                if ticket["priority"] not in {2, 3}
-                or discovery_active < self.discovery_capacity
+                if (
+                    (ticket["priority"] not in {2, 3} or discovery_active < self.discovery_capacity)
+                    # A retained OpenHands workspace may never consume the
+                    # final global slot: its host Execute must stay eligible.
+                    and (
+                        ticket.get("capacity_class") != "agent"
+                        or agent_active < self.capacity - 1
+                    )
+                )
             ]
             if not eligible or min(eligible, key=self._sort_key) is not target:
                 state["tickets"] = tickets; return False
@@ -178,13 +198,25 @@ class CapacityQueue:
         self._condition, self._waiting, self._active = Condition(), {}, {}
         self._broker = _HostCapacityBroker(get_settings().discovery_sandbox_capacity_lock_root,
                                            capacity=self.capacity, discovery_capacity=self.discovery_capacity)
-    def acquire(self, job_id: str, priority: SandboxJobPriority, cancel_event: Event) -> CapacityLease:
-        waiter = _Waiter(job_id, priority, cancel_event)
+    def acquire(
+        self,
+        job_id: str,
+        priority: SandboxJobPriority,
+        cancel_event: Event,
+        *,
+        capacity_class: CapacityClass = "default",
+    ) -> CapacityLease:
+        if capacity_class == "agent" and self.capacity < 2:
+            raise ConnectorProtocolError(
+                ConnectorErrorCode.RUNTIME_ERROR,
+                "OpenHands requires at least two global sandbox slots",
+            )
+        waiter = _Waiter(job_id, priority, cancel_event, capacity_class)
         with self._condition:
             if job_id in self._waiting or job_id in self._active: raise ValueError(f"duplicate sandbox execution id: {job_id}")
             self._waiting[job_id] = waiter
         try:
-            self._broker.register(job_id, priority)
+            self._broker.register(job_id, priority, capacity_class)
             while True:
                 if cancel_event.is_set(): raise ConnectorProtocolError(ConnectorErrorCode.CANCELLED, "sandbox execution was cancelled while queued")
                 if self._broker.try_claim(job_id):

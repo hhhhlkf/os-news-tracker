@@ -102,16 +102,15 @@ def _admit_reviewed_method_experiences(
         domain=urlsplit(manifest.entry).hostname,
         technical_features={
             **source_profile,
-            "strategy": {
-                "extraction": exploration.get("extraction_strategy"),
-                "pagination": exploration.get("pagination_strategy"),
-                "summary_validation": exploration.get("summary_validation"),
-                "supports_pagination": exploration.get("supports_pagination"),
-            },
+            "explore_session": (
+                exploration.get("explore_session", {}).get("evidence")
+                if isinstance(exploration.get("explore_session"), dict)
+                else None
+            ),
         },
         summary=(
-            f"已验证并人工批准的 Explore 规范：{manifest.connector_key} v{manifest.version}；"
-            "包含来源特征、正文提取证据和分页状态转换证据。"
+            f"已验证并人工批准的 Explore 会话：{manifest.connector_key} v{manifest.version}；"
+            "包含固定 gVisor 页面观察与来源特征。"
         ),
         failure_summary=None,
         repair_summary=None,
@@ -124,10 +123,11 @@ def _admit_reviewed_method_experiences(
         domain=urlsplit(manifest.entry).hostname,
         technical_features={
             **source_profile,
-            "verified_strategy": {
-                "extraction": exploration.get("extraction_strategy"),
-                "pagination": exploration.get("pagination_strategy"),
-            },
+            "explore_session": (
+                exploration.get("explore_session", {}).get("evidence")
+                if isinstance(exploration.get("explore_session"), dict)
+                else None
+            ),
             "implementation_pattern": _connector_implementation_pattern(artifact.connector_path),
             "connector_contract": {
                 "entry_field": "request.entry",
@@ -139,7 +139,7 @@ def _admit_reviewed_method_experiences(
         },
         summary=(
             f"已审核的 Build 模式：{manifest.connector_key} v{manifest.version}；"
-            "记录真实 Explore 策略如何落实为确定性 Python Connector。"
+            "记录固定 Explore 会话观察如何落实为确定性 Python Connector。"
         ),
         failure_summary=None,
         repair_summary=None,

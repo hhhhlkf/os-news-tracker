@@ -16,7 +16,7 @@ function SourceRow({ item }: { item: MailPreviewItem }): ReactNode {
       }}
     >
       {item.item_kind === "discussion" && (
-        <span style={{ fontSize: 11, borderRadius: 999, padding: "2px 7px", background: "#ecfdf3", color: "#067647", fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>
+        <span style={{ fontSize: 11, borderRadius: 999, padding: "2px 7px", background: "#ecf2f1", color: "#3d6b62", fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>
           社区技术讨论
         </span>
       )}

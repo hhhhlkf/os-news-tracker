@@ -23,6 +23,7 @@ from app.discovery.method_keys import (
     crawl_method_domain_key,
     is_feed_recipe,
     normalized_feed_domain_key,
+    normalized_website_domain_key,
 )
 from app.discovery.plugin.artifact import (
     CONNECTOR_FILENAME,
@@ -47,7 +48,8 @@ def connector_key_for_url(site_url: str) -> str:
     stem = re.sub(r"[^a-z0-9]+", "_", host).strip("_")[:45]
     if len(stem) < 2:
         stem = f"site_{stem or 'web'}"
-    return f"{stem}_{hashlib.sha256(host.encode()).hexdigest()[:8]}"[:64]
+    identity = normalized_website_domain_key(site_url)
+    return f"{stem}_{hashlib.sha256(identity.encode()).hexdigest()[:8]}"[:64]
 
 
 def write_trial_artifact(
@@ -59,6 +61,7 @@ def write_trial_artifact(
     runtime_version: str,
     connector_key: str | None = None,
     version: int = 1,
+    time_semantics: str = "publication",
     settings: Settings | None = None,
 ) -> ConnectorArtifact:
     settings = settings or get_settings()
@@ -78,6 +81,7 @@ def write_trial_artifact(
         runtime_version=runtime_version,
         checksum=compute_connector_checksum(source_bytes),
         allowed_domains=tuple(allowed_domains),
+        time_semantics=time_semantics,
     )
     _write_exclusive(version_dir / CONNECTOR_FILENAME, source_bytes)
     _write_exclusive(
@@ -423,7 +427,10 @@ def recover_stale_packaging_artifacts(session: Session, *, settings: Settings | 
             discard_packaging_method(session, method.id)
             recovered += 1
     recovered += _remove_orphan_staging_directories(root)
-    recovered += _remove_unreferenced_final_site_artifacts(session, root)
+    # Final connector versions are user-managed artifacts.  A startup cannot
+    # safely infer that a version missing from this database is disposable:
+    # another environment may intentionally own it.  Only UUID staging paths
+    # created by an interrupted packaging invocation are recovered here.
     session.commit()
     return recovered
 

@@ -29,6 +29,7 @@ def run_method(
     cancel_event: Event | None = None,
     allow_legacy_compatibility: bool = False,
     request_parameters: dict[str, Any] | None = None,
+    execution_metadata_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict:
     """Execute a plugin; legacy recipes require an audited migration caller."""
     if recipe.get("recipe_type") == "python_plugin":
@@ -41,6 +42,7 @@ def run_method(
             job_id=sandbox_job_id,
             cancel_event=cancel_event,
             request_parameters=request_parameters,
+            execution_metadata_callback=execution_metadata_callback,
         )
     if not allow_legacy_compatibility:
         raise ValueError("website/WeChat DSL execution is migration-only")
@@ -57,6 +59,7 @@ def _run_python_plugin(
     job_id: str | None,
     cancel_event: Event | None,
     request_parameters: dict[str, Any] | None,
+    execution_metadata_callback: Callable[[dict[str, Any]], None] | None,
 ) -> dict[str, Any]:
     """Execute an approved manifest deterministically in gVisor; never use DSL/LLM."""
     if cancel_event is not None and cancel_event.is_set():
@@ -128,6 +131,22 @@ def _run_python_plugin(
             "sandbox_completed",
             {"connector_version": manifest.version, "elapsed_seconds": result.elapsed_seconds},
         )
+    if execution_metadata_callback is not None:
+        from app.discovery.sandbox.runtime import validate_runtime_attestation
+
+        attestation = validate_runtime_attestation(result.attestation.as_dict())
+        if (
+            attestation.artifact_checksum != manifest.checksum
+            or attestation.artifact_signature != artifact.signature
+            or attestation.connector_key != manifest.connector_key
+            or attestation.connector_version != manifest.version
+            or attestation.purpose != "formal"
+        ):
+            raise ValueError("formal connector runtime attestation does not bind the manifest")
+        execution_metadata_callback({
+            "time_semantics": manifest.time_semantics,
+            "host_observed_at": attestation.completed_at,
+        })
     return result.output.model_dump(mode="json")
 
 

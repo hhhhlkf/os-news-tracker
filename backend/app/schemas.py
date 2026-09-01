@@ -120,7 +120,11 @@ MailProviderKind = Literal["tof4", "smtp"]
 
 
 class MailFilterSnapshot(BaseModel):
+    # `q` is retained for older saved templates.  New filter snapshots use
+    # independent keyword conditions so a keyword may itself contain spaces.
     q: str | None = None
+    keywords: list[str] = Field(default_factory=list)
+    strict_title: bool = False
     main_category: str | None = None
     info_type: str | None = None
     importance: str | None = None

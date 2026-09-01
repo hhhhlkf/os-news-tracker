@@ -1,14 +1,19 @@
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urljoin, urlparse
 
-from sqlalchemy import case, func, or_, select, update
+from sqlalchemy import String, case, cast, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.discovery.quality_audit import calculate_overall_score
 from app.models import (
     CrawlMethod,
+    DiscussionGroup,
+    DiscussionGroupThread,
+    DiscussionMessage,
+    Entity,
     Item,
+    ItemEntity,
     ItemSource,
     ItemTag,
     MailDelivery,
@@ -472,11 +477,82 @@ class MailService:
         seen: set[str] = set()
         for part in str(raw).split(","):
             value = part.strip()
-            if not value or value in seen:
+            normalized = value.casefold()
+            if not value or normalized in seen:
                 continue
-            seen.add(value)
+            seen.add(normalized)
             values.append(value)
         return values
+
+    @staticmethod
+    def _search_terms(snapshot: MailFilterSnapshot) -> list[str]:
+        terms: list[str] = []
+        seen: set[str] = set()
+        for candidate in [snapshot.q, *snapshot.keywords]:
+            value = (candidate or "").strip()
+            normalized = value.casefold()
+            if not value or normalized in seen:
+                continue
+            seen.add(normalized)
+            terms.append(value)
+        return terms
+
+    @staticmethod
+    def _item_matches_search_term(term: str):
+        source_matches = or_(
+            Source.name.icontains(term, autoescape=True),
+            Source.url.icontains(term, autoescape=True),
+            Source.vendor.icontains(term, autoescape=True),
+        )
+        return or_(
+            Item.title.icontains(term, autoescape=True),
+            Item.title_tldr.icontains(term, autoescape=True),
+            Item.summary.icontains(term, autoescape=True),
+            Item.url.icontains(term, autoescape=True),
+            Item.main_category.icontains(term, autoescape=True),
+            Item.info_type.icontains(term, autoescape=True),
+            Item.importance.icontains(term, autoescape=True),
+            cast(Item.key_points, String).icontains(term, autoescape=True),
+            Item.raw_content.icontains(term, autoescape=True),
+            Item.clean_content.icontains(term, autoescape=True),
+            Item.why_it_matters.icontains(term, autoescape=True),
+            Item.os_insight.icontains(term, autoescape=True),
+            Item.source_id.in_(select(Source.id).where(source_matches)),
+            Item.id.in_(
+                select(ItemSource.item_id)
+                .join(Source, Source.id == ItemSource.source_id)
+                .where(or_(source_matches, ItemSource.url.icontains(term, autoescape=True)))
+            ),
+            Item.id.in_(
+                select(ItemEntity.item_id)
+                .join(Entity, Entity.id == ItemEntity.entity_id)
+                .where(or_(Entity.name.icontains(term, autoescape=True), Entity.type.icontains(term, autoescape=True)))
+            ),
+            Item.id.in_(
+                select(DiscussionGroup.item_id)
+                .join(DiscussionGroupThread, DiscussionGroupThread.group_id == DiscussionGroup.id)
+                .join(DiscussionMessage, DiscussionMessage.thread_id == DiscussionGroupThread.thread_id)
+                .where(DiscussionMessage.subject.icontains(term, autoescape=True))
+            ),
+            Item.id.in_(
+                select(ItemTag.item_id)
+                .join(Tag, Tag.id == ItemTag.tag_id)
+                .where(or_(Tag.name.icontains(term, autoescape=True), Tag.kind.icontains(term, autoescape=True)))
+            ),
+        )
+
+    @staticmethod
+    def _item_matches_title_term(term: str):
+        return or_(
+            Item.title.icontains(term, autoescape=True),
+            Item.title_tldr.icontains(term, autoescape=True),
+            Item.id.in_(
+                select(DiscussionGroup.item_id)
+                .join(DiscussionGroupThread, DiscussionGroupThread.group_id == DiscussionGroup.id)
+                .join(DiscussionMessage, DiscussionMessage.thread_id == DiscussionGroupThread.thread_id)
+                .where(DiscussionMessage.subject.icontains(term, autoescape=True))
+            ),
+        )
 
     def _build_item_stmt(self, snapshot: MailFilterSnapshot):
         stmt = select(Item).where(visible_item_clause())
@@ -514,9 +590,10 @@ class MailService:
                     ),
                 )
             )
-        if snapshot.q:
-            like = f"%{snapshot.q}%"
-            stmt = stmt.where((Item.title.ilike(like)) | (Item.summary.ilike(like)))
+        search_terms = self._search_terms(snapshot)
+        if search_terms:
+            matcher = self._item_matches_title_term if snapshot.strict_title else self._item_matches_search_term
+            stmt = stmt.where(or_(*(matcher(term) for term in search_terms)))
 
         published_after, published_before = self._resolve_datetime_boundaries(
             after_mode=snapshot.published_after_mode,

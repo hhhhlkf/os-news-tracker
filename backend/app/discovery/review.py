@@ -86,7 +86,7 @@ def _approve_methods_locked(
         db.scalars(select(CrawlMethod.domain).where(CrawlMethod.id.in_(method_ids)))
     )
     if len(requested_domains) != len(set(requested_domains)):
-        raise ValueError("one approval batch cannot contain multiple versions of the same domain")
+        raise ValueError("one approval batch cannot contain multiple versions of the same entry URL")
     db.rollback()
     from app.discovery.domain_transition import domain_transition_locks
 

@@ -13,7 +13,7 @@ from app.discovery.plugin.contracts import ConnectorOutput
 from app.discovery.sandbox.runtime import SandboxExecutionResult, canonical_connector_digest
 
 
-PLUGIN_AUDIT_SCHEMA_VERSION = 1
+PLUGIN_AUDIT_SCHEMA_VERSION = 2
 
 
 def audit_discovery_recipe(

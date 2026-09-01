@@ -54,17 +54,23 @@ def _parse_tech_highlight(text: str) -> tuple[str | None, str]:
 def _build_header_summary(filters: dict) -> str:
     segments: list[str] = []
     if filters.get("item_kind") == "discussion":
-        segments.append("技术讨论")
+        segments.append("条目类型：技术讨论")
     elif filters.get("item_kind") == "news":
-        segments.append("新闻")
+        segments.append("条目类型：新闻")
     if filters.get("main_category"):
-        segments.append(str(filters["main_category"]))
+        segments.append(f"主分类：{filters['main_category']}")
+    if filters.get("info_type"):
+        segments.append(f"信息类型：{filters['info_type']}")
     if filters.get("importance"):
-        segments.append(str(filters["importance"]))
+        segments.append(f"重要程度：{filters['importance']}")
     if filters.get("sub_tag"):
-        segments.append(str(filters["sub_tag"]))
-    if filters.get("q"):
-        segments.append(str(filters["q"]))
+        segments.append(f"技术热点：{filters['sub_tag']}")
+    keywords = [str(value).strip() for value in (filters.get("keywords") or []) if str(value).strip()]
+    if filters.get("q") and str(filters["q"]).strip() not in keywords:
+        keywords.append(str(filters["q"]).strip())
+    if keywords:
+        scope = "仅标题，" if filters.get("strict_title") else ""
+        segments.append(f"关键词筛选（{scope}任一命中）：{' / '.join(keywords)}")
 
     def _time_label(prefix: str) -> str:
         label = "全部时间"
@@ -388,7 +394,7 @@ def render_mail_html(context: dict) -> str:
         <header style="background:linear-gradient(135deg,#101828 0%,#1f2937 100%);color:#f8fafc;border-radius:18px;padding:24px 28px;margin-bottom:18px;">
           <div style="font-size:12px;color:#98a2b3;margin-bottom:8px;">OS News Tracker</div>
           <h1 style="margin:0 0 8px;font-size:28px;line-height:1.2;">{subject}</h1>
-          <p style="margin:0;color:#d0d5dd;font-size:14px;line-height:1.7;">筛选条件：{escape(summary_text)}<br/>共 {len(items)} 条，按当前筛选生成。点击右上角可展开单条详情。</p>
+          <p style="margin:0;color:#d0d5dd;font-size:14px;line-height:1.7;"><strong style="color:#f8fafc;">筛选条件：</strong>{escape(summary_text)}<br/>共 {len(items)} 条，按当前筛选生成。点击右上角可展开单条详情。</p>
         </header>
         {cards_html if cards_by_category else '<section style="background:#fff;border:1px dashed #d0d5dd;border-radius:14px;padding:24px;color:#667085;">当前筛选下暂无可发送新闻。</section>'}
         {notice_html}

@@ -18,6 +18,8 @@ export const demoItems: ItemDetail[] = [
       "[适用场景] 对通用服务型节点更有参考价值",
     ],
     llm_confidence: 0.93,
+    why_it_matters: "调度尾延迟下降会直接改善混部节点上的服务质量，适合对照当前内核版本评估是否跟进。",
+    os_insight: "可关注 wakeup path 与 task placement 的取舍，评估对通用服务节点的可移植性。",
     sub_tags: ["kernel", "scheduler", "latency"],
     source_links: [{ source_id: 1, url: "https://example.com/kernel-scheduler-update" }],
   },

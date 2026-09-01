@@ -11,23 +11,35 @@ import {
 const EDGE_Y_PX = 88;
 type ArrowZone = "up" | "down" | null;
 
+export type DeckModule = { id: string; label: string; hint?: string };
+
 export const HOME_MODULES = [
   { id: "news", label: "新闻", hint: "条目列表" },
-  { id: "trends", label: "趋势", hint: "热点轮播" },
-  { id: "ops", label: "订阅", hint: "邮件与抓取" },
-] as const;
+] as const satisfies readonly DeckModule[];
+
+export const DISCOVERY_MODULES = [
+  { id: "probe", label: "探查", hint: "智能与技术探查" },
+  { id: "library", label: "抓取", hint: "爬取方式库" },
+] as const satisfies readonly DeckModule[];
 
 export function homeModuleIndex(id: (typeof HOME_MODULES)[number]["id"]): number {
   return HOME_MODULES.findIndex((module) => module.id === id);
 }
 
+export function discoveryModuleIndex(id: (typeof DISCOVERY_MODULES)[number]["id"]): number {
+  return DISCOVERY_MODULES.findIndex((module) => module.id === id);
+}
+
 export const HOME_DECK_SLIDE_MS = 620;
 
 interface Props {
+  modules?: readonly DeckModule[];
   index: number;
   onIndexChange: (index: number) => void;
   /** Freeze wheel/keyboard paging while a modal owns the screen. */
   locked?: boolean;
+  railLabel?: string;
+  className?: string;
   children: ReactNode;
 }
 
@@ -68,7 +80,15 @@ function canScrollFurther(el: HTMLElement, deltaY: number): boolean {
   return el.scrollTop > 1;
 }
 
-export function HomeModuleDeck({ index, onIndexChange, locked = false, children }: Props) {
+export function HomeModuleDeck({
+  modules = HOME_MODULES,
+  index,
+  onIndexChange,
+  locked = false,
+  railLabel = "首页模块",
+  className,
+  children,
+}: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const lockUntilRef = useRef(0);
   const indexRef = useRef(index);
@@ -77,6 +97,7 @@ export function HomeModuleDeck({ index, onIndexChange, locked = false, children 
   const panels = Children.toArray(children);
   const count = panels.length;
   const safeIndex = clampIndex(index, count);
+  const resolvedModules = modules;
 
   indexRef.current = safeIndex;
   lockedRef.current = locked;
@@ -154,11 +175,11 @@ export function HomeModuleDeck({ index, onIndexChange, locked = false, children 
     }
   };
 
-  const prev = HOME_MODULES[safeIndex - 1];
-  const next = HOME_MODULES[safeIndex + 1];
+  const prev = resolvedModules[safeIndex - 1];
+  const next = resolvedModules[safeIndex + 1];
 
   return (
-    <div ref={rootRef} className="home-deck" aria-roledescription="竖向轮播">
+    <div ref={rootRef} className={className ? `home-deck ${className}` : "home-deck"} aria-roledescription="竖向轮播">
       <div
         className="home-deck-track"
         style={{
@@ -168,19 +189,19 @@ export function HomeModuleDeck({ index, onIndexChange, locked = false, children 
       >
         {panels.map((panel, panelIndex) => (
           <section
-            key={HOME_MODULES[panelIndex]?.id ?? panelIndex}
+            key={resolvedModules[panelIndex]?.id ?? panelIndex}
             className="home-module"
             style={{ flex: `1 0 ${100 / Math.max(count, 1)}%`, height: `${100 / Math.max(count, 1)}%` }}
             aria-hidden={panelIndex !== safeIndex}
-            aria-label={HOME_MODULES[panelIndex]?.label}
+            aria-label={resolvedModules[panelIndex]?.label}
           >
             {panel}
           </section>
         ))}
       </div>
 
-      <div className="home-module-rail" aria-label="首页模块">
-        {HOME_MODULES.slice(0, count).map((module, moduleIndex) => (
+      <div className="home-module-rail" aria-label={railLabel}>
+        {resolvedModules.slice(0, count).map((module, moduleIndex) => (
           <button
             key={module.id}
             type="button"

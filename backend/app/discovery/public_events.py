@@ -15,6 +15,7 @@ MAX_PUBLIC_DIFF_CHARS = 40_000
 MAX_PUBLIC_SAMPLES = 12
 MAX_PUBLIC_TEXT_CHARS = 2_000
 MAX_PUBLIC_PAYLOAD_BYTES = 64 * 1024
+_PUBLIC_PHASES = frozenset({"context", "explore", "build", "execute", "evaluate", "repair", "package"})
 _PRIVATE_LABEL_RE = re.compile(
     r"(?i)\b(?:runtime_attestations?|auxiliary_proofs?|host_proof|nonce|runtime_binary|"
     r"invocation|reviewer_reason|key_id|signing_key_id)\b\s*[:=]\s*[^\s,;}]+"
@@ -23,13 +24,10 @@ _HOST_PATH_RE = re.compile(
     r"(?<![:/])/(?:home|root|tmp|var|etc|usr|opt|srv|data|workspace|app)"
     r"(?:/[A-Za-z0-9._-]+)+"
 )
-_INTERNAL_EVIDENCE_OMITTED = "[internal evidence omitted]"
-_HARD_PRIVATE_WORD_RE = re.compile(r"(?i)\bcredentials?\b")
-_HARD_PRIVATE_TERMS = (
-    "proof", "hostproof", "attestation", "auxiliaryproof", "nonce", "runtimebinary",
-    "invocation", "keyid", "signingkeyid", "reviewerreason", "runtimepath",
-    "hostpath", "artifactpath", "checkpointpath", "keyringpath",
-    "chainofthought", "privatereasoning", "reasoningcontent", "thoughts",
+_PRIVATE_REASONING_TEXT_RE = re.compile(
+    r"(?i)\b(?:chain[_\s-]*of[_\s-]*thought|private[_\s-]*reasoning|"
+    r"reasoning[_\s-]*content|raw[_\s-]*model[_\s-]*response|thoughts?)\b"
+    r"\s*[:=]\s*(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\r\n]+)"
 )
 _SAFE_CREDENTIAL_CODE_RE = re.compile(
     r"(?i)\b(?:next[_-]?token|password|passwd|token|secret|api[_-]?key|authorization|"
@@ -45,19 +43,25 @@ _CREDENTIAL_PROSE_VALUE_RE = re.compile(
 PUBLIC_EVENT_TYPES = frozenset(
     {
         "agent_draft_rejected",
+        "agent_turn_timeout",
         "artifact_pending_review",
         "artifact_rejected",
         "connector_written",
         "evaluation_completed",
         "evaluation_processing_failed",
         "execution_evidence_processing_failed",
+        "field_smoke_failed",
         "explore_action_selected",
         "explore_probe_step",
         "explore_tool_observation",
         "formal_failure_evidence",
+        "openhands_action_event",
         "phase_changed",
         "rag_retrieved",
         "rag_unavailable",
+        "repair_attempt_recorded",
+        "repair_attempt_limit_reached",
+        "repair_noop_rejected",
         "resume_dispatched",
         "resume_queued",
         "run_cancelled",
@@ -81,13 +85,6 @@ def _text(value: object, *, limit: int = MAX_PUBLIC_TEXT_CHARS) -> str:
             return f"structured summary ({len(value)} entries)"
         return "structured summary"
     raw = str(value)
-    normalized = re.sub(r"[^a-z0-9]+", "", raw.casefold())
-    if _HARD_PRIVATE_WORD_RE.search(raw) or any(term in normalized for term in _HARD_PRIVATE_TERMS):
-        return _INTERNAL_EVIDENCE_OMITTED
-    if "audit" in normalized and ("invocation" in normalized or "output" in normalized):
-        return _INTERNAL_EVIDENCE_OMITTED
-    if _HOST_PATH_RE.search(raw):
-        return _INTERNAL_EVIDENCE_OMITTED
     # The persistence redactor is intentionally broad.  Preserve references to
     # credential-shaped *field names* in safe code expressions, while still
     # applying it first to every other fragment and never restoring a literal.
@@ -107,6 +104,7 @@ def _text(value: object, *, limit: int = MAX_PUBLIC_TEXT_CHARS) -> str:
     for marker, safe_code in protected.items():
         cleaned = cleaned.replace(marker, safe_code)
     cleaned = _PRIVATE_LABEL_RE.sub("[private runtime field]", cleaned)
+    cleaned = _PRIVATE_REASONING_TEXT_RE.sub("[private reasoning]", cleaned)
     cleaned = _HOST_PATH_RE.sub("[private path]", cleaned)
     return cleaned[:limit]
 
@@ -120,7 +118,10 @@ def _failure_samples(value: object) -> list[dict[str, Any]]:
             samples.append({"summary": _text(raw, limit=500)})
             continue
         sample: dict[str, Any] = {}
-        for key in ("check", "passed", "message", "error", "reason", "count", "expected", "actual"):
+        for key in (
+            "check", "passed", "message", "error", "reason", "count", "expected", "actual",
+            "candidate_count", "rejected_count", "requested_target_count", "diagnosis", "repair_hint",
+        ):
             if key not in raw:
                 continue
             item = raw[key]
@@ -140,6 +141,25 @@ def _count(value: object) -> int:
         return min(1_000_000, max(0, int(value or 0)))
     except (TypeError, ValueError, OverflowError):
         return 0
+
+
+def _public_timing_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """Allow only bounded, mechanism-independent elapsed-time metadata."""
+    projected: dict[str, Any] = {}
+    for key in (
+        "active_execution_elapsed_seconds",
+        "completed_phase_elapsed_seconds",
+        "phase_elapsed_seconds",
+        "queue_wait_seconds",
+    ):
+        value = payload.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            projected[key] = min(86_400.0, max(0.0, round(float(value), 3)))
+    for key in ("completed_phase", "timed_phase"):
+        value = payload.get(key)
+        if isinstance(value, str) and value in _PUBLIC_PHASES:
+            projected[key] = value
+    return projected
 
 
 def _sandbox_log_samples(events: object) -> list[dict[str, str]]:
@@ -208,7 +228,9 @@ def _public_error_fields(error: Any) -> dict[str, Any]:
 
 def _project_payload(event_type: str, payload: dict[str, Any]) -> dict[str, Any] | None:
     projected: dict[str, Any] = {}
-    if event_type == "phase_changed":
+    if event_type == "openhands_action_event":
+        projected.update(payload)
+    elif event_type == "phase_changed":
         if payload.get("source_kind") in {"website", "wechat", "internal_forum", "unknown"}:
             projected["source_kind"] = payload["source_kind"]
     elif event_type == "rag_retrieved":
@@ -225,7 +247,7 @@ def _project_payload(event_type: str, payload: dict[str, Any]) -> dict[str, Any]
             projected["code_diff"] = _text(payload["code_diff"], limit=MAX_PUBLIC_DIFF_CHARS)
         if isinstance(payload.get("allowed_domains"), list):
             projected["allowed_domain_count"] = len(payload["allowed_domains"])
-    elif event_type in {"evaluation_completed", "wechat_evaluation_completed"}:
+    elif event_type in {"evaluation_completed", "wechat_evaluation_completed", "field_smoke_failed"}:
         if isinstance(payload.get("passed"), bool):
             projected["passed"] = payload["passed"]
         failures = _failure_samples(payload.get("failures"))
@@ -279,6 +301,32 @@ def _project_payload(event_type: str, payload: dict[str, Any]) -> dict[str, Any]
             projected.update(_public_error_fields(payload["error"]))
         elif payload.get("result") is not None:
             projected["observation_summary"] = _text(payload["result"], limit=800)
+    elif event_type == "agent_turn_timeout":
+        if payload.get("stage") in {"build", "repair"}:
+            projected["stage"] = payload["stage"]
+        for key in ("limit_seconds", "elapsed_seconds"):
+            if isinstance(payload.get(key), (int, float)):
+                projected[key] = max(0, float(payload[key]))
+        if payload.get("error") is not None:
+            projected["error_summary"] = _text(payload["error"], limit=1_000)
+    elif event_type in {
+        "repair_attempt_recorded",
+        "repair_attempt_limit_reached",
+        "repair_noop_rejected",
+    }:
+        for key in (
+            "repair_attempts",
+            "effective_repair_attempts",
+            "max_repair_attempts",
+        ):
+            if isinstance(payload.get(key), int):
+                projected[key] = _count(payload[key])
+        failures = _failure_samples(payload.get("failures"))
+        projected["failure_count"] = len(payload.get("failures") or []) if isinstance(payload.get("failures"), list) else 0
+        if failures:
+            projected["failures"] = failures
+        if payload.get("error") is not None:
+            projected.update(_public_error_fields(payload["error"]))
     elif event_type in {
         "run_failed",
         "sandbox_execution_failed",
@@ -313,6 +361,7 @@ def _project_payload(event_type: str, payload: dict[str, Any]) -> dict[str, Any]
     elif event_type in {"resume_queued", "resume_dispatched", "run_interrupted", "run_cancelled"}:
         if isinstance(payload.get("checkpoint_available"), bool):
             projected["checkpoint_available"] = payload["checkpoint_available"]
+    projected.update(_public_timing_fields(payload))
     if not projected:
         return None
     redacted = redact_discovery_data(projected)

@@ -135,10 +135,11 @@ function formatDuration(seconds: number | undefined): string {
   return `${Math.floor(safe / 60)}m ${String(safe % 60).padStart(2, "0")}s`;
 }
 
-export function DiscoveryFlowChart({ run, onSelectNode, selectedNode }: {
+export function DiscoveryFlowChart({ run, onSelectNode, selectedNode, compact = false }: {
   run: DiscoveryRun;
   onSelectNode?: (id: DiscoveryPhaseId) => void;
   selectedNode?: DiscoveryPhaseId | null;
+  compact?: boolean;
 }) {
   const notStarted = run.id <= 0;
   const sourceLabel = run.source_kind === "wechat"
@@ -149,7 +150,7 @@ export function DiscoveryFlowChart({ run, onSelectNode, selectedNode }: {
   const statusLabel = notStarted
     ? "未启动"
     : `${run.status}${run.queue_position != null ? ` · queue #${run.queue_position}` : ""}`;
-  const phaseButton = (phase: (typeof PHASES)[number], width = 190) => {
+  const phaseButton = (phase: (typeof PHASES)[number], width = compact ? 168 : 190) => {
     const state = phaseState(run, phase.id);
     const stateLabel = phase.id === "pending_review" && run.status === "completed" && run.resulting_method_id
       ? run.review_status === "approved"
@@ -172,35 +173,35 @@ export function DiscoveryFlowChart({ run, onSelectNode, selectedNode }: {
       aria-pressed={selectedNode === phase.id}
       style={{
         ...getNodeBoxVisualStyle({ state, isAgent: false }),
-        minHeight: 50,
-        padding: "5px 10px",
+        minHeight: compact ? 38 : 50,
+        padding: compact ? "3px 8px" : "5px 10px",
         cursor: "pointer",
         outline: selectedNode === phase.id ? `3px solid ${selectedOutline}` : "none",
         fontFamily: "inherit",
         width,
       }}
     >
-      <div style={{ fontSize: 12, fontWeight: 800 }}>{phase.label}</div>
-      <div style={{ marginTop: 4, fontSize: 10, opacity: 0.78 }}>{phase.hint}</div>
-      <div style={{ marginTop: 4, fontSize: 9, fontFamily: "JetBrains Mono, monospace" }}>{stateLabel}</div>
+      <div style={{ fontSize: compact ? 11 : 12, fontWeight: 800 }}>{phase.label}</div>
+      {!compact && <div style={{ marginTop: 4, fontSize: 10, opacity: 0.78 }}>{phase.hint}</div>}
+      <div style={{ marginTop: compact ? 2 : 4, fontSize: 9, fontFamily: "JetBrains Mono, monospace" }}>{stateLabel}</div>
     </button>;
   };
   const repairing = run.phase === "repair";
   const loopActive = ["explore", "build", "execute", "evaluate", "evaluate_repair", "repair"].includes(run.phase ?? "")
     && ["queued", "running", "repairing"].includes(run.status);
   return (
-    <div style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+    <div style={{ height: compact ? "auto" : "100%", minHeight: 0, display: "flex", flexDirection: "column", gap: compact ? 4 : 10 }}>
       <style>{NODE_PULSE_KEYFRAMES}</style>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-        <div style={{ borderRadius: 999, background: notStarted ? "#f8fafc" : "#eef4ff", color: notStarted ? "#94a3b8" : "#175cd3", border: `1px solid ${notStarted ? "#d0d5dd" : "#b9d4ff"}`, padding: "5px 10px", fontSize: 12, fontWeight: 800 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ borderRadius: 999, background: notStarted ? "#f8fafc" : "#eef4ff", color: notStarted ? "#94a3b8" : "#175cd3", border: `1px solid ${notStarted ? "#d0d5dd" : "#b9d4ff"}`, padding: compact ? "3px 8px" : "5px 10px", fontSize: compact ? 11 : 12, fontWeight: 800 }}>
           一个 Agent · {sourceLabel} · Round {Math.max(0, run.round ?? 0)}
         </div>
-        <div style={{ fontSize: 11, color: "#667085", fontFamily: "JetBrains Mono, monospace" }}>
+        <div style={{ fontSize: compact ? 10 : 11, color: "#667085", fontFamily: "JetBrains Mono, monospace" }}>
           {statusLabel} · remaining {formatDuration(run.remaining_seconds ?? 1200)}
           {run.runtime_version ? ` · ${run.runtime_version}` : ""}
         </div>
       </div>
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "10px 2px 4px" }}>
+      <div style={{ flex: compact ? "0 0 auto" : 1, minHeight: 0, overflow: compact ? "visible" : "auto", padding: compact ? "0 2px" : "10px 2px 4px" }}>
         <div style={{ width: "100%", maxWidth: 560, margin: "0 auto", display: "flex", flexDirection: "column", alignItems: "center" }}>
           {phaseButton(PHASES[0])}
           <SmallArrow state={edgeState(run, "context", "explore")} />
@@ -209,10 +210,10 @@ export function DiscoveryFlowChart({ run, onSelectNode, selectedNode }: {
             width: "100%",
             position: "relative",
             border: "1px solid #d0d5dd",
-            borderRadius: 14,
+            borderRadius: compact ? 10 : 14,
             background: "#fcfcfd",
             marginTop: 2,
-            padding: "16px 12px 12px",
+            padding: compact ? "12px 8px 8px" : "16px 12px 12px",
             boxShadow: loopActive ? "0 0 0 3px rgba(23,92,211,0.08)" : undefined,
           }}>
             <span style={{ ...loopBadge, position: "absolute", top: -8, left: 10 }}>CONTROLLED LOOP</span>
@@ -229,7 +230,7 @@ export function DiscoveryFlowChart({ run, onSelectNode, selectedNode }: {
             <div style={{
               width: "100%",
               display: "grid",
-              gridTemplateColumns: "1fr 190px 1fr",
+              gridTemplateColumns: compact ? "1fr 168px 1fr" : "1fr 190px 1fr",
               gridTemplateRows: "auto 10px auto 10px auto 10px auto",
               justifyItems: "center",
               alignItems: "center",
@@ -252,9 +253,11 @@ export function DiscoveryFlowChart({ run, onSelectNode, selectedNode }: {
           {phaseButton(PHASES[6])}
         </div>
       </div>
-      <div style={{ textAlign: "center", fontSize: 11, color: "#667085" }}>
-        阶段由后端 phase / round 驱动 · Agent 不自证执行与验收结果
-      </div>
+      {!compact && (
+        <div style={{ textAlign: "center", fontSize: 11, color: "#667085" }}>
+          阶段由后端 phase / round 驱动 · Agent 不自证执行与验收结果
+        </div>
+      )}
     </div>
   );
 }

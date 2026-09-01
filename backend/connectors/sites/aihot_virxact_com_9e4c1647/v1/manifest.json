@@ -1,1 +1,0 @@
-{"recipe_type": "python_plugin", "connector_key": "aihot_virxact_com_9e4c1647", "version": 1, "entry": "https://aihot.virxact.com/feed/full.xml", "entrypoint": "crawler:crawl", "runtime_version": "crawler-runtime:2", "checksum": "32fa5b4cb10113d555280e98ae335f99e20cb4feecbdd0875a940dfd4590ce07", "allowed_domains": ["aihot.virxact.com"]}

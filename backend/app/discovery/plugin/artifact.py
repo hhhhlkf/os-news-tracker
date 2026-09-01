@@ -55,8 +55,14 @@ def compute_connector_checksum(content: bytes | Path) -> str:
 
 def compute_connector_signature(manifest: ConnectorManifest) -> str:
     """Bind a normalized Manifest, including its source checksum, to one signature."""
+    document = manifest.model_dump(mode="json")
+    # Publication is the immutable legacy default.  Omitting its redundant
+    # marker preserves pre-existing signatures; the only non-default meaning,
+    # snapshot, is always included and therefore signature-bound.
+    if manifest.time_semantics == "publication":
+        document.pop("time_semantics", None)
     normalized = json.dumps(
-        manifest.model_dump(mode="json"),
+        document,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),

@@ -1,0 +1,10 @@
+---
+description: Production deployment and container retention rules
+alwaysApply: true
+---
+
+- Commit all intended local changes before a production deployment.
+- Build the exact release commit from a clean dedicated worktree, never from a dirty development worktree.
+- Production uses immutable images, not source hot reload. Replace only `backend-prod` and `frontend-prod`; do not recreate the database, volumes, connector data, networks, or runtime images.
+- Confirm there are no active process-local Discovery or manual fetch runs before replacement. Use a release-specific Compose project name so Compose cannot delete the retained pair; preserve the current backend and frontend containers as the immediately previous stopped release, then start the new pair on the shared external network.
+- After homepage and API health checks pass, retain only the running pair and the immediately previous stopped pair. Remove older production containers only.

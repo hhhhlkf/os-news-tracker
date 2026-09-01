@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     discovery_sandbox_docker_daemon_config: str = "/etc/docker/daemon.json"
     discovery_sandbox_cpus: float = 1.0
     discovery_sandbox_memory: str = "512m"
+    discovery_agent_sandbox_memory: str = "1g"
+    discovery_agent_sandbox_pids_limit: int = Field(default=256, ge=128, le=512)
     discovery_sandbox_pids_limit: int = 64
     discovery_sandbox_timeout_seconds: float = 120.0
     discovery_sandbox_runtime_images: dict[str, str] = Field(default_factory=dict)
@@ -59,8 +61,12 @@ class Settings(BaseSettings):
     discovery_workspace_root: str = "/var/lib/os-news-tracker/discovery-workspaces"
     discovery_connector_root: str = "/var/lib/os-news-tracker/connectors"
     discovery_sandbox_capacity_lock_root: str = "/var/lib/os-news-tracker/connectors/.sandbox-capacity"
-    discovery_runtime_version: str = "crawler-runtime:2"
-    discovery_loop_max_seconds: float = 1200.0
+    discovery_runtime_version: str = "crawler-runtime:3"
+    discovery_agent_runtime_version: str = "openhands-agent-runtime:1.43.1-r2"
+    discovery_agent_max_llm_requests: int = 80
+    discovery_agent_max_llm_body_bytes: int = 2 * 1024 * 1024
+    discovery_agent_max_llm_response_bytes: int = 8 * 1024 * 1024
+    discovery_loop_max_seconds: float = 1800.0
     discovery_rag_top_k: int = 5
     discussion_mail_enabled: bool = False
     discussion_mail_cron: str = "0 8 * * *"

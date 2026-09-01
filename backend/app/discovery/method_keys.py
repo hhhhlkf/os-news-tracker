@@ -8,12 +8,12 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 def crawl_method_domain_key(entry_url: str, recipe: Any) -> str:
     """计算一次已发现爬取方法的去重 domain key。
 
-    功能：feed 类方法按规范化后的完整 feed URL 键（同主机多个 feed 可共存），其它网站来源按 host 级去重。
+    功能：feed 类方法保留带 `feed:` 前缀的完整 URL 键；普通网站按规范化完整入口 URL 去重。
     谁会调用：website_workflow（legacy recipe 去重 / check_existing_method）、multi_graph（_run_and_save_multi_recipe 落库前去重）。
     直接调用：
     - _first_feed_url(...)：取出 recipe 中的 feed URL。
     - _feed_domain_key(...)：把 feed URL 转成 `feed:` 前缀 key。
-    - urlparse(...)：非 feed 时取 host。
+    - normalized_website_domain_key(...)：非 feed 时生成完整入口 URL 键。
     输入与结果：输入入口 URL 与 recipe；返回去重 key 字符串。
     副作用：无。
     """
@@ -21,26 +21,42 @@ def crawl_method_domain_key(entry_url: str, recipe: Any) -> str:
     if feed_url:
         return _feed_domain_key(feed_url)
 
-    parsed = urlparse(entry_url)
-    return parsed.netloc or entry_url
+    if _uses_legacy_domain_scope(recipe):
+        parsed = urlparse(entry_url)
+        return parsed.netloc or entry_url
+    return normalized_website_domain_key(entry_url)
 
 
 def crawl_method_domain_key_for_input_url(entry_url: str) -> str:
     """探查前对「看起来像 feed」的直接 URL 估算去重 key。
 
-    功能：若 URL 像 feed 则按 feed 规则键，否则按 host 键，用于在开始探查前快速判断是否已有等价方法。
+    功能：若 URL 像 feed 则按 feed 规则键，否则按规范化完整入口 URL 键。
     谁会调用：website_workflow.check_existing_method 在探查前做去重判断。
     直接调用：
     - _looks_like_feed_url(...)：判断 URL 是否像 feed。
     - _feed_domain_key(...)：feed 情形生成 key。
-    - urlparse(...)：非 feed 取 host。
+    - normalized_website_domain_key(...)：非 feed 生成完整入口 URL 键。
     输入与结果：输入入口 URL；返回去重 key 字符串。
     副作用：无。
     """
     if _looks_like_feed_url(entry_url):
         return _feed_domain_key(entry_url)
-    parsed = urlparse(entry_url)
-    return parsed.netloc or entry_url
+    return normalized_website_domain_key(entry_url)
+
+
+def normalized_website_domain_key(entry_url: str) -> str:
+    """把普通网站入口 URL 规范化为去重键。
+
+    保留 scheme、path 和 query 值，仅统一 scheme/host 大小写、末尾斜杠和 query
+    顺序，并移除 fragment。超过数据库 255 字符限制时使用带 host 的稳定哈希键。
+    """
+    normalized = _normalize_website_full_url(entry_url)
+    if len(normalized) <= 255:
+        return normalized
+    parsed = urlparse(normalized)
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
+    host = parsed.netloc[:210]
+    return f"site:{host}:{digest}"[:255]
 
 
 def normalized_feed_domain_key(feed_url: str) -> str:
@@ -90,6 +106,14 @@ def _first_feed_url(recipe: Any) -> str | None:
         if isinstance(url, str) and url.strip():
             return url.strip()
     return None
+
+
+def _uses_legacy_domain_scope(recipe: Any) -> bool:
+    """保留微信共享 connector 与 internal-forum 兼容缝的既有键语义。"""
+    source_kind = str(_value(recipe, "source_kind") or "").lower()
+    if source_kind in {"wechat", "wechat_history", "internal_forum", "internal_mcp"}:
+        return True
+    return _value(recipe, "connector_kind") == "shared"
 
 
 def _iter_actions(actions: Any):
@@ -223,3 +247,18 @@ def _normalize_full_url(url: str) -> str:
         doseq=True,
     )
     return urlunparse((scheme, netloc, path, "", query, ""))
+
+
+def _normalize_website_full_url(url: str) -> str:
+    """规范化普通网站 URL，保留 path parameters；feed 键继续使用原有规则。"""
+    parsed = urlparse(url.strip())
+    scheme = (parsed.scheme or "https").lower()
+    netloc = parsed.netloc.lower()
+    path = parsed.path or "/"
+    if path != "/":
+        path = path.rstrip("/")
+    query = urlencode(
+        sorted(parse_qsl(parsed.query, keep_blank_values=True)),
+        doseq=True,
+    )
+    return urlunparse((scheme, netloc, path, parsed.params, query, ""))

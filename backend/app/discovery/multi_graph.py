@@ -28,11 +28,17 @@ def start_website_discovery_run(
     *,
     force: bool = True,
     name: str | None = None,
+    agent_budget: dict[str, int] | None = None,
 ) -> int:
     """Start the in-process Single Agent Loop for an ordinary website."""
     from app.discovery.loop.engine import start_website_loop_run
 
-    return start_website_loop_run(site_url, force=force, name=name)
+    return start_website_loop_run(
+        site_url,
+        force=force,
+        name=name,
+        agent_budget=agent_budget,
+    )
 
 
 def start_multi_discovery_run(
@@ -43,6 +49,7 @@ def start_multi_discovery_run(
     hints: dict[str, Any] | None = None,
     selected_route_type: str | None = None,
     route_source: str = "inferred",
+    agent_budget: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Route public Discovery requests without importing legacy DSL code."""
     route = source_router_for_input(raw_input, hints)
@@ -54,6 +61,7 @@ def start_multi_discovery_run(
             route.normalized_input,
             force=force,
             name=display_name,
+            agent_budget=agent_budget,
         )
         return _started_result(
             run_id,

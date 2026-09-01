@@ -90,17 +90,19 @@ export function CrawlMethodReviewList({ highlightId, onOpenMethod }: { highlight
             <input type="checkbox" checked={allSelected} disabled={methods.length === 0} onChange={(event) => toggleAll(event.target.checked)} />
             全选
           </label>
-          <button type="button" style={btnPrimary} disabled={selected.size === 0 || approveMut.isPending} onClick={approveSelected}>
-            {approveMut.isPending ? "通过中..." : "批量通过"}
-          </button>
-          <button type="button" style={btnDangerGhost} disabled={selected.size === 0 || deleteMut.isPending} onClick={deleteSelected}>
-            {deleteMut.isPending ? "删除中..." : "批量删除"}
-          </button>
+          <div style={batchActions}>
+            <button type="button" style={btnPrimary} disabled={selected.size === 0 || approveMut.isPending} onClick={approveSelected}>
+              {approveMut.isPending ? "通过中..." : "批量通过"}
+            </button>
+            <button type="button" style={btnDangerGhost} disabled={selected.size === 0 || deleteMut.isPending} onClick={deleteSelected}>
+              {deleteMut.isPending ? "删除中..." : "批量删除"}
+            </button>
+          </div>
         </div>
       </div>
 
       {summary && <div style={{ ...notice, display: "flex", gap: 8, alignItems: "flex-start", color: summary.tone === "danger" ? "#b42318" : "#059669" }}><span style={{ flex: 1 }}>{summary.text}</span><button type="button" onClick={() => setSummary(null)} aria-label="关闭提示" style={closeButton}>×</button></div>}
-      <div style={listGrid}>
+      <div style={listGrid} data-home-scroll="true">
         {pending.isLoading && <div style={infoBox}>加载待审核方式中...</div>}
         {pending.isError && <div style={{ ...infoBox, color: "#b42318", borderColor: "#fecdca", background: "#fef3f2" }}>加载待审核方式失败。</div>}
         {methods.map((method) => (
@@ -129,17 +131,20 @@ function ReviewRow({ method, selected, highlight, onToggle, onOpen }: {
   onOpen: () => void;
 }) {
   const primaryLabel = method.source_name?.trim() || method.domain;
+  const secondary = method.domain !== primaryLabel ? `${method.domain} · ${method.entry_url}` : method.entry_url;
+  const created = method.created_at ? method.created_at.slice(0, 10) : "刚创建";
   return (
     <div style={{ ...row, borderColor: selected ? "#b9d4ff" : highlight ? "#175cd3" : "#eaecf0", background: selected ? "#f8fbff" : highlight ? "#eff6ff" : "#fff" }}>
       <input type="checkbox" checked={selected} aria-label={`选择 ${primaryLabel}`} onChange={(event) => onToggle(event.target.checked)} />
       <QualityBadge method={method} />
-      <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={onOpen}>
-        <div style={rowTitle}>
-          {primaryLabel} <span style={pendingBadge}>pending</span>
+      <div style={rowMain} onClick={onOpen} title={`${primaryLabel}\n${secondary}`}>
+        <div style={rowTitleLine}>
+          <span style={rowTitle}>{primaryLabel}</span>
+          <span style={pendingBadge}>pending</span>
         </div>
-        <div style={rowUrl}>{method.domain !== primaryLabel ? `${method.domain} · ` : ""}{method.entry_url}</div>
+        <div style={rowUrl}>{secondary}</div>
       </div>
-      <div style={rowMeta}>{method.created_at ? new Date(method.created_at).toLocaleString() : "刚创建"}</div>
+      <div style={rowMeta}>{created}</div>
     </div>
   );
 }
@@ -174,11 +179,12 @@ function gradeForScore(score: number) {
 
 function qualityBadgeStyle(score: number | null | undefined, status: string | null | undefined): CSSProperties {
   const base: CSSProperties = {
-    minWidth: 58,
+    flexShrink: 0,
+    minWidth: 44,
     textAlign: "center",
-    borderRadius: 8,
-    padding: "4px 7px",
-    fontSize: 11,
+    borderRadius: 6,
+    padding: "2px 5px",
+    fontSize: 10,
     fontWeight: 800,
     lineHeight: 1.1,
     whiteSpace: "nowrap",
@@ -192,22 +198,25 @@ function qualityBadgeStyle(score: number | null | undefined, status: string | nu
   return { ...base, border: "1px solid #abefc6", color: "#027a48", background: "#ecfdf3" };
 }
 
-const section: CSSProperties = { background: "#fff", border: "1px solid #d0d5dd", borderRadius: 10, padding: 16, marginTop: 14 };
+const section: CSSProperties = { background: "#fff", border: "1px solid #d0d5dd", borderRadius: 10, padding: 16 };
 const headerRow: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 };
 const title: CSSProperties = { fontSize: 13, fontWeight: 700, color: "#101828" };
 const subtitle: CSSProperties = { fontSize: 11, color: "#667085", marginTop: 2 };
-const actions: CSSProperties = { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" };
+const actions: CSSProperties = { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" };
+const batchActions: CSSProperties = { display: "flex", alignItems: "center", gap: 6, flexWrap: "nowrap", flexShrink: 0 };
 const counter: CSSProperties = { fontSize: 11, color: "#475467" };
 const checkLabel: CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "#475467" };
 const notice: CSSProperties = { fontSize: 12, marginBottom: 10 };
 const closeButton: CSSProperties = { border: 0, background: "transparent", color: "inherit", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0 };
-const listGrid: CSSProperties = { display: "grid", gap: 8 };
-const row: CSSProperties = { display: "flex", alignItems: "center", gap: 12, border: "1px solid #eaecf0", borderRadius: 9, padding: "9px 11px" };
-const rowTitle: CSSProperties = { fontSize: 13, fontWeight: 700, color: "#101828" };
-const rowUrl: CSSProperties = { fontSize: 11, color: "#667085", wordBreak: "break-all" };
-const rowMeta: CSSProperties = { fontSize: 11, color: "#667085", textAlign: "right", minWidth: 150 };
-const pendingBadge: CSSProperties = { fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, marginLeft: 6, background: "#fffaeb", color: "#b54708" };
-const btnPrimary: CSSProperties = { border: "none", borderRadius: 999, padding: "8px 16px", background: "#175cd3", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" };
-const btnDangerGhost: CSSProperties = { border: "1px solid #fecdca", borderRadius: 999, padding: "8px 16px", background: "#fff", color: "#b42318", fontSize: 12, fontWeight: 700, cursor: "pointer" };
+const listGrid: CSSProperties = { display: "grid", alignContent: "start", gap: 6, minWidth: 0, maxHeight: 280, overflowY: "auto" };
+const row: CSSProperties = { display: "flex", alignItems: "center", gap: 8, minWidth: 0, overflow: "hidden", border: "1px solid #eaecf0", borderRadius: 8, padding: "7px 9px" };
+const rowMain: CSSProperties = { flex: 1, minWidth: 0, cursor: "pointer", overflow: "hidden" };
+const rowTitleLine: CSSProperties = { display: "flex", alignItems: "center", gap: 6, minWidth: 0 };
+const rowTitle: CSSProperties = { minWidth: 0, flex: 1, fontSize: 12, fontWeight: 700, color: "#101828", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const rowUrl: CSSProperties = { fontSize: 10, color: "#667085", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const rowMeta: CSSProperties = { flexShrink: 0, fontSize: 10, color: "#667085", whiteSpace: "nowrap" };
+const pendingBadge: CSSProperties = { flexShrink: 0, fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 999, background: "#fffaeb", color: "#b54708" };
+const btnPrimary: CSSProperties = { flexShrink: 0, border: "none", borderRadius: 999, padding: "4px 8px", background: "#175cd3", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" };
+const btnDangerGhost: CSSProperties = { flexShrink: 0, border: "1px solid #fecdca", borderRadius: 999, padding: "4px 8px", background: "#fff", color: "#b42318", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" };
 const infoBox: CSSProperties = { border: "1px dashed #d0d5dd", borderRadius: 8, padding: 16, color: "#667085", fontSize: 12 };
 const emptyBox: CSSProperties = { ...infoBox };

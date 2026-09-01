@@ -27,6 +27,8 @@ import type {
   MultiDiscoveryStartResponse,
   MultiDiscoveryNameRequest,
   MultiDiscoveryNameResponse,
+  DiscoveryQueueEnqueueResponse,
+  DiscoveryQueueSnapshot,
   QueryItemAvgResponse,
   TokenUsageSummaryResponse,
   QueryRunUsageResponse,
@@ -38,7 +40,6 @@ import type {
   WechatQrSession,
 } from "../types";
 import { authHeaders } from "../auth";
-
 const configuredBase = import.meta.env.VITE_API_BASE?.trim();
 const BASE = configuredBase ? configuredBase.replace(/\/+$/, "") : "";
 const CRAWL_BASE = `${BASE}/crawl-sources`;
@@ -64,6 +65,8 @@ export interface ItemQueryParams {
   sub_tag?: string;
   source_id?: string;
   q?: string;
+  keywords?: string[];
+  strict_title?: boolean;
   limit?: number | string;
   offset?: number | string;
   sort_by?: "published_at" | "fetched_at" | "last_activity_at";
@@ -174,7 +177,11 @@ async function fetchJsonWithFallback<T>(
 export async function fetchItems(params: ItemQueryParams): Promise<ItemListResponse> {
   const qs = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined) qs.set(key, String(value));
+    if (Array.isArray(value)) {
+      value.forEach((entry) => qs.append(key, entry));
+    } else if (value !== undefined) {
+      qs.set(key, String(value));
+    }
   }
   const r = await fetch(`${BASE}/items?${qs}`);
   return expectOk<ItemListResponse>(r, "failed to load items");
@@ -409,6 +416,12 @@ export async function getDiscoveryRun(runId: number): Promise<DiscoveryRun> {
   return expectOk<DiscoveryRun>(r, "failed to load discovery run");
 }
 
+/** Safe phase-driven run state for a target observed through the shared batch queue. */
+export async function getBatchDiscoveryRun(runId: number): Promise<DiscoveryRun> {
+  const r = await fetch(`${DISCOVERY_BASE}/runs/${runId}/batch-ui`, { headers: authHeaders() });
+  return expectOk<DiscoveryRun>(r, "failed to load batch discovery run");
+}
+
 function discoveryViewerTokenKey(runId: number): string {
   return `discovery-run-viewer-token:${runId}`;
 }
@@ -498,6 +511,50 @@ export async function cancelDiscoveryRun(runId: number): Promise<DiscoveryRun> {
 export async function listDiscoveryRuns(limit = 20): Promise<DiscoveryRunSummary[]> {
   const r = await fetch(`${DISCOVERY_BASE}/runs?limit=${limit}`, { headers: authHeaders() });
   return expectOk<DiscoveryRunSummary[]>(r, "failed to load discovery runs");
+}
+
+export async function listDiscoveryQueue(): Promise<DiscoveryQueueSnapshot> {
+  const r = await fetch(`${DISCOVERY_BASE}/queue`, { headers: authHeaders() });
+  return expectOk<DiscoveryQueueSnapshot>(r, "failed to load discovery queue");
+}
+
+export async function enqueueDiscoveryQueue(
+  request: MultiDiscoveryStartRequest,
+): Promise<DiscoveryQueueEnqueueResponse> {
+  const r = await fetch(`${DISCOVERY_BASE}/queue`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(request),
+  });
+  const result = await expectOk<DiscoveryQueueEnqueueResponse>(r, "failed to enqueue discovery");
+  if (result.run_id != null && result.viewer_token) {
+    sessionStorage.setItem(discoveryViewerTokenKey(result.run_id), result.viewer_token);
+  }
+  return result;
+}
+
+export async function requeueDiscoveryQueueItem(itemId: number): Promise<DiscoveryQueueSnapshot> {
+  const r = await fetch(`${DISCOVERY_BASE}/queue/${itemId}/requeue`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return expectOk<DiscoveryQueueSnapshot>(r, "failed to requeue discovery");
+}
+
+export async function deleteDiscoveryQueueItem(itemId: number): Promise<DiscoveryQueueSnapshot> {
+  const r = await fetch(`${DISCOVERY_BASE}/queue/${itemId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  return expectOk<DiscoveryQueueSnapshot>(r, "failed to delete discovery queue item");
+}
+
+export async function stopDiscoveryQueue(): Promise<DiscoveryQueueSnapshot> {
+  const r = await fetch(`${DISCOVERY_BASE}/queue/stop-all`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return expectOk<DiscoveryQueueSnapshot>(r, "failed to stop discovery queue");
 }
 
 export async function suggestDiscoveryName(

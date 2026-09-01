@@ -58,7 +58,7 @@ function TopNav({ authenticated, onAuthenticatedChange }: { authenticated: boole
         <NavLink to="/" end style={linkStyle}>
           新闻流
         </NavLink>
-        <NavLink to="/discover" style={linkStyle}>
+        <NavLink to="/discover/probe" style={linkStyle}>
           站点发现
         </NavLink>
         {authenticated && (
@@ -142,7 +142,9 @@ export default function App() {
         <div className="app-frame__main">
           <Routes>
             <Route path="/" element={<HomePage hasSystemAccess={authenticated} />} />
-            <Route path="/discover" element={<DiscoveryPage hasSystemAccess={authenticated} />} />
+            <Route path="/discover" element={<Navigate to="/discover/probe" replace />} />
+            <Route path="/discover/probe" element={<DiscoveryPage hasSystemAccess={authenticated} />} />
+            <Route path="/discover/crawl" element={<DiscoveryPage hasSystemAccess={authenticated} />} />
             <Route
               path="/statistics"
               element={authenticated ? <StatisticsDiscoveryPage hasSystemAccess /> : <Navigate to="/" replace />}

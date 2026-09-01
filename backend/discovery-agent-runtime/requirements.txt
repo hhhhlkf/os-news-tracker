@@ -1,0 +1,9 @@
+# Exact top-level Discovery Agent Runtime pins.  The reviewed image digest is
+# the immutable deployable lock; these versions must never be installed by a
+# running Discovery task.
+openhands-sdk==1.43.1
+openhands-tools==1.43.1
+openhands-agent-server==1.43.1
+httpx==0.28.1
+lxml==6.0.1
+feedparser==6.0.12

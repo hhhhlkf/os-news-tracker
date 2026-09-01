@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type UIEvent, Children } from "react";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import * as echarts from "echarts";
 import type { EChartsOption } from "echarts";
 import {
@@ -26,6 +26,8 @@ const SERIES_COLORS = {
   importanceMedium: "#f79009",
   importanceLow: "#98a2b3",
 };
+
+const LIST_PAGE_SIZE = 10;
 
 const METHOD_COLORS = [
   "#1e3a8a",
@@ -531,6 +533,47 @@ function StackedBarChart({
   return <div ref={hostRef} style={chartHeight} />;
 }
 
+function nextUsageOffset(
+  lastPage: { total: number; runs: unknown[] },
+  allPages: Array<{ runs: unknown[] }>,
+): number | undefined {
+  const loaded = allPages.reduce((sum, page) => sum + page.runs.length, 0);
+  return loaded < lastPage.total ? loaded : undefined;
+}
+
+function InfiniteTaskList({
+  loading,
+  emptyText,
+  fetchingNextPage,
+  hasNextPage,
+  onLoadMore,
+  children,
+}: {
+  loading: boolean;
+  emptyText: string;
+  fetchingNextPage: boolean;
+  hasNextPage: boolean;
+  onLoadMore: () => void;
+  children: ReactNode;
+}) {
+  const hasItems = Children.count(children) > 0;
+  function handleScroll(event: UIEvent<HTMLDivElement>): void {
+    const target = event.currentTarget;
+    if (hasNextPage && !fetchingNextPage && target.scrollTop + target.clientHeight >= target.scrollHeight - 24) {
+      onLoadMore();
+    }
+  }
+  if (loading && !hasItems) return <div style={empty}>加载任务明细中…</div>;
+  return (
+    <div style={tableWrap} data-home-scroll="true" onScroll={handleScroll}>
+      {children}
+      {fetchingNextPage && <div style={listHint}>正在加载更多…</div>}
+      {hasNextPage && !fetchingNextPage && hasItems && <div style={listHint}>继续向下滚动以加载更多</div>}
+      {!loading && !hasItems && <div style={empty}>{emptyText}</div>}
+    </div>
+  );
+}
+
 export function StatisticsDiscoveryPage({ hasSystemAccess = false }: { hasSystemAccess?: boolean }) {
   const [preset, setPreset] = useState<RangePreset>("30d");
   const [customStart, setCustomStart] = useState("");
@@ -544,6 +587,7 @@ export function StatisticsDiscoveryPage({ hasSystemAccess = false }: { hasSystem
     [preset, customStart, customEnd],
   );
   const query = { ...range, trigger_type: triggerType || undefined, limit: 100 };
+  const listRange = { start: range.start, end: range.end };
 
   const summaryQuery = useQuery({
     queryKey: ["token-usage-summary", range],
@@ -560,6 +604,33 @@ export function StatisticsDiscoveryPage({ hasSystemAccess = false }: { hasSystem
     queryFn: () => fetchDiscoveryRunUsage({ ...range, limit: 100 }),
     enabled: hasSystemAccess,
   });
+  const queryRunsList = useInfiniteQuery({
+    queryKey: ["token-usage-query-runs-list", listRange, triggerType],
+    queryFn: ({ pageParam }) => fetchQueryRunUsage({
+      ...listRange,
+      trigger_type: triggerType || undefined,
+      limit: LIST_PAGE_SIZE,
+      offset: pageParam,
+    }),
+    initialPageParam: 0,
+    getNextPageParam: nextUsageOffset,
+    enabled: hasSystemAccess,
+  });
+  const discoveryRunsList = useInfiniteQuery({
+    queryKey: ["token-usage-discovery-runs-list", listRange],
+    queryFn: ({ pageParam }) => fetchDiscoveryRunUsage({
+      ...listRange,
+      limit: LIST_PAGE_SIZE,
+      offset: pageParam,
+    }),
+    initialPageParam: 0,
+    getNextPageParam: nextUsageOffset,
+    enabled: hasSystemAccess,
+  });
+  const queryRunRows = queryRunsList.data?.pages.flatMap((page) => page.runs) ?? [];
+  const discoveryRunRows = discoveryRunsList.data?.pages.flatMap((page) => page.runs) ?? [];
+  const queryRunTotal = queryRunsList.data?.pages[0]?.total ?? 0;
+  const discoveryRunTotal = discoveryRunsList.data?.pages[0]?.total ?? 0;
   const itemVolumeQuery = useQuery({
     queryKey: ["item-volume-daily", range.start, range.end],
     queryFn: () => fetchItemVolumeDaily({ start: range.start, end: range.end }),
@@ -704,9 +775,8 @@ export function StatisticsDiscoveryPage({ hasSystemAccess = false }: { hasSystem
   }
 
   const summary = summaryQuery.data?.summary;
-  const loading = summaryQuery.isLoading || runsQuery.isLoading || discoveryQuery.isLoading
-    || itemVolumeQuery.isLoading || itemAvgQuery.isLoading;
   const error = summaryQuery.error || runsQuery.error || discoveryQuery.error
+    || queryRunsList.error || discoveryRunsList.error
     || itemVolumeQuery.error || itemAvgQuery.error;
 
   return (
@@ -847,9 +917,15 @@ export function StatisticsDiscoveryPage({ hasSystemAccess = false }: { hasSystem
       </div>
 
       <div style={chartGrid}>
-        <ChartCard title="查询任务明细" subtitle={`共 ${runsQuery.data?.total ?? 0} 次有精确数据的任务`}>
-          <div style={tableWrap}>
-            {(runsQuery.data?.runs ?? []).map((run) => (
+        <ChartCard title="查询任务明细" subtitle={`共 ${queryRunTotal} 次有精确数据的任务`}>
+          <InfiniteTaskList
+            loading={queryRunsList.isLoading}
+            emptyText="当前范围暂无查询数据"
+            fetchingNextPage={queryRunsList.isFetchingNextPage}
+            hasNextPage={Boolean(queryRunsList.hasNextPage)}
+            onLoadMore={() => void queryRunsList.fetchNextPage()}
+          >
+            {queryRunRows.map((run) => (
               <div
                 key={run.run_key}
                 style={row}
@@ -866,12 +942,17 @@ export function StatisticsDiscoveryPage({ hasSystemAccess = false }: { hasSystem
                 <div style={rowValue}>{formatTokens(run.total_tokens)}</div>
               </div>
             ))}
-            {!loading && (runsQuery.data?.runs.length ?? 0) === 0 && <div style={empty}>当前范围暂无查询数据</div>}
-          </div>
+          </InfiniteTaskList>
         </ChartCard>
-        <ChartCard title="探查任务明细" subtitle={`共 ${discoveryQuery.data?.total ?? 0} 次有精确消耗的已完成探查`}>
-          <div style={tableWrap}>
-            {(discoveryQuery.data?.runs ?? []).map((run) => (
+        <ChartCard title="探查任务明细" subtitle={`共 ${discoveryRunTotal} 次有精确消耗的已完成探查`}>
+          <InfiniteTaskList
+            loading={discoveryRunsList.isLoading}
+            emptyText="当前范围暂无探查数据"
+            fetchingNextPage={discoveryRunsList.isFetchingNextPage}
+            hasNextPage={Boolean(discoveryRunsList.hasNextPage)}
+            onLoadMore={() => void discoveryRunsList.fetchNextPage()}
+          >
+            {discoveryRunRows.map((run) => (
               <div key={run.run_id} style={row}>
                 <div style={{ minWidth: 0 }}>
                   <div style={rowTitle}>{dateLabel(run.started_at)} · {discoveryStatusLabel(run.status)}</div>
@@ -880,8 +961,7 @@ export function StatisticsDiscoveryPage({ hasSystemAccess = false }: { hasSystem
                 <div style={rowValue}>{formatTokens(run.total_tokens)}</div>
               </div>
             ))}
-            {!loading && (discoveryQuery.data?.runs.length ?? 0) === 0 && <div style={empty}>当前范围暂无探查数据</div>}
-          </div>
+          </InfiniteTaskList>
         </ChartCard>
       </div>
     </main>
@@ -936,9 +1016,10 @@ const chartTab: CSSProperties = {
   transition: "color 160ms ease, border-color 160ms ease",
 };
 const chartHeight: CSSProperties = { width: "100%", height: 340 };
-const tableWrap: CSSProperties = { display: "grid", maxHeight: 360, overflowY: "auto" };
+const tableWrap: CSSProperties = { display: "grid", maxHeight: 360, overflowY: "auto", minWidth: 0 };
 const row: CSSProperties = { display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "center", gap: 14, padding: "11px 0", borderBottom: "1px solid #f2f4f7" };
 const rowTitle: CSSProperties = { color: "#344054", fontSize: 13, fontWeight: 700 };
 const rowMeta: CSSProperties = { color: "#667085", fontSize: 11, marginTop: 3 };
 const rowValue: CSSProperties = { color: "#101828", fontSize: 13, fontWeight: 800, fontFamily: "var(--font-mono)" };
 const empty: CSSProperties = { color: "#98a2b3", textAlign: "center", padding: 28, fontSize: 13 };
+const listHint: CSSProperties = { color: "#98a2b3", textAlign: "center", padding: "10px 0 4px", fontSize: 11 };

@@ -29,7 +29,7 @@ function ItemLlmFields({ item }: { item: ItemSummary }) {
   if (item.item_kind === "discussion") {
     return (
       <div style={discussionMetaLine}>
-        <span style={{ color: "#067647", fontWeight: 600 }}>讨论摘要：</span>
+        <span style={{ color: "#3d6b62", fontWeight: 600 }}>讨论摘要：</span>
         <span style={{ flex: 1, minWidth: 0 }}>{item.why_it_matters?.trim() || "打开详情查看当前结论、分歧与讨论进展。"}</span>
       </div>
     );
@@ -159,7 +159,7 @@ export function ItemCard({ item, onClick, selected = false, sortBy }: {
         <ImportanceBadge value={item.importance} />
         <InfoTypeBadge value={item.info_type} />
         {isDiscussion && (
-          <span style={{ fontSize: 11, borderRadius: 999, padding: "2px 7px", background: "#ecfdf3", color: "#067647", fontWeight: 700 }}>技术讨论</span>
+          <span style={{ fontSize: 11, borderRadius: 999, padding: "2px 7px", background: "#ecf2f1", color: "#3d6b62", fontWeight: 700 }}>技术讨论</span>
         )}
         {item.main_category && (
           <span style={{ fontSize: 12, color: "#667085" }}>{item.main_category}</span>

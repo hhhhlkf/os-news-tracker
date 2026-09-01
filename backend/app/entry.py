@@ -80,6 +80,16 @@ def _startup(app: FastAPI) -> None:
             "marked %s Discovery run(s) interrupted after startup",
             interrupted_discovery_runs,
         )
+    from app.discovery.batch_queue import get_discovery_batch_queue
+
+    batch_discovery_queue = get_discovery_batch_queue()
+    interrupted_batch_items = batch_discovery_queue.recover()
+    if interrupted_batch_items:
+        logging.getLogger(__name__).warning(
+            "moved %s interrupted batch Discovery item(s) to the retry queue",
+            interrupted_batch_items,
+        )
+    batch_discovery_queue.start()
     from app.discovery.fetch_runs import recover_dead_method_fetch_runs
 
     try:

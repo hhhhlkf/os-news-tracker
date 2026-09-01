@@ -29,9 +29,42 @@ MAX_HEADER_BYTES = 64 * 1024
 MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024
 COPY_CHUNK_BYTES = 64 * 1024
 IDLE_TIMEOUT_SECONDS = 30.0
+UPSTREAM_CONNECT_TIMEOUT_SECONDS = 10.0
+MAX_RACED_UPSTREAM_ADDRESSES = 8
 MAX_CONCURRENT_CONNECTIONS = 16
 MAX_DENIED_TARGET_EVENTS = 200
 _denied_target_events = 0
+MAX_OBSERVED_TARGET_EVENTS = 200
+_observed_target_events: set[tuple[str, int, str]] = set()
+
+
+class UpstreamConnectionError(ConnectionError):
+    """A policy-approved public endpoint could not be reached in time."""
+
+
+def _record_observed_public_target(hostname: str, port: int, protocol: str) -> None:
+    """Emit only a bounded host/port fact after policy validation.
+
+    This mechanism-independent evidence lets the host consider a domain for a
+    later Manifest without exposing paths, queries, headers, or response data.
+    """
+    key = (hostname, port, protocol)
+    if key in _observed_target_events or len(_observed_target_events) >= MAX_OBSERVED_TARGET_EVENTS:
+        return
+    _observed_target_events.add(key)
+    print(
+        json.dumps(
+            {
+                "type": "sandbox_egress_observed",
+                "hostname": hostname,
+                "port": port,
+                "protocol": protocol,
+            },
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ),
+        flush=True,
+    )
 
 
 def _record_denied_public_target(
@@ -146,14 +179,47 @@ async def _read_headers(reader: asyncio.StreamReader) -> bytes:
     return headers
 
 
-async def _connect_pinned(addresses: tuple[str, ...], port: int) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+async def _connect_pinned(
+    addresses: tuple[str, ...], port: int
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """Race approved addresses within one bounded connection budget.
+
+    DNS commonly returns both IPv4 and IPv6 addresses. Waiting for each one in
+    sequence turns a transient unreachable route into many tens of seconds of
+    delay, so return the first successful policy-pinned connection instead.
+    """
+
+    async def connect(address: str) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        return await asyncio.open_connection(address, port)
+
+    candidates = addresses[:MAX_RACED_UPSTREAM_ADDRESSES]
+    tasks = {asyncio.create_task(connect(address)) for address in candidates}
     last_error: OSError | None = None
-    for address in addresses:
-        try:
-            return await asyncio.wait_for(asyncio.open_connection(address, port), timeout=10.0)
-        except (OSError, TimeoutError) as exc:
-            last_error = exc if isinstance(exc, OSError) else OSError(str(exc))
-    raise NetworkPolicyError(f"all approved upstream addresses failed: {last_error}")
+    deadline = asyncio.get_running_loop().time() + UPSTREAM_CONNECT_TIMEOUT_SECONDS
+    try:
+        while tasks:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
+            completed, tasks = await asyncio.wait(
+                tasks,
+                timeout=remaining,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not completed:
+                break
+            for task in completed:
+                try:
+                    return task.result()
+                except OSError as exc:
+                    last_error = exc
+    finally:
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+    detail = type(last_error).__name__ if last_error is not None else "timeout"
+    raise UpstreamConnectionError(f"approved upstream connection failed: {detail}")
 
 
 async def _copy(source: asyncio.StreamReader, destination: asyncio.StreamWriter) -> None:
@@ -179,14 +245,17 @@ async def _handle_connect(
     hostname, port, addresses = validate_proxy_target(target, allowed_domains=allowed_domains)
     if port != 443:
         raise NetworkPolicyError("CONNECT is restricted to TLS port 443")
-    client_writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-    await client_writer.drain()
-    client_hello = await asyncio.wait_for(
-        _validated_tls_client_hello(client_reader, hostname),
-        timeout=IDLE_TIMEOUT_SECONDS,
-    )
     upstream_reader, upstream_writer = await _connect_pinned(addresses, port)
     try:
+        # Establish the approved upstream route before confirming the tunnel.
+        # A failed route is then an explicit proxy 502, not a misleading TLS EOF.
+        client_writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        await client_writer.drain()
+        client_hello = await asyncio.wait_for(
+            _validated_tls_client_hello(client_reader, hostname),
+            timeout=IDLE_TIMEOUT_SECONDS,
+        )
+        _record_observed_public_target(hostname, port, "https")
         upstream_writer.write(client_hello)
         await upstream_writer.drain()
         pumps = {
@@ -286,6 +355,7 @@ async def _handle_http(
     )
     upstream_reader, upstream_writer = await _connect_pinned(addresses, port)
     try:
+        _record_observed_public_target(hostname, port, "http")
         upstream_writer.write(request_head + body)
         await upstream_writer.drain()
         await _copy(upstream_reader, client_writer)
@@ -323,6 +393,26 @@ async def handle_client(
                 client_writer,
                 allowed_domains,
             )
+    except UpstreamConnectionError as exc:
+        body = b"sandbox egress proxy could not reach the approved upstream\n"
+        print(
+            json.dumps(
+                {
+                    "type": "sandbox_upstream_connection_failed",
+                    "error_type": type(exc).__name__,
+                },
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ),
+            flush=True,
+        )
+        client_writer.write(
+            b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Type: text/plain\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
+            + body
+        )
+        with suppress(Exception):
+            await client_writer.drain()
     except (NetworkPolicyError, UnicodeError, ValueError, asyncio.IncompleteReadError) as exc:
         _record_denied_public_target(method, target, allowed_domains)
         body = f"egress policy denied request: {exc}\n".encode("utf-8", errors="replace")

@@ -959,17 +959,27 @@ def run_shadow_comparison(
         outputs = [execution.audit_output for execution in trial_executions]
         review_checks = ((evidence.get("method_audit") or {}).get("evaluator") or {}).get("checks") or []
         pagination_check = next(
-            (check for check in review_checks if check.get("check") == "pagination_new_items"),
+            (
+                check
+                for check in review_checks
+                if check.get("check") in {"pagination_new_items", "pagination_fixed_listing"}
+            ),
             {},
         )
-        supports_pagination = pagination_check.get("applicable") is not False
+        supports_pagination = (
+            pagination_check.get("check") == "pagination_new_items"
+            and pagination_check.get("applicable") is not False
+        )
         accessibility_check = next(
             (check for check in review_checks if check.get("check") == "sample_url_accessibility"),
             {},
         )
         requires_url_verification = accessibility_check.get("applicable") is not False
         pagination_output = None
-        if supports_pagination:
+        requires_page_validation = (
+            validated.resolved.connector_kind != "shared" or supports_pagination
+        )
+        if requires_page_validation:
             page_config = {**base_config, "page": 2}
             if "max_pages" in page_config:
                 page_config["max_pages"] = 1
@@ -1001,6 +1011,7 @@ def run_shadow_comparison(
             supports_pagination=supports_pagination,
             pagination_output=pagination_output,
             require_url_accessibility=requires_url_verification,
+            enforce_fixed_listing_page=validated.resolved.connector_kind != "shared",
         ).as_dict()
         # Result links are not egress requests. Aggregator connectors may
         # legitimately return publisher domains absent from the sandbox
