@@ -17,7 +17,7 @@ from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import AliasChoices, BaseModel, Field, HttpUrl, field_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
@@ -25,12 +25,18 @@ from app.api.deps import get_db, require_system_access
 from app.auth import verify_access_token
 
 from app.discovery.cancel import request_cancel
+from app.discovery.batch_queue import (
+    enqueue_batch_item,
+    get_discovery_batch_queue,
+    queue_snapshot,
+    serialize_queue_item,
+)
 from app.discovery.checkpoints import CheckpointStore
 from app.discovery.events import append_discovery_event
 from app.discovery.execution import run_method  # compatibility patch seam for existing callers
 from app.discovery.loop.artifacts import find_existing_method
-from app.discovery.loop.engine import cancel_website_loop_run
-from app.discovery.wechat_plugin import cancel_wechat_discovery_run
+from app.discovery.loop.engine import cancel_website_loop_run, website_loop_timing_payload
+from app.discovery.wechat_plugin import cancel_wechat_discovery_run, wechat_discovery_timing_payload
 from app.discovery.multi_graph import start_multi_discovery_run, start_website_discovery_run
 from app.discovery.runtime import DiscoveryCapacityExceeded
 from app.discovery.recovery import create_resumed_run, dispatch_resumed_run_if_registered
@@ -65,6 +71,7 @@ from app.models import (
     CrawlMethod,
     CrawlMethodDomain,
     CrawlMethodRun,
+    DiscoveryQueueItem,
     DiscoveryRunEvent,
     DiscoveryPromptSet,
     DiscoveryMethodMigration,
@@ -82,6 +89,7 @@ from app.discovery.prompts import (
     resolve_prompt,
     validate_prompts,
 )
+from app.discovery.agent_budget import DiscoveryAgentBudget, normalize_agent_budget
 from app.schemas import ManualNewsRunRequest
 
 router = APIRouter(prefix="/discovery", tags=["discovery"])
@@ -95,6 +103,10 @@ class DiscoverRequest(BaseModel):
     url: HttpUrl
     force: bool = True  # 默认重新探查；新版本审核通过后再切换正式映射
     name: str | None = None  # 站点别名（选填，不填自动用域名）
+    agent_budget: DiscoveryAgentBudget = Field(
+        default_factory=DiscoveryAgentBudget,
+        validation_alias=AliasChoices("agent_budget", "agentBudget"),
+    )
 
 
 class RouteType(str, Enum):
@@ -118,6 +130,10 @@ class MultiDiscoverRequest(BaseModel):
     selected_route_type: RouteType | None = None
     resolved_route_type: RouteType | None = None
     route_source: RouteSource = RouteSource.INFERRED
+    agent_budget: DiscoveryAgentBudget = Field(
+        default_factory=DiscoveryAgentBudget,
+        validation_alias=AliasChoices("agent_budget", "agentBudget"),
+    )
 
 
 def _route_type_to_hints(route_type: RouteType | None) -> dict[str, Any]:
@@ -130,6 +146,18 @@ def _route_type_to_hints(route_type: RouteType | None) -> dict[str, Any]:
     if route_type == RouteType.INTERNAL_FORUM:
         return {"source_kind": "internal_forum"}
     return {}
+
+
+def require_discovery_authenticated_access(
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Accept either a normal signed-in user or the system-admin login token."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    payload = verify_access_token(authorization.removeprefix("Bearer ").strip())
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return payload
 
 
 @router.post("/run")
@@ -148,7 +176,12 @@ def discover_run(body: DiscoverRequest, db: Session = Depends(get_db)):
     # 别名：前端选填，不填自动用"网站：..."命名
     name = body.name or default_website_display_name(site_url)
     try:
-        run_id = start_website_discovery_run(site_url, force=body.force, name=name)
+        run_id = start_website_discovery_run(
+            site_url,
+            force=body.force,
+            name=name,
+            agent_budget=body.agent_budget.snapshot(),
+        )
     except DiscoveryCapacityExceeded as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     return {
@@ -180,6 +213,7 @@ def discover_multi_run(
             hints=merged_hints,
             selected_route_type=effective_route.value if effective_route else None,
             route_source=body.route_source.value,
+            agent_budget=body.agent_budget.snapshot(),
         )
     except DiscoveryCapacityExceeded as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
@@ -191,6 +225,113 @@ def discover_multi_run(
     if result.get("status") == "started" and isinstance(run_id, int):
         result["viewer_token"] = _issue_discovery_viewer_token(db, run_id)
     return result
+
+
+def _batch_queue_payload(body: MultiDiscoverRequest) -> dict[str, Any]:
+    """Translate the public request model into the queue module's small interface."""
+    return {
+        "input": body.input,
+        "display_input": body.display_input,
+        "force": body.force,
+        "name": body.name,
+        "selected_route_type": body.selected_route_type.value if body.selected_route_type else None,
+        "resolved_route_type": body.resolved_route_type.value if body.resolved_route_type else None,
+        "route_source": body.route_source.value,
+        "agent_budget": body.agent_budget.snapshot(),
+    }
+
+
+@router.get("/queue")
+def get_discovery_queue(db: Session = Depends(get_db)):
+    """Return the shared pending and retry lanes for the batch Discovery UI."""
+    return queue_snapshot(db)
+
+
+@router.post("/queue")
+def enqueue_discovery_queue(
+    body: MultiDiscoverRequest,
+    db: Session = Depends(get_db),
+):
+    """Add one user-entered target; the queue dispatcher starts it when a slot opens."""
+    status, result = enqueue_batch_item(db, _batch_queue_payload(body))
+    if status == "queue_duplicate":
+        raise HTTPException(409, "该入口链接已在探查队列中（包括失败队列），请先处理原任务")
+    if status == "duplicate":
+        return {"status": "duplicate", "existing_method": result}
+    return {"status": "queued", "item": serialize_queue_item(result)}
+
+
+@router.post("/queue/{item_id}/requeue")
+def requeue_discovery_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+):
+    """Return one failed target to the tail of the unprocessed lane."""
+    item = db.get(DiscoveryQueueItem, item_id)
+    if item is None:
+        raise HTTPException(404, "batch Discovery queue item not found")
+    if item.status != "failed":
+        raise HTTPException(409, "only failed Discovery items can be requeued")
+    item.status = "queued"
+    item.run_id = None
+    item.error_message = None
+    item.started_at = None
+    item.completed_at = None
+    db.commit()
+    get_discovery_batch_queue().wake()
+    return queue_snapshot(db)
+
+
+def _cancel_queued_run(run_id: int) -> None:
+    """Signal every supported Discovery route without introducing a new execution path."""
+    request_cancel(run_id)
+    cancel_website_loop_run(run_id)
+    cancel_wechat_discovery_run(run_id)
+
+
+@router.delete("/queue/{item_id}")
+def delete_discovery_queue_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+    _system_access: dict = Depends(require_system_access),
+):
+    """Remove an unstarted/failed entry; deleting an active item also requests cancellation."""
+    item = db.get(DiscoveryQueueItem, item_id)
+    if item is None:
+        raise HTTPException(404, "batch Discovery queue item not found")
+    run_id = item.run_id
+    if item.status in {"starting", "running", "cancelling"}:
+        item.status = "cancelling"
+        item.delete_requested = True
+    else:
+        db.delete(item)
+    db.commit()
+    if run_id is not None:
+        _cancel_queued_run(run_id)
+    return queue_snapshot(db)
+
+
+@router.post("/queue/stop-all")
+def stop_discovery_queue(
+    db: Session = Depends(get_db),
+    _system_access: dict = Depends(require_system_access),
+):
+    """Stop all active batch work and move it to the retry lane, leaving queued work intact."""
+    active = list(db.scalars(
+        select(DiscoveryQueueItem).where(
+            DiscoveryQueueItem.status.in_(("starting", "running", "cancelling"))
+        )
+    ))
+    run_ids = [item.run_id for item in active if item.run_id is not None]
+    for item in active:
+        item.status = "cancelling"
+        item.error_message = None
+    if active:
+        db.commit()
+    for run_id in run_ids:
+        _cancel_queued_run(run_id)
+    get_discovery_batch_queue().wake()
+    return queue_snapshot(db)
 
 
 @router.get("/runs")
@@ -229,7 +370,7 @@ def _serialize_discovery_run(
     capacity_is_active = False
     latest_capacity_event = None
     already_elapsed_seconds = 0.0
-    maximum_seconds = 1200.0
+    maximum_seconds = 1800.0
     if db is not None:
         latest_capacity_event = db.scalars(
             select(DiscoveryRunEvent).where(
@@ -247,16 +388,16 @@ def _serialize_discovery_run(
             snapshot_key = "already_elapsed_seconds" if capacity_is_active else "elapsed_snapshot"
             already_elapsed_seconds = float(payload.get(snapshot_key) or 0.0)
             maximum_seconds = min(
-                1200.0,
+                1800.0,
                 max(
                     0.1,
-                    float(payload.get("maximum_seconds") or 1200.0),
+                    float(payload.get("maximum_seconds") or 1800.0),
                 ),
             )
     if active_started_at is None and latest_capacity_event is None and run.checkpoint_path:
         try:
             checkpoint = CheckpointStore().load(run.checkpoint_path)
-            already_elapsed_seconds = min(1200.0, max(0.0, checkpoint.elapsed_seconds))
+            already_elapsed_seconds = min(1800.0, max(0.0, checkpoint.elapsed_seconds))
         except (OSError, ValueError):
             already_elapsed_seconds = 0.0
     ended_at = run.ended_at
@@ -290,6 +431,7 @@ def _serialize_discovery_run(
         "round": run.round,
         "queue_position": _discovery_queue_position(run.id),
         "runtime_version": run.runtime_version,
+        "agent_budget": normalize_agent_budget(run.agent_budget),
         "repair_method_id": run.repair_method_id,
         "source_kind": run.source_kind,
         "review_status": review_status,
@@ -304,6 +446,26 @@ def _serialize_discovery_run(
                 "current_step": current_step,
             }
         )
+    return result
+
+
+def _serialize_discovery_run_for_ui(run: SiteDiscoveryRun, *, db: Session) -> dict[str, Any]:
+    """Return phase-driven UI state without leaking raw trace/evidence payloads."""
+    result = _serialize_discovery_run(run, include_trace=False, db=db)
+    result.update(
+        {
+            "node_trace": [],
+            "retry_count": run.retry_count,
+            "current_step": run.phase,
+            "error_message": (
+                "已手动取消"
+                if run.status == "cancelled"
+                else "探查失败，请重新放入队列"
+                if run.status in {"failed", "interrupted"}
+                else None
+            ),
+        }
+    )
     return result
 
 
@@ -377,6 +539,35 @@ def _has_system_access(authorization: str | None) -> bool:
     return payload is not None and payload.get("role") in {"system_admin", "admin"}
 
 
+def _is_batch_discovery_run(db: Session, run_id: int) -> bool:
+    return db.scalar(
+        select(DiscoveryQueueItem.id)
+        .where(DiscoveryQueueItem.run_id == run_id)
+        .limit(1)
+    ) is not None
+
+
+def _authorize_discovery_run_view(
+    db: Session,
+    run: SiteDiscoveryRun,
+    *,
+    viewer_token: str | None,
+    authorization: str | None,
+    allow_shared_batch: bool = False,
+) -> None:
+    """Authorize a run view; shared queue projections are public and redacted."""
+    if _has_system_access(authorization):
+        return
+    if allow_shared_batch and _is_batch_discovery_run(db, run.id):
+        return
+    if viewer_token and run.viewer_token_hash and hmac.compare_digest(
+        run.viewer_token_hash,
+        _hash_discovery_viewer_token(viewer_token),
+    ):
+        return
+    raise HTTPException(403, "Discovery run access denied")
+
+
 def _authorize_discovery_event_stream(
     run_id: int,
     viewer_token: str | None,
@@ -389,14 +580,13 @@ def _authorize_discovery_event_stream(
         run = db.get(SiteDiscoveryRun, run_id)
         if run is None:
             raise HTTPException(404, "run not found")
-        if _has_system_access(authorization):
-            return
-        if viewer_token and run.viewer_token_hash and hmac.compare_digest(
-            run.viewer_token_hash,
-            _hash_discovery_viewer_token(viewer_token),
-        ):
-            return
-        raise HTTPException(403, "Discovery run log access denied")
+        _authorize_discovery_run_view(
+            db,
+            run,
+            viewer_token=viewer_token,
+            authorization=authorization,
+            allow_shared_batch=True,
+        )
     finally:
         db.close()
 
@@ -518,25 +708,73 @@ async def stream_discovery_run_events(
 
 
 @router.get("/runs/{run_id}")
-def get_discovery_run(run_id: int, db: Session = Depends(get_db)):
+def get_discovery_run(
+    run_id: int,
+    db: Session = Depends(get_db),
+    viewer_token: str | None = Header(default=None, alias="X-Discovery-Viewer-Token"),
+    authorization: str | None = Header(default=None),
+):
     """单 run 详情/轮询：含 node_trace 逐步轨迹 + current_step（前端高亮"进行到哪一步了"）。"""
     r = db.get(SiteDiscoveryRun, run_id)
     if not r:
         raise HTTPException(404, "run not found")
+    # Preserve the established single-run detail contract.  Shared batch
+    # work is different: its raw trace may only be read by system access, and
+    # ordinary observers use the projected /batch-ui endpoint above.
+    if _is_batch_discovery_run(db, run_id):
+        _authorize_discovery_run_view(
+            db,
+            r,
+            viewer_token=viewer_token,
+            authorization=authorization,
+        )
     return _serialize_discovery_run(r, include_trace=True, db=db)
+
+
+@router.get("/runs/{run_id}/batch-ui")
+def get_batch_discovery_run_ui(
+    run_id: int,
+    db: Session = Depends(get_db),
+    viewer_token: str | None = Header(default=None, alias="X-Discovery-Viewer-Token"),
+    authorization: str | None = Header(default=None),
+):
+    """Safe phase-driven state for the shared batch queue observer panel."""
+    r = db.get(SiteDiscoveryRun, run_id)
+    if not r:
+        raise HTTPException(404, "run not found")
+    _authorize_discovery_run_view(
+        db,
+        r,
+        viewer_token=viewer_token,
+        authorization=authorization,
+        allow_shared_batch=True,
+    )
+    return _serialize_discovery_run_for_ui(r, db=db)
 
 
 @router.post("/runs/{run_id}/cancel")
 def cancel_discovery_run(
     run_id: int,
     db: Session = Depends(get_db),
+    viewer_token: str | None = Header(default=None, alias="X-Discovery-Viewer-Token"),
+    authorization: str | None = Header(default=None),
 ):
     """手动取消生成命：停止后续节点/LLM/API 调用，并把状态标为 cancelled。"""
     r = db.get(SiteDiscoveryRun, run_id)
     if not r:
         raise HTTPException(404, "run not found")
+    if _is_batch_discovery_run(db, run_id):
+        if not _has_system_access(authorization):
+            raise HTTPException(403, "system access required to cancel batch Discovery work")
     if r.status not in {"queued", "running", "repairing"}:
         return _serialize_discovery_run(r, include_trace=True, db=db)
+    timing_payload = (
+        wechat_discovery_timing_payload(run_id)
+        if r.source_kind == "wechat"
+        else website_loop_timing_payload(run_id)
+        if r.source_kind == "website"
+        else {}
+    )
     cancelled = db.execute(
         update(SiteDiscoveryRun)
         .where(
@@ -557,6 +795,7 @@ def cancel_discovery_run(
             phase=r.phase,
             round_number=r.round,
             level="warning",
+            payload=timing_payload,
             session=db,
         )
     db.commit()
@@ -706,7 +945,7 @@ def _reject_packaging_method_ids(db: Session, method_ids: list[int]) -> None:
 def _reject_duplicate_review_domains(db: Session, method_ids: list[int]) -> None:
     domains = list(db.scalars(select(CrawlMethod.domain).where(CrawlMethod.id.in_(method_ids))))
     if len(domains) != len(set(domains)):
-        raise HTTPException(409, "one approval batch cannot contain multiple versions of the same domain")
+        raise HTTPException(409, "one approval batch cannot contain multiple versions of the same entry URL")
 
 
 def _reminder_config_response(config) -> dict[str, Any]:

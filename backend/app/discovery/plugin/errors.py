@@ -16,6 +16,7 @@ class ConnectorExitCode(IntEnum):
     PLUGIN_LOAD_ERROR = 20
     PLUGIN_EXECUTION_ERROR = 21
     INVALID_OUTPUT = 22
+    NETWORK_ERROR = 23
     TIMEOUT = 30
     CANCELLED = 31
     RUNTIME_ERROR = 40
@@ -30,6 +31,7 @@ class ConnectorErrorCode(StrEnum):
     PLUGIN_LOAD_ERROR = "connector_plugin_load_error"
     PLUGIN_EXECUTION_ERROR = "connector_plugin_execution_error"
     INVALID_OUTPUT = "connector_invalid_output"
+    NETWORK_ERROR = "connector_network_error"
     TIMEOUT = "connector_timeout"
     CANCELLED = "connector_cancelled"
     RUNTIME_ERROR = "connector_runtime_error"
@@ -42,6 +44,7 @@ _EXIT_CODES = {
     ConnectorErrorCode.PLUGIN_LOAD_ERROR: ConnectorExitCode.PLUGIN_LOAD_ERROR,
     ConnectorErrorCode.PLUGIN_EXECUTION_ERROR: ConnectorExitCode.PLUGIN_EXECUTION_ERROR,
     ConnectorErrorCode.INVALID_OUTPUT: ConnectorExitCode.INVALID_OUTPUT,
+    ConnectorErrorCode.NETWORK_ERROR: ConnectorExitCode.NETWORK_ERROR,
     ConnectorErrorCode.TIMEOUT: ConnectorExitCode.TIMEOUT,
     ConnectorErrorCode.CANCELLED: ConnectorExitCode.CANCELLED,
     ConnectorErrorCode.RUNTIME_ERROR: ConnectorExitCode.RUNTIME_ERROR,

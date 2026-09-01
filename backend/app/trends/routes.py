@@ -74,7 +74,6 @@ def settings_to_response(settings: TrendSettings) -> TrendSettingsResponse:
 @router.get("/templates")
 def list_trend_identity_templates(
     db: Session = Depends(get_db),
-    _access: dict = Depends(require_system_access),
 ) -> list[TrendIdentityTemplateResponse]:
     return [template_to_response(template) for template in TrendService(db).list_identity_templates()]
 

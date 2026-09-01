@@ -1,4 +1,5 @@
 import type { AgentRunRecord, AgentRunStage, FacetValue, ItemDetail, ItemListResponse } from "../types";
+import type { ItemQueryParams } from "../api/client";
 
 type ModeInputs = {
   itemsFailed: boolean;
@@ -52,6 +53,7 @@ function normalize(value: string | null | undefined): string {
 
 type SortBy = "published_at" | "fetched_at" | undefined;
 type SortDir = "desc" | "asc" | undefined;
+type DemoItemFilters = ItemQueryParams & { item_ids?: string };
 
 function relativeBoundaryIso(value: string | undefined): string | null {
   const now = new Date();
@@ -72,15 +74,19 @@ function relativeBoundaryIso(value: string | undefined): string | null {
 
 function matchesTimeRange(
   value: string | null | undefined,
-  filters: Record<string, string>,
+  filters: DemoItemFilters,
   prefix: "published" | "fetched",
 ): boolean {
-  const relativeAfter = filters[`${prefix}_after_mode`] === "relative"
-    ? relativeBoundaryIso(filters[`${prefix}_after_value`])
+  const afterMode = filters[`${prefix}_after_mode` as keyof DemoItemFilters];
+  const afterValue = filters[`${prefix}_after_value` as keyof DemoItemFilters];
+  const after = filters[`${prefix}_after` as keyof DemoItemFilters];
+  const before = filters[`${prefix}_before` as keyof DemoItemFilters];
+  const relativeAfter = afterMode === "relative"
+    ? relativeBoundaryIso(typeof afterValue === "string" ? afterValue : undefined)
     : null;
-  const after = filters[`${prefix}_after`];
-  const before = filters[`${prefix}_before`];
-  const hasTimeFilter = !!(relativeAfter || after || before);
+  const absoluteAfter = typeof after === "string" ? after : undefined;
+  const absoluteBefore = typeof before === "string" ? before : undefined;
+  const hasTimeFilter = !!(relativeAfter || absoluteAfter || absoluteBefore);
   if (!hasTimeFilter) {
     return true;
   }
@@ -90,11 +96,11 @@ function matchesTimeRange(
   if (relativeAfter && value < relativeAfter) {
     return false;
   }
-  if (!relativeAfter && after && value < after) {
+  if (!relativeAfter && absoluteAfter && value < absoluteAfter) {
     return false;
   }
-  if (before) {
-    const beforeDate = new Date(before + "T00:00:00Z");
+  if (absoluteBefore) {
+    const beforeDate = new Date(absoluteBefore + "T00:00:00Z");
     beforeDate.setDate(beforeDate.getDate() + 1);
     const upperBound = beforeDate.toISOString();
     if (value >= upperBound) {
@@ -104,15 +110,37 @@ function matchesTimeRange(
   return true;
 }
 
-export function filterDemoItems(items: ItemDetail[], filters: Record<string, string>): ItemDetail[] {
-  const q = normalize(filters.q);
+export function filterDemoItems(
+  items: ItemDetail[],
+  filters: DemoItemFilters,
+): ItemDetail[] {
+  const keywords = [filters.q, ...(filters.keywords ?? [])]
+    .map(normalize)
+    .filter(Boolean);
 
   const filtered = items.filter((item) => {
-    const matchesSearch =
-      q.length === 0 ||
-      [item.title, item.title_tldr, item.summary, item.main_category, item.info_type]
-        .filter(Boolean)
-        .some((value) => normalize(value).includes(q));
+    const searchableValues = filters.strict_title ? [
+      item.title,
+      item.title_tldr,
+      item.original_title,
+    ].filter(Boolean) : [
+      item.title,
+      item.title_tldr,
+      item.summary,
+      ...item.key_points,
+      item.url,
+      item.main_category,
+      item.info_type,
+      item.importance,
+      item.why_it_matters,
+      item.os_insight,
+      item.original_title,
+      ...item.source_links.map((source) => source.url),
+      ...item.sub_tags,
+    ].filter(Boolean);
+    const matchesSearch = keywords.length === 0 || keywords.some((keyword) =>
+      searchableValues.some((value) => normalize(value).includes(keyword)),
+    );
 
     const selectedCategories = (filters.main_category ?? "")
       .split(",")
@@ -138,7 +166,9 @@ export function filterDemoItems(items: ItemDetail[], filters: Record<string, str
       || item.sub_tags.some((tag) => selectedSubTags.includes(tag));
     const selectedSourceIds = (filters.source_id ?? "")
       .split(",")
-      .map((value) => Number(value.trim()))
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .map(Number)
       .filter((value) => Number.isFinite(value));
     const matchesSource =
       selectedSourceIds.length === 0

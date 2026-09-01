@@ -13,6 +13,11 @@ const LEGACY_DISCOVERY_STAGES = new Set([
 
 type DiscoveryLogMode = "run" | "all_discovery" | "run_plus_methods";
 
+export type DiscoveryLogOptions = {
+  /** Only keep events produced after this hook connected. Historical replay is dropped. */
+  liveOnly?: boolean;
+};
+
 export type DiscoveryEventLogEntry = NewsRunLogEntry & {
   event_type: string;
   phase: string | null;
@@ -70,19 +75,29 @@ function appendOrdered(
   return [...bySequence.values()].sort((a, b) => a.sequence - b.sequence);
 }
 
+function isLiveEvent(entry: Pick<DiscoveryEventLogEntry, "ts">, cutoffMs: number | null): boolean {
+  if (cutoffMs == null) return true;
+  const ts = Date.parse(entry.ts);
+  if (!Number.isFinite(ts)) return true;
+  return ts >= cutoffMs;
+}
+
 /** Tail one run's persisted event stream using authenticated fetch-based SSE. */
 export function useDiscoveryLogs(
   runId: number | null,
   enabled: boolean,
   mode: boolean | DiscoveryLogMode = false,
+  options: DiscoveryLogOptions = {},
 ): DiscoveryEventLogEntry[] {
   const [logs, setLogs] = useState<DiscoveryEventLogEntry[]>([]);
   const cursorRef = useRef(0);
+  const liveOnly = Boolean(options.liveOnly);
 
   useEffect(() => {
     setLogs([]);
     cursorRef.current = 0;
     if (!enabled || runId == null) return;
+    const liveCutoffMs = liveOnly ? Date.now() : null;
 
     if (typeof mode === "boolean") {
       let stopped = false;
@@ -108,7 +123,10 @@ export function useDiscoveryLogs(
           }
           if (data.epoch) epoch = data.epoch;
           if (data.logs.length > 0) lastId = Math.max(lastId, ...data.logs.map((log) => log.id));
-          const next = data.logs.filter((log) => includeLegacyLog(log, mode, runId)).map(asLegacyLog);
+          const next = data.logs
+            .filter((log) => includeLegacyLog(log, mode, runId))
+            .map(asLegacyLog)
+            .filter((entry) => isLiveEvent(entry, liveCutoffMs));
           if (!stopped) setLogs((previous) => appendOrdered(previous, next));
         } catch {
           // The persisted SSE path replaces this compatibility poll for new callers.
@@ -142,7 +160,9 @@ export function useDiscoveryLogs(
     const queue = (event: DiscoveryRunEvent) => {
       if (event.run_id !== runId || event.sequence <= cursorRef.current) return;
       cursorRef.current = event.sequence;
-      pending.push(asLog(event));
+      const entry = asLog(event);
+      if (!isLiveEvent(entry, liveCutoffMs)) return;
+      pending.push(entry);
       retryMs = INITIAL_RETRY_MS;
       if (flushTimer === undefined) flushTimer = window.setTimeout(flush, UI_BATCH_MS);
     };
@@ -205,7 +225,7 @@ export function useDiscoveryLogs(
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       if (flushTimer !== undefined) window.clearTimeout(flushTimer);
     };
-  }, [enabled, mode, runId]);
+  }, [enabled, liveOnly, mode, runId]);
 
   return logs;
 }

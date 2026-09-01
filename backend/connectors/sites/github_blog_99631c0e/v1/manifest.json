@@ -1,1 +1,0 @@
-{"recipe_type": "python_plugin", "connector_key": "github_blog_99631c0e", "version": 1, "entry": "https://github.blog/feed/", "entrypoint": "crawler:crawl", "runtime_version": "crawler-runtime:2", "checksum": "14fa5f93b4597476df9d99f6460c6001ca213839c422241db06370b6ea5e23d6", "allowed_domains": ["github.blog"]}

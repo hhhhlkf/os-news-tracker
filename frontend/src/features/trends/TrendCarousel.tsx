@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchTrendCarousel, fetchTrendCarouselTemplates } from "./api";
 import { trendCategoryColor, trendDirectionColor } from "./palette";
@@ -8,7 +8,7 @@ const carouselTemplatesQueryKey = ["trends", "results", "carousel", "templates"]
 const carouselQueryKey = ["trends", "results", "carousel"] as const;
 const CARDS_PER_PAGE = 2;
 const AUTO_SCROLL_INTERVAL_MS = 7000;
-const SOURCE_TITLE_MAX_LENGTH = 18;
+const SOURCE_TITLE_MAX_LENGTH = 14;
 /** Duration of the track slide; wrap snap waits this long before teleporting. */
 const SLIDE_MS = 520;
 const SLIDE_EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
@@ -28,8 +28,6 @@ export interface TrendCarouselProps {
   activeResultId?: string | null;
   /** item_id of the source pill currently driving the news list, if any. */
   activeItemId?: number | null;
-  /** Stretch the panel to fill a homepage module viewport. */
-  fillHeight?: boolean;
 }
 
 export function TrendCarousel({
@@ -37,7 +35,6 @@ export function TrendCarousel({
   onSelectSource,
   activeResultId = null,
   activeItemId = null,
-  fillHeight = false,
 }: TrendCarouselProps) {
   const [templateId, setTemplateId] = useState<string | null>(null);
   const [direction, setDirection] = useState<string | null>(null);
@@ -47,7 +44,9 @@ export function TrendCarousel({
   const [transitionOn, setTransitionOn] = useState(true);
   const [isHovered, setIsHovered] = useState(false);
   const [isSliding, setIsSliding] = useState(false);
+  const [viewportHeight, setViewportHeight] = useState<number | null>(null);
   const slideResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
 
   const templatesQuery = useQuery({
     queryKey: carouselTemplatesQueryKey,
@@ -117,6 +116,32 @@ export function TrendCarousel({
     };
   }, []);
 
+  const measureActiveSlide = () => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const slide = viewport.querySelectorAll(".trend-carousel__slide")[slideIndex] as HTMLElement | undefined;
+    if (!slide) return;
+    const pageEl = slide.querySelector(".trend-carousel__page");
+    const height = (pageEl instanceof HTMLElement ? pageEl : slide).offsetHeight;
+    if (height > 0) setViewportHeight(height);
+  };
+
+  useLayoutEffect(() => {
+    measureActiveSlide();
+  }, [slideIndex, items, templateId, direction]);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || typeof ResizeObserver === "undefined") return;
+    const slide = viewport.querySelectorAll(".trend-carousel__slide")[slideIndex] as HTMLElement | undefined;
+    if (!slide) return;
+    const observer = new ResizeObserver(() => measureActiveSlide());
+    observer.observe(slide);
+    const pageEl = slide.querySelector(".trend-carousel__page");
+    if (pageEl) observer.observe(pageEl);
+    return () => observer.disconnect();
+  }, [slideIndex, items]);
+
   const settleAfterSlide = (nextIndex: number, count: number) => {
     if (slideResetTimer.current) clearTimeout(slideResetTimer.current);
     slideResetTimer.current = setTimeout(() => {
@@ -167,116 +192,124 @@ export function TrendCarousel({
 
   const loadError = (templatesQuery.error ?? carouselQuery.error) as Error | null;
   const carouselMeta = carouselQuery.data;
+  const selectTone = direction ? trendDirectionColor(direction) : null;
 
   return (
     <section
-      style={fillHeight ? { ...panel, ...panelFill } : panel}
+      className="home-ops-card home-ops-card--trends trend-carousel"
       aria-label="趋势轮播"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       onFocus={() => setIsHovered(true)}
       onBlur={() => setIsHovered(false)}
     >
-      <div style={header}>
+      <div className="home-ops-card__head">
         <div>
-          <div style={eyebrow}>趋势轮播</div>
-          <div style={meta}>
+          <div className="home-ops-card__title">趋势轮播</div>
+          <div className="home-ops-card__kicker">
             {carouselMeta?.window_start_date && carouselMeta.window_end_date
-              ? `窗口 ${carouselMeta.window_start_date} 至 ${carouselMeta.window_end_date} · 最多展示 X=${carouselMeta.trend_count} 条可验证趋势`
-              : "选择身份模板后展示该模板最近成功发布的可验证趋势"}
+              ? `${carouselMeta.window_start_date} 至 ${carouselMeta.window_end_date}`
+              : "最近成功发布的可验证趋势"}
           </div>
         </div>
-        <div style={controls}>
-          <select
-            value={templateId ?? ""}
-            onChange={(event) => setTemplateId(event.target.value || null)}
-            style={{
-              ...select,
-              ...(direction
-                ? {
-                    borderColor: trendDirectionColor(direction).border,
-                    background: trendDirectionColor(direction).background,
-                    color: trendDirectionColor(direction).color,
-                  }
-                : {}),
-            }}
-            aria-label="选择身份模板"
-            disabled={templates.length === 0}
-          >
-            {templates.length === 0 && <option value="">暂无身份模板</option>}
-            {templates.map((template) => (
-              <option key={template.template_id} value={template.template_id}>
-                {template.name}
-              </option>
-            ))}
-          </select>
-          <select
-            value={direction ?? ""}
-            onChange={(event) => setDirection(event.target.value || null)}
-            style={select}
-            aria-label="筛选趋势方向"
-            disabled={!templateId}
-          >
-            <option value="">全部方向</option>
-            {directions.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-          {items.length > CARDS_PER_PAGE && (
-            <div style={pager}>
-              <span style={autoScrollHint}>{isHeld ? "已暂停" : "自动轮播"}</span>
-              <button
-                type="button"
-                style={isSliding ? pagerButtonDisabled : pagerButton}
-                disabled={isSliding}
-                onClick={() => goToRelative(-1)}
-                aria-label="上一组趋势"
-              >
-                ‹
-              </button>
-              <span style={pagerLabel}>
-                {page} / {pageCount}
-              </span>
-              <button
-                type="button"
-                style={isSliding ? pagerButtonDisabled : pagerButton}
-                disabled={isSliding}
-                onClick={() => goToRelative(1)}
-                aria-label="下一组趋势"
-              >
-                ›
-              </button>
-            </div>
-          )}
-        </div>
+        {items.length > CARDS_PER_PAGE && (
+          <div className="trend-carousel__pager">
+            <span className="trend-carousel__hint">{isHeld ? "已暂停" : "自动"}</span>
+            <button
+              type="button"
+              className="trend-carousel__page-btn"
+              disabled={isSliding}
+              onClick={() => goToRelative(-1)}
+              aria-label="上一组趋势"
+            >
+              ‹
+            </button>
+            <span className="trend-carousel__page-label">
+              {page}/{pageCount}
+            </span>
+            <button
+              type="button"
+              className="trend-carousel__page-btn"
+              disabled={isSliding}
+              onClick={() => goToRelative(1)}
+              aria-label="下一组趋势"
+            >
+              ›
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="trend-carousel__controls">
+        <select
+          value={templateId ?? ""}
+          onChange={(event) => setTemplateId(event.target.value || null)}
+          className="trend-carousel__select"
+          style={
+            selectTone
+              ? {
+                  borderColor: selectTone.border,
+                  background: selectTone.background,
+                  color: selectTone.color,
+                }
+              : undefined
+          }
+          aria-label="选择身份模板"
+          disabled={templates.length === 0}
+        >
+          {templates.length === 0 && <option value="">暂无身份模板</option>}
+          {templates.map((template) => (
+            <option key={template.template_id} value={template.template_id}>
+              {template.name}
+            </option>
+          ))}
+        </select>
+        <select
+          value={direction ?? ""}
+          onChange={(event) => setDirection(event.target.value || null)}
+          className="trend-carousel__select trend-carousel__select--direction"
+          aria-label="筛选趋势方向"
+          disabled={!templateId}
+        >
+          <option value="">全部方向</option>
+          {directions.map((item) => (
+            <option key={item} value={item}>
+              {item}
+            </option>
+          ))}
+        </select>
       </div>
 
       {loadError ? (
-        <div style={emptyState}>{describeLoadError(loadError)}</div>
+        <div className="trend-carousel__empty">{describeLoadError(loadError)}</div>
       ) : templatesQuery.isLoading ? (
-        <div style={emptyState}>正在加载身份模板…</div>
+        <div className="trend-carousel__empty">正在加载身份模板…</div>
       ) : templates.length === 0 ? (
-        <div style={emptyState}>尚未创建身份模板，先在趋势总结页新建模板并完成一次趋势运行。</div>
+        <div className="trend-carousel__empty">尚未创建身份模板，先在趋势总结页完成一次运行。</div>
       ) : carouselQuery.isLoading ? (
-        <div style={emptyState}>正在加载趋势轮播…</div>
+        <div className="trend-carousel__empty">正在加载趋势轮播…</div>
       ) : items.length === 0 ? (
-        <div style={emptyState}>{carouselQuery.data?.message ?? "当前范围内暂无可验证趋势"}</div>
+        <div className="trend-carousel__empty">{carouselQuery.data?.message ?? "当前范围内暂无可验证趋势"}</div>
       ) : (
-        <div style={fillHeight ? { ...viewport, ...viewportFill } : viewport} aria-live="polite">
+        <div
+          ref={viewportRef}
+          className="trend-carousel__viewport"
+          aria-live="polite"
+          style={{
+            height: viewportHeight ?? undefined,
+            transition: transitionOn ? `height ${SLIDE_MS}ms ${SLIDE_EASE}` : "none",
+          }}
+        >
           <div
             className="trend-carousel-track"
             style={{
-              ...track,
-              ...(fillHeight ? trackFill : null),
               transform: `translate3d(-${slideIndex * 100}%, 0, 0)`,
               transition: transitionOn ? `transform ${SLIDE_MS}ms ${SLIDE_EASE}` : "none",
             }}
           >
             {trackPages.map((pageItems, index) => (
-              <div key={`slide-${index}`} style={slide}>
-                <div style={grid}>
+              <div key={`slide-${index}`} className="trend-carousel__slide">
+                <div className="trend-carousel__page">
                   {pageItems.map((item) => (
                     <TrendCard
                       key={`${index}-${item.result_id}`}
@@ -319,7 +352,7 @@ function TrendCard({
 
   return (
     <article
-      style={isActive ? activeCard : card}
+      className={`trend-mini-card${isActive ? " is-active" : ""}`}
       onClick={() =>
         onSelectTrend({ resultId: item.result_id, topic: item.topic, itemIds: item.item_ids })
       }
@@ -332,15 +365,27 @@ function TrendCard({
       }}
       aria-pressed={isActive}
     >
-      <div style={cardHeader}>
-        <div style={badges}>
-          <span style={{ ...categoryBadge, background: categoryColor.background, color: categoryColor.color, borderColor: categoryColor.border }}>{item.category_label}</span>
-          {item.direction && <span style={{ ...directionBadge, background: directionColor.background, color: directionColor.color, borderColor: directionColor.border }}>{item.direction}</span>}
+      <div className="trend-mini-card__header">
+        <div className="trend-mini-card__badges">
+          <span
+            className="trend-mini-card__badge"
+            style={{ background: categoryColor.background, color: categoryColor.color, borderColor: categoryColor.border }}
+          >
+            {item.category_label}
+          </span>
+          {item.direction && (
+            <span
+              className="trend-mini-card__badge trend-mini-card__badge--direction"
+              style={{ background: directionColor.background, color: directionColor.color, borderColor: directionColor.border }}
+            >
+              {item.direction}
+            </span>
+          )}
         </div>
-        <span style={cardScore}>排序分 {item.trend_rank_score.toFixed(1)}</span>
+        <span className="trend-mini-card__score">{item.trend_rank_score.toFixed(1)}</span>
       </div>
-      <div style={cardTopic}>{item.topic}</div>
-      <div style={cardSummary}>{item.trend_summary}</div>
+      <div className="trend-mini-card__topic">{item.topic}</div>
+      <div className="trend-mini-card__summary">{item.trend_summary}</div>
       <SourcePillsRow
         sources={item.sources}
         activeItemId={activeItemId}
@@ -399,22 +444,22 @@ function SourcePillsRow({
 
   return (
     <div
-      style={sourceRowShell}
+      className="trend-mini-card__sources"
       onClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => event.stopPropagation()}
     >
       <div
         ref={viewportRef}
-        style={sourceViewport}
+        className="trend-mini-card__source-viewport"
         onScroll={syncPager}
         aria-label="引用新闻"
       >
-        <div style={sourceTrack}>
+        <div className="trend-mini-card__source-track">
           {sources.map((source) => (
             <button
               key={source.item_id}
               type="button"
-              style={source.item_id === activeItemId ? activeSourcePill : sourcePill}
+              className={`trend-mini-card__source${source.item_id === activeItemId ? " is-active" : ""}`}
               title={source.title}
               aria-label={`查看引用新闻：${source.title}`}
               onClick={() => onSelectSource({ itemId: source.item_id, title: source.title })}
@@ -425,10 +470,10 @@ function SourcePillsRow({
         </div>
       </div>
       {needsPager && (
-        <div style={sourcePager}>
+        <div className="trend-mini-card__source-pager">
           <button
             type="button"
-            style={canPrev ? sourcePageButton : sourcePageButtonDisabled}
+            className="trend-mini-card__source-btn"
             disabled={!canPrev}
             aria-label="上一组引用"
             onClick={() => scrollByPage(-1)}
@@ -437,7 +482,7 @@ function SourcePillsRow({
           </button>
           <button
             type="button"
-            style={canNext ? sourcePageButton : sourcePageButtonDisabled}
+            className="trend-mini-card__source-btn"
             disabled={!canNext}
             aria-label="下一组引用"
             onClick={() => scrollByPage(1)}
@@ -449,196 +494,3 @@ function SourcePillsRow({
     </div>
   );
 }
-
-const panel: CSSProperties = {
-  border: "1px solid #d0d5dd",
-  borderRadius: 8,
-  background: "#fff",
-  padding: 22,
-  marginBottom: 0,
-};
-const panelFill: CSSProperties = {
-  height: "100%",
-  marginBottom: 0,
-  display: "flex",
-  flexDirection: "column",
-  minHeight: 0,
-};
-const viewportFill: CSSProperties = {
-  flex: 1,
-  minHeight: 0,
-};
-const trackFill: CSSProperties = {
-  height: "100%",
-};
-const header: CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "flex-start",
-  gap: 12,
-  flexWrap: "wrap",
-  marginBottom: 12,
-};
-const eyebrow: CSSProperties = { fontSize: 20, fontWeight: 800, color: "#101828", letterSpacing: "0.01em" };
-const meta: CSSProperties = { fontSize: 14, color: "#667085", marginTop: 6, lineHeight: 1.6 };
-const controls: CSSProperties = { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" };
-const select: CSSProperties = {
-  border: "1px solid #d0d5dd",
-  borderRadius: 8,
-  padding: "10px 13px",
-  fontSize: 15,
-  background: "#fff",
-  color: "#344054",
-  maxWidth: 260,
-};
-const pager: CSSProperties = { display: "flex", alignItems: "center", gap: 6 };
-const pagerButton: CSSProperties = {
-  border: "1px solid #d0d5dd",
-  borderRadius: 8,
-  background: "#fff",
-  color: "#344054",
-  padding: "7px 13px",
-  fontSize: 16,
-  fontWeight: 700,
-  cursor: "pointer",
-  lineHeight: 1,
-};
-const pagerButtonDisabled: CSSProperties = {
-  ...pagerButton,
-  opacity: 0.55,
-  cursor: "default",
-};
-const pagerLabel: CSSProperties = { fontSize: 14, color: "#667085", minWidth: 42, textAlign: "center" };
-const autoScrollHint: CSSProperties = { fontSize: 13, color: "#98a2b3", whiteSpace: "nowrap", marginRight: 2 };
-const viewport: CSSProperties = {
-  overflow: "hidden",
-  width: "100%",
-};
-const track: CSSProperties = {
-  display: "flex",
-  alignItems: "stretch",
-  width: "100%",
-  willChange: "transform",
-};
-const slide: CSSProperties = {
-  flex: "0 0 100%",
-  minWidth: 0,
-  boxSizing: "border-box",
-  // Stretch with the tallest page in the track, then fill that height.
-  alignSelf: "stretch",
-};
-const grid: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-  gridTemplateRows: "1fr",
-  gap: 14,
-  width: "100%",
-  height: "100%",
-  minHeight: "100%",
-  alignItems: "stretch",
-};
-const card: CSSProperties = {
-  border: "1px solid #eaecf0",
-  borderRadius: 8,
-  padding: 22,
-  background: "#fcfcfd",
-  display: "flex",
-  flexDirection: "column",
-  gap: 12,
-  cursor: "pointer",
-  minWidth: 0,
-  height: "100%",
-  boxSizing: "border-box",
-};
-const activeCard: CSSProperties = {
-  ...card,
-  borderColor: "#84adff",
-  background: "#f8fbff",
-  boxShadow: "0 0 0 2px rgba(23,92,211,.10)",
-};
-const cardHeader: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 };
-const badges: CSSProperties = { display: "flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" };
-const categoryBadge: CSSProperties = {
-  border: "1px solid",
-  fontSize: 13,
-  fontWeight: 700,
-  borderRadius: 999,
-  padding: "5px 11px",
-  whiteSpace: "nowrap",
-};
-const directionBadge: CSSProperties = { border: "1px solid", borderRadius: 999, padding: "5px 10px", fontSize: 13, fontWeight: 800 };
-const cardScore: CSSProperties = { fontSize: 14, color: "#98a2b3", whiteSpace: "nowrap", fontWeight: 600 };
-const cardTopic: CSSProperties = { fontSize: 21, fontWeight: 800, color: "#101828", lineHeight: 1.45, letterSpacing: "0.01em" };
-const cardSummary: CSSProperties = { fontSize: 16, color: "#475467", lineHeight: 1.7 };
-const sourceRowShell: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 6,
-  marginTop: "auto",
-  paddingTop: 4,
-  minWidth: 0,
-  width: "100%",
-  flexShrink: 0,
-};
-const sourceViewport: CSSProperties = {
-  flex: "1 1 auto",
-  minWidth: 0,
-  overflow: "hidden",
-};
-const sourceTrack: CSSProperties = {
-  display: "flex",
-  flexWrap: "nowrap",
-  gap: 6,
-  width: "max-content",
-};
-const sourcePager: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 2,
-  flex: "0 0 auto",
-};
-const sourcePageButton: CSSProperties = {
-  border: "none",
-  background: "transparent",
-  color: "#98a2b3",
-  fontSize: 14,
-  fontWeight: 700,
-  lineHeight: 1,
-  padding: "2px 4px",
-  cursor: "pointer",
-};
-const sourcePageButtonDisabled: CSSProperties = {
-  ...sourcePageButton,
-  opacity: 0.35,
-  cursor: "default",
-};
-const sourcePill: CSSProperties = {
-  border: "1px solid #e4ebf5",
-  borderRadius: 999,
-  background: "#fff",
-  color: "#475467",
-  fontSize: 13,
-  padding: "5px 11px",
-  maxWidth: 168,
-  flex: "0 0 auto",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-  cursor: "pointer",
-};
-const activeSourcePill: CSSProperties = {
-  ...sourcePill,
-  borderColor: "#84adff",
-  background: "#eff6ff",
-  color: "#175cd3",
-  fontWeight: 700,
-};
-const emptyState: CSSProperties = {
-  border: "1px dashed #d0d5dd",
-  borderRadius: 8,
-  color: "#667085",
-  background: "#fcfcfd",
-  padding: "22px 18px",
-  fontSize: 14,
-  textAlign: "center",
-};

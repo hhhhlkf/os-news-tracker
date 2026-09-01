@@ -37,16 +37,17 @@ function formatMultiFilter(raw: string | null | undefined): string {
 
 function summarizeFilter(snapshot: MailFilterSnapshot): string {
   const segments: string[] = [];
-  if (snapshot.item_kind === "discussion") segments.push("技术讨论");
-  if (snapshot.item_kind === "news") segments.push("新闻");
+  if (snapshot.item_kind === "discussion") segments.push("条目类型：技术讨论");
+  if (snapshot.item_kind === "news") segments.push("条目类型：新闻");
   const mainCategory = formatMultiFilter(snapshot.main_category);
   const importance = formatMultiFilter(snapshot.importance);
   const subTag = formatMultiFilter(snapshot.sub_tag);
-  if (mainCategory) segments.push(mainCategory);
-  if (snapshot.info_type) segments.push(snapshot.info_type);
-  if (importance) segments.push(importance);
-  if (subTag) segments.push(subTag);
-  if (snapshot.q) segments.push(`“${snapshot.q}”`);
+  if (mainCategory) segments.push(`主分类：${mainCategory}`);
+  if (snapshot.info_type) segments.push(`信息类型：${snapshot.info_type}`);
+  if (importance) segments.push(`重要程度：${importance}`);
+  if (subTag) segments.push(`技术热点：${subTag}`);
+  if (snapshot.keywords?.length) segments.push(`关键词筛选${snapshot.strict_title ? "（仅标题）" : ""}：${snapshot.keywords.join(" / ")}`);
+  else if (snapshot.q) segments.push(`“${snapshot.q}”`);
   if (snapshot.published_after_mode === "relative" && snapshot.published_after_value) {
     segments.push(`发布时间最近 ${snapshot.published_after_value}`);
   } else if (snapshot.published_after || snapshot.published_before) {

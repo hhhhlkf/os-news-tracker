@@ -2,12 +2,12 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.discussions.visibility import visible_item_clause
-from app.models import DiscussionGroup, DiscussionGroupThread, DiscussionMessage, Item, ItemSource, ItemTag, Tag, TagAlias
+from app.models import DiscussionGroup, DiscussionGroupThread, DiscussionMessage, Entity, Item, ItemEntity, ItemSource, ItemTag, Source, Tag, TagAlias
 from app.processing.reason import generate_os_insight, generate_recommendation_reason
 from app.run_logs import get_run_log_epoch, list_run_logs
 
@@ -118,6 +118,79 @@ def _parse_item_ids(raw: str | None) -> list[int]:
     return ids
 
 
+def _search_terms(q: str | None, keywords: list[str]) -> list[str]:
+    """Return distinct non-empty search conditions, preserving their order."""
+    terms: list[str] = []
+    seen: set[str] = set()
+    for candidate in [q, *(keywords or [])]:
+        value = (candidate or "").strip()
+        normalized = value.casefold()
+        if not value or normalized in seen:
+            continue
+        seen.add(normalized)
+        terms.append(value)
+    return terms
+
+
+def _item_matches_search_term(term: str):
+    """One mechanism-independent full-text-ish condition for a news item."""
+    source_matches = or_(
+        Source.name.icontains(term, autoescape=True),
+        Source.url.icontains(term, autoescape=True),
+        Source.vendor.icontains(term, autoescape=True),
+    )
+    return or_(
+        Item.title.icontains(term, autoescape=True),
+        Item.title_tldr.icontains(term, autoescape=True),
+        Item.summary.icontains(term, autoescape=True),
+        Item.url.icontains(term, autoescape=True),
+        Item.main_category.icontains(term, autoescape=True),
+        Item.info_type.icontains(term, autoescape=True),
+        Item.importance.icontains(term, autoescape=True),
+        cast(Item.key_points, String).icontains(term, autoescape=True),
+        Item.raw_content.icontains(term, autoescape=True),
+        Item.clean_content.icontains(term, autoescape=True),
+        Item.why_it_matters.icontains(term, autoescape=True),
+        Item.os_insight.icontains(term, autoescape=True),
+        Item.source_id.in_(select(Source.id).where(source_matches)),
+        Item.id.in_(
+            select(ItemSource.item_id)
+            .join(Source, Source.id == ItemSource.source_id)
+            .where(or_(source_matches, ItemSource.url.icontains(term, autoescape=True)))
+        ),
+        Item.id.in_(
+            select(ItemEntity.item_id)
+            .join(Entity, Entity.id == ItemEntity.entity_id)
+            .where(or_(Entity.name.icontains(term, autoescape=True), Entity.type.icontains(term, autoescape=True)))
+        ),
+        Item.id.in_(
+            select(DiscussionGroup.item_id)
+            .join(DiscussionGroupThread, DiscussionGroupThread.group_id == DiscussionGroup.id)
+            .join(DiscussionMessage, DiscussionMessage.thread_id == DiscussionGroupThread.thread_id)
+            .where(DiscussionMessage.subject.icontains(term, autoescape=True))
+        ),
+        Item.id.in_(
+            select(ItemTag.item_id)
+            .join(Tag, Tag.id == ItemTag.tag_id)
+            .where(or_(Tag.name.icontains(term, autoescape=True), Tag.kind.icontains(term, autoescape=True)))
+        ),
+    )
+
+
+def _item_matches_title_term(term: str):
+    """Match only news headlines, including the original discussion subject."""
+    return or_(
+        Item.title.icontains(term, autoescape=True),
+        Item.title_tldr.icontains(term, autoescape=True),
+        Item.id.in_(
+            select(DiscussionGroup.item_id)
+            .join(DiscussionGroupThread, DiscussionGroupThread.group_id == DiscussionGroup.id)
+            .join(DiscussionMessage, DiscussionMessage.thread_id == DiscussionGroupThread.thread_id)
+            .where(DiscussionMessage.subject.icontains(term, autoescape=True))
+        ),
+    )
+
+
 def _relative_time_delta(value: str | None) -> timedelta | None:
     if value == "24h":
         return timedelta(hours=24)
@@ -162,6 +235,8 @@ def list_items(
     source_id: str | None = None,
     item_ids: str | None = None,
     q: str | None = None,
+    keywords: list[str] = Query(default=[]),
+    strict_title: bool = False,
     limit: int = Query(50, le=200),
     offset: int = 0,
     sort_by: SortBy = "published_at",
@@ -218,13 +293,12 @@ def list_items(
                 ),
             )
         )
-    if q:
-        # title_tldr is the headline the list and detail pages actually render,
-        # so a word copied off the screen has to match it as well as the source title.
-        like = f"%{q}%"
-        stmt = stmt.where(
-            Item.title.ilike(like) | Item.title_tldr.ilike(like) | Item.summary.ilike(like)
-        )
+    # A keyword may match any searchable item field.  Multiple keyword chips
+    # are alternatives, so a news item is returned when it matches at least one.
+    search_terms = _search_terms(q, keywords)
+    if search_terms:
+        matcher = _item_matches_title_term if strict_title else _item_matches_search_term
+        stmt = stmt.where(or_(*(matcher(term) for term in search_terms)))
 
     # Time-range filters on published_at.
     # Absolute dates keep the historical natural-day semantics; relative presets

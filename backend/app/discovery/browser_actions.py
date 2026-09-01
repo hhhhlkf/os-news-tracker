@@ -1,7 +1,7 @@
 """DEPRECATED / MIGRATION-ONLY Playwright helpers for the old DSL stack.
 
-Active exploration runs through the gVisor ``ProbeTools`` implementation in
-``loop.explore_tools``.  Keep this module only while stored DSL methods can be
+Active exploration runs through the fixed gVisor Explore session runtime in
+``loop.explore_session``.  Keep this module only while stored DSL methods can be
 executed for migration or rollback; do not call it from new connector paths.
 """
 

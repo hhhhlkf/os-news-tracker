@@ -243,8 +243,12 @@ export function MailImmediateSendPanel(props: {
 
   const snapshotSummary = useMemo(() => {
     const rows: Array<{ label: string; value: string }> = [];
-    if (filterSnapshot.q) {
-      rows.push({ label: "关键词", value: filterSnapshot.q });
+    const keywordFilters = Array.from(new Set([
+      ...(filterSnapshot.keywords ?? []),
+      ...(filterSnapshot.q ? [filterSnapshot.q] : []),
+    ].map((value) => value.trim()).filter(Boolean)));
+    if (keywordFilters.length > 0) {
+      rows.push({ label: "关键词筛选", value: `${filterSnapshot.strict_title ? "仅标题 · " : ""}命中任一：${keywordFilters.join(" / ")}` });
     }
     const formatMulti = (raw: string | null | undefined) =>
       (raw ?? "").split(",").map((part) => part.trim()).filter(Boolean).join(" / ");
@@ -587,9 +591,9 @@ export function MailImmediateSendPanel(props: {
           <div style={{ fontSize: 12, color: "#98a2b3", marginBottom: 6 }}>HTML 邮件预览</div>
           <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>{previewData?.subject ?? subject ?? "技术新闻筛选简报"}</div>
           <div style={{ fontSize: 13, lineHeight: 1.7, color: "#d0d5dd" }}>
-            筛选条件：{previewHeaderSummary}
+            <strong style={{ color: "#f8fafc" }}>筛选条件：</strong>{previewHeaderSummary}
             <br />
-            通道：{previewData?.provider ? mailProviderLabel(previewData.provider) : providerLabel}
+            <strong style={{ color: "#f8fafc" }}>通道：</strong>{previewData?.provider ? mailProviderLabel(previewData.provider) : providerLabel}
             <br />
             {previewData ? `共 ${previewData.item_count} 条，准备发送给 ${previewData.recipients.length || 0} 个收件人。` : "点击“生成预览”后展示邮件内容。"}
           </div>

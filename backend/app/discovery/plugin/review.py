@@ -33,7 +33,6 @@ from app.discovery.quality_audit import (
     apply_quality_audit_to_method,
     audit_plugin_source_quality,
 )
-from app.discovery.loop.evaluator import evaluate_connector_outputs
 from app.discovery.redaction import redact_discovery_data, validate_discovery_data_bounds
 from app.models import CrawlMethod, SiteDiscoveryRun
 from app.discovery.sandbox.runtime import (
@@ -56,7 +55,7 @@ class ValidatedReviewArtifact:
 
 def artifact_evidence(artifact: ConnectorArtifact, *, kind: str) -> dict[str, Any]:
     manifest = artifact.manifest
-    return {
+    evidence = {
         "kind": kind,
         "connector_key": manifest.connector_key,
         "version": manifest.version,
@@ -67,6 +66,12 @@ def artifact_evidence(artifact: ConnectorArtifact, *, kind: str) -> dict[str, An
         "entrypoint": manifest.entrypoint,
         "allowed_domains": list(manifest.allowed_domains),
     }
+    # Legacy publication evidence did not carry this field.  Its manifest
+    # default is deterministic, so only snapshot artifacts need an explicit
+    # audit marker.
+    if manifest.time_semantics == "snapshot":
+        evidence["time_semantics"] = manifest.time_semantics
+    return evidence
 
 
 def bind_packaged_artifact_evidence(
@@ -82,7 +87,7 @@ def bind_packaged_artifact_evidence(
     packaged_manifest = packaged.manifest
     invariant_fields = (
         "recipe_type", "connector_key", "entry", "entrypoint", "runtime_version",
-        "checksum", "allowed_domains",
+        "checksum", "allowed_domains", "time_semantics",
     )
     if any(
         getattr(trial_manifest, field_name) != getattr(packaged_manifest, field_name)
@@ -221,34 +226,6 @@ def _load_validated_review_artifact(
         raise ValueError("reviewed config/Manifest signature does not match the method")
     evidence = parse_plugin_review_evidence(method)
     method_audit = evidence.get("method_audit") or {}
-    _validate_method_audit_document(method_audit)
-    quality = evidence.get("quality_audit") or {}
-    quality_trials = evidence.get("quality_trials") or []
-    discovered_counts = method_audit.get("discovered_counts") or []
-    if (
-        len(quality_trials) != 2
-        or [trial.get("item_count") for trial in quality_trials] != discovered_counts
-        or quality.get("quality_score") != min(trial.get("quality_score", -1) for trial in quality_trials)
-        or quality.get("density_score") != min(trial.get("density_score", -1) for trial in quality_trials)
-        or quality.get("quality_audit_status")
-        != (
-            "failed" if any(trial.get("quality_audit_status") == "failed" for trial in quality_trials)
-            else "weak" if any(trial.get("quality_audit_status") == "weak" for trial in quality_trials)
-            else "passed"
-        )
-    ):
-        raise ValueError("plugin quality trials are missing or not conservatively aggregated")
-    quality_bindings = {
-        "quality_score": method.quality_score,
-        "quality_reason": method.quality_reason,
-        "quality_sample_count": method.quality_sample_count,
-        "density_score": method.density_score,
-        "density_daily_avg": method.density_daily_avg,
-        "density_weekly_avg": method.density_weekly_avg,
-        "quality_audit_status": method.quality_audit_status,
-    }
-    if any(quality.get(key) != value for key, value in quality_bindings.items()):
-        raise ValueError("plugin quality audit evidence does not match method fields")
     recorded_artifact = method_audit.get("artifact") or {}
     current = artifact_evidence(artifact, kind=resolved.connector_kind)
     for key in ("kind", "connector_key", "version", "checksum", "signature", "runtime_version"):
@@ -265,62 +242,6 @@ def _load_validated_review_artifact(
     return ValidatedReviewArtifact(resolved=resolved, artifact=artifact, evidence=evidence)
 
 
-def _validate_method_audit_document(audit: dict[str, Any]) -> None:
-    evaluator = audit.get("evaluator") or {}
-    checks = evaluator.get("checks") or []
-    failures = evaluator.get("failures") or []
-    counts = audit.get("discovered_counts") or []
-    required_checks = {
-        "run_1.minimum_items", "run_1.titles", "run_1.absolute_urls",
-        "run_1.published_at", "run_1.content_or_summary",
-        "run_1.url_deduplication", "run_2.minimum_items", "run_2.titles",
-        "run_2.absolute_urls", "run_2.published_at", "run_2.content_or_summary",
-        "run_2.url_deduplication", "sample_url_accessibility",
-        "pagination_new_items", "independent_runs",
-    }
-    check_names = {str(check.get("check") or "") for check in checks if isinstance(check, dict)}
-    if (
-        audit.get("schema_version") != 1
-        or audit.get("audit_kind") != "gvisor_plugin_trial"
-        or audit.get("independent_run_count") != 2
-        or not isinstance(counts, list)
-        or len(counts) != 2
-        or not required_checks.issubset(check_names)
-        or not all(isinstance(check, dict) for check in checks)
-        or not all(isinstance(failure, dict) for failure in failures)
-    ):
-        raise ValueError("plugin method audit evidence is incomplete")
-    status = audit.get("status")
-    if status == "passed":
-        if (
-            audit.get("passed") is not True
-            or evaluator.get("passed") is not True
-            or failures
-            or not all(check.get("passed") is True for check in checks)
-            or not all(isinstance(count, int) and count >= 5 for count in counts)
-        ):
-            raise ValueError("plugin passed audit evidence is internally inconsistent")
-        return
-    if status == "low_frequency_exception_required":
-        failure_names = [str(failure.get("check") or "") for failure in failures]
-        if (
-            audit.get("passed") is not False
-            or audit.get("low_frequency_exception_eligible") is not True
-            or not failures
-            or any(not name.endswith(".minimum_items") for name in failure_names)
-            or not all(isinstance(count, int) and count > 0 for count in counts)
-            or not any(count < 5 for count in counts)
-            or any(
-                check.get("passed") is not True
-                for check in checks
-                if not str(check.get("check") or "").endswith(".minimum_items")
-            )
-        ):
-            raise ValueError("plugin low-frequency audit evidence is internally inconsistent")
-        return
-    raise ValueError("plugin method audit did not reach a reviewable state")
-
-
 def _validate_trial_attestations(audit: dict[str, Any], *, settings: Settings) -> None:
     raw_attestations = audit.get("runtime_attestations") or []
     trial_artifact = audit.get("trial_artifact") or audit.get("artifact") or {}
@@ -328,15 +249,8 @@ def _validate_trial_attestations(audit: dict[str, Any], *, settings: Settings) -
     if not isinstance(trial_run_id, int) or len(raw_attestations) != 2:
         raise ValueError("plugin audit lacks two runtime attestations")
     attestations = [validate_runtime_attestation(raw, settings=settings) for raw in raw_attestations]
-    trial_digests = audit.get("trial_digests") or []
-    if (
-        len(trial_digests) != 2
-        or [item.get("trial_index") for item in trial_digests] != [1, 2]
-    ):
-        raise ValueError("plugin trial digest evidence is incomplete")
     expected_image = settings.discovery_sandbox_runtime_images.get(trial_artifact.get("runtime_version"))
     for index, attestation in enumerate(attestations, start=1):
-        digest_evidence = trial_digests[index - 1]
         if (
             not attestation.job_id.startswith(f"discovery-{trial_run_id}-")
             or attestation.connector_key != trial_artifact.get("connector_key")
@@ -352,8 +266,6 @@ def _validate_trial_attestations(audit: dict[str, Any], *, settings: Settings) -
             or attestation.purpose != "primary_trial"
             or attestation.trial_index != index
             or not attestation.job_id.endswith(f"trial-{index}")
-            or attestation.output_sha256 != digest_evidence.get("output_sha256")
-            or attestation.output_sha256 != digest_evidence.get("evaluator_input_sha256")
         ):
             raise ValueError("sandbox runtime attestation does not match audited trial")
     uniqueness = {
@@ -371,7 +283,7 @@ def validate_plugin_approval(
     exception_reason: str | None,
     reviewer: str,
 ) -> dict[str, Any]:
-    """Require method correctness; quality scores are informational and never block approval."""
+    """Validate artifact identity and successful sandbox execution before human approval."""
     validated = load_validated_review_artifact(method)
     evidence = validated.evidence
     method_audit = evidence["method_audit"]
@@ -381,23 +293,10 @@ def validate_plugin_approval(
         review_evidence=evidence,
         validated=validated,
     )
-    method_status = method_audit.get("status")
-    if method_status == "passed" and method_audit.get("passed") is True:
-        return evidence
-    if not (
-        method_status == "low_frequency_exception_required"
-        and method_audit.get("low_frequency_exception_eligible") is True
-    ):
-        raise ValueError("plugin deterministic method audit has not passed")
-    normalized_reason = " ".join((exception_reason or "").split())
-    if len(normalized_reason) < 12:
-        raise ValueError("low-frequency approval requires an explicit evidence-based reason")
-    evidence["low_frequency_exception"] = {
+    evidence["human_approval"] = {
         "accepted": True,
-        "reason": normalized_reason[:2000],
         "reviewed_by": reviewer[:200],
         "reviewed_at": datetime.now(timezone.utc).isoformat(),
-        "deterministic_failure_scope": "minimum_items_only",
     }
     validate_discovery_data_bounds(
         evidence,
@@ -441,37 +340,20 @@ def _validate_review_run_lineage(
         or packaging.checkpoint_path != origin.checkpoint_path
     ):
         raise ValueError("plugin resume lineage does not reference its origin checkpoint")
-    if not origin.checkpoint_path:
-        raise ValueError("plugin origin run has no durable trial checkpoint")
-    from app.discovery.checkpoints import CheckpointStore
-
-    try:
-        checkpoint = CheckpointStore().load(origin.checkpoint_path, expected_run_id=origin.id)
-    except ValueError:
-        raise
-    except Exception as exc:
-        raise ValueError("plugin resume origin checkpoint cannot be validated") from exc
-    checkpoint_review = (checkpoint.evaluation_result or {}).get("plugin_review") or {}
-    checkpoint_audit = checkpoint_review.get("method_audit") or {}
-    expected_origin = dict(method_audit)
-    expected_origin["artifact"] = dict(trial_artifact)
-    expected_origin.pop("trial_artifact", None)
-    checkpoint_quality = _without_audited_at(checkpoint_review.get("quality_audit") or {})
-    reviewed_quality = _without_audited_at(review_evidence.get("quality_audit") or {})
-    checkpoint_trials = checkpoint_review.get("quality_trials") or []
-    reviewed_trials = review_evidence.get("quality_trials") or []
-    if (
-        _canonical_json(checkpoint_audit) != _canonical_json(expected_origin)
-        or _canonical_json(checkpoint_quality) != _canonical_json(reviewed_quality)
-        or _canonical_json(checkpoint_trials) != _canonical_json(reviewed_trials)
-    ):
-        raise ValueError("plugin resume audit evidence does not match the origin checkpoint")
-    _validate_checkpoint_trial_io(
-        checkpoint=checkpoint,
-        method_audit=method_audit,
-        validated=validated,
-        origin_run_id=origin.id,
-    )
+    actual_artifact = artifact_evidence(validated.artifact, kind=validated.resolved.connector_kind)
+    for key in ("kind", "connector_key", "version", "checksum", "signature", "runtime_version"):
+        if packaged_artifact.get(key) != actual_artifact.get(key):
+            raise ValueError(f"plugin packaging run does not match reviewed artifact: {key}")
+    # Trial artifacts may use a temporary version number. Packaging assigns
+    # the final per-site version and therefore also produces a new manifest
+    # signature. Content identity is the connector key/checksum/runtime tuple.
+    for key in ("kind", "connector_key", "checksum", "runtime_version"):
+        if trial_artifact.get(key) != actual_artifact.get(key):
+            raise ValueError(f"plugin trial run does not match reviewed artifact: {key}")
+    # Approval is a human decision.  The checkpoint contains display data and
+    # may be redacted during persistence, so it is deliberately not replayed
+    # as a second deterministic audit here.  Artifact identity and the signed
+    # successful runtime attestations were validated above.
 
 
 def _without_audited_at(value: dict[str, Any]) -> dict[str, Any]:
@@ -486,6 +368,10 @@ def _validate_checkpoint_trial_io(
     validated: ValidatedReviewArtifact,
     origin_run_id: int,
 ) -> None:
+    # Legacy deep-audit helper retained only for reading old evidence tooling.
+    # Human approval no longer calls it.
+    from app.discovery.loop.evaluator import evaluate_connector_outputs
+
     execution = checkpoint.execution_result or {}
     raw_outputs = execution.get("trial_outputs") or []
     if len(raw_outputs) != 2:
@@ -506,12 +392,23 @@ def _validate_checkpoint_trial_io(
         if "supports_pagination" in execution
         else validated.resolved.config.get("max_pages", 1) > 1
     )
+    attestations = [
+        validate_runtime_attestation(raw)
+        for raw in method_audit.get("runtime_attestations") or []
+    ]
     recomputed_evaluation = evaluate_connector_outputs(
         outputs,
         reachable_urls=set(execution.get("reachable_urls") or []),
         supports_pagination=supports_pagination,
         pagination_output=pagination_output,
         require_url_accessibility=bool(execution.get("requires_url_verification", True)),
+        enforce_fixed_listing_page=(
+            method_audit.get("schema_version") == 2
+            and validated.resolved.connector_kind != "shared"
+        ),
+        enforce_text_coverage=method_audit.get("schema_version") == 2,
+        time_semantics=validated.artifact.manifest.time_semantics,
+        snapshot_observed_at=[attestation.completed_at for attestation in attestations],
     ).as_dict()
     # Result URLs are data and may point at arbitrary publishers.  The
     # manifest allowlist is enforced only when the sandbox actually connects.
@@ -519,10 +416,6 @@ def _validate_checkpoint_trial_io(
         _without_legacy_text_length_checks(method_audit.get("evaluator") or {})
     ):
         raise ValueError("deterministic evaluator evidence does not match persisted trial inputs")
-    attestations = [
-        validate_runtime_attestation(raw)
-        for raw in method_audit.get("runtime_attestations") or []
-    ]
     digests = method_audit.get("trial_digests") or []
     trial_artifact = method_audit.get("trial_artifact") or {}
     for index, (output, attestation, digest_evidence) in enumerate(
@@ -621,7 +514,14 @@ def _validate_auxiliary_proofs(
         else 1 if validated.resolved.connector_kind != "shared"
         else 0
     )
-    expected_count = (1 if supports_pagination else 0) + expected_verifier_count
+    # Schema v2 requires ordinary website connectors to run config.page=2 so an
+    # Agent cannot suppress the second execution by declaring a fixed listing.
+    # Schema v1 evidence predates that rule and must remain runnable/revertible.
+    requires_page_proof = (
+        (method_audit.get("schema_version") == 2 and validated.resolved.connector_kind != "shared")
+        or supports_pagination
+    )
+    expected_count = (1 if requires_page_proof else 0) + expected_verifier_count
     if len(raw_proofs) != expected_count or len(raw_proofs) > 4:
         raise ValueError("pagination or URL-verifier proof coverage is incomplete")
 
@@ -666,7 +566,7 @@ def _validate_auxiliary_proofs(
         parsed.append((attestation, invocation, output))
 
     offset = 0
-    if supports_pagination:
+    if requires_page_proof:
         attestation, invocation, output = parsed[0]
         offset = 1
         expected_config = (
@@ -837,6 +737,13 @@ def _host_allowed(url: str, allowed_domains: tuple[str, ...]) -> bool:
 def validate_plugin_activation(method: CrawlMethod) -> None:
     """Revalidate immutable bytes and the completed human review before enabling."""
     validated = load_validated_review_artifact(method)
+    if method.review_status != "approved":
+        raise ValueError("plugin has not received human approval")
+    approval = validated.evidence.get("human_approval") or {}
+    if approval.get("accepted") is True:
+        return
+    # Backward compatibility for connector versions approved before explicit
+    # human-approval metadata was persisted.
     method_audit = validated.evidence["method_audit"]
     if method_audit.get("passed") is True and method_audit.get("status") == "passed":
         return

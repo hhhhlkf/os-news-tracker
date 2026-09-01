@@ -2,7 +2,7 @@ services:
   backend-prod:
     build:
       context: ${PRODUCTION_WORKTREE:-./.worktrees/production-b4b067c}/backend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.production
     command: sh -c 'chmod 700 /var/lib/os-news-tracker/discovery-attestation && exec uvicorn app.entry:app --host 0.0.0.0 --port 8000'
     env_file: .env
     volumes:
@@ -30,7 +30,7 @@ services:
   frontend-prod:
     build:
       context: ${PRODUCTION_WORKTREE:-./.worktrees/production-b4b067c}/frontend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.production
     volumes:
       - ./deploy/nginx.production.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:

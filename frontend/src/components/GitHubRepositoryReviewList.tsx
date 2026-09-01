@@ -73,12 +73,14 @@ export function GitHubRepositoryReviewList() {
       <div style={actions}>
         <span style={counter}>待审核 <b>{pending.length}</b> 个 · 已选 <b>{selected.size}</b> 个</span>
         <label style={checkLabel}><input type="checkbox" checked={allSelected} disabled={!pending.length || isBusy} onChange={(event) => setSelectedIds(event.target.checked ? pending.map((repository) => repository.id) : [])} />全选</label>
-        <button type="button" disabled={!selectedIds.length || isBusy} onClick={() => void approve()} style={!selectedIds.length || isBusy ? disabledPrimary : primary}>{busy ? "通过中…" : "批量通过"}</button>
-        <button type="button" disabled={!selectedIds.length || isBusy} onClick={() => void remove()} style={!selectedIds.length || isBusy ? disabledDanger : danger}>{busy ? "删除中…" : "批量删除"}</button>
+        <div style={batchActions}>
+          <button type="button" disabled={!selectedIds.length || isBusy} onClick={() => void approve()} style={!selectedIds.length || isBusy ? disabledPrimary : primary}>{busy ? "通过中…" : "批量通过"}</button>
+          <button type="button" disabled={!selectedIds.length || isBusy} onClick={() => void remove()} style={!selectedIds.length || isBusy ? disabledDanger : danger}>{busy ? "删除中…" : "批量删除"}</button>
+        </div>
       </div>
     </div>
     {notice && <div style={{ ...noticeStyle, display: "flex", gap: 8, alignItems: "flex-start", color: notice.tone === "danger" ? "#b42318" : "#067647", borderColor: notice.tone === "danger" ? "#fecdca" : "#abefc6", background: notice.tone === "danger" ? "#fef3f2" : "#ecfdf3" }}><span style={{ flex: 1 }}>{notice.text}</span><button type="button" onClick={() => setNotice(null)} aria-label="关闭提示" style={closeButton}>×</button></div>}
-    <div style={list}>
+    <div style={list} data-home-scroll="true">
       {repositories.isLoading && <div style={empty}>加载待审核 GitHub 仓库中…</div>}
       {repositories.isError && <div style={{ ...empty, color: "#b42318", borderColor: "#fecdca", background: "#fef3f2" }}>加载待审核 GitHub 仓库失败。</div>}
       {pending.map((repository) => <RepositoryRow key={repository.id} repository={repository} estimate={estimates[repository.id]} selected={selected.has(repository.id)} busy={isBusy} onToggle={(checked) => toggle(repository.id, checked)} onEstimate={() => void estimate(repository)} />)}
@@ -89,29 +91,48 @@ export function GitHubRepositoryReviewList() {
 
 function RepositoryRow({ repository, estimate, selected, busy, onToggle, onEstimate }: { repository: GitHubDiscussionRepository; estimate?: { issues: number; discussions: number }; selected: boolean; busy: boolean; onToggle: (checked: boolean) => void; onEstimate: () => void }) {
   const kinds = [repository.include_issues && "Issues", repository.include_discussions && "Discussions"].filter(Boolean).join(" · ");
-  return <div style={{ ...row, borderColor: selected ? "#b9d4ff" : "#eaecf0", background: selected ? "#f8fbff" : "#fff" }}><input type="checkbox" aria-label={`选择 ${repository.display_name}`} checked={selected} disabled={busy} onChange={(event) => onToggle(event.target.checked)} /><div style={{ flex: 1, minWidth: 0 }}><div style={rowTitle}>{repository.display_name}<span style={pendingBadge}>pending</span></div><div style={meta}>{kinds} · {repository.token_configured ? `凭据已就绪（${repository.token_env_key}）` : `未检测到凭据（${repository.token_env_key}）`}</div>{estimate && <div style={estimateStyle}>首次回填预估：Issues {estimate.issues} · Discussions {estimate.discussions}</div>}</div><div style={rowActions}><button type="button" disabled={busy} onClick={onEstimate} style={busy ? disabledButton : button}>{busy ? "预估中…" : "预估回填"}</button></div></div>;
+  const metaText = `${kinds} · ${repository.token_configured ? `凭据已就绪（${repository.token_env_key}）` : `未检测到凭据（${repository.token_env_key}）`}`;
+  return (
+    <div style={{ ...row, borderColor: selected ? "#b9d4ff" : "#eaecf0", background: selected ? "#f8fbff" : "#fff" }}>
+      <input type="checkbox" aria-label={`选择 ${repository.display_name}`} checked={selected} disabled={busy} onChange={(event) => onToggle(event.target.checked)} />
+      <div style={rowMain} title={`${repository.display_name}\n${metaText}`}>
+        <div style={rowTitleLine}>
+          <span style={rowTitle}>{repository.display_name}</span>
+          <span style={pendingBadge}>pending</span>
+        </div>
+        <div style={meta}>{metaText}</div>
+        {estimate && <div style={estimateStyle}>首次回填预估：Issues {estimate.issues} · Discussions {estimate.discussions}</div>}
+      </div>
+      <div style={rowActions}>
+        <button type="button" disabled={busy} onClick={onEstimate} style={busy ? disabledButton : button}>{busy ? "预估中…" : "预估回填"}</button>
+      </div>
+    </div>
+  );
 }
 
-const section: CSSProperties = { background: "#fff", border: "1px solid #d0d5dd", borderRadius: 10, padding: 16, marginTop: 14 };
+const section: CSSProperties = { background: "#fff", border: "1px solid #d0d5dd", borderRadius: 10, padding: 16 };
 const headerRow: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 };
 const title: CSSProperties = { fontSize: 13, fontWeight: 700, color: "#101828" };
 const subtitle: CSSProperties = { fontSize: 11, color: "#667085", marginTop: 3 };
 const actions: CSSProperties = { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" };
+const batchActions: CSSProperties = { display: "flex", alignItems: "center", gap: 6, flexWrap: "nowrap", flexShrink: 0 };
 const counter: CSSProperties = { fontSize: 11, color: "#475467" };
 const checkLabel: CSSProperties = { display: "inline-flex", gap: 5, alignItems: "center", color: "#475467", fontSize: 11 };
-const primary: CSSProperties = { border: "none", borderRadius: 999, padding: "8px 16px", background: "#175cd3", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" };
-const danger: CSSProperties = { border: "1px solid #fecdca", borderRadius: 999, padding: "8px 16px", background: "#fff", color: "#b42318", fontSize: 12, fontWeight: 700, cursor: "pointer" };
+const primary: CSSProperties = { flexShrink: 0, border: "none", borderRadius: 999, padding: "4px 8px", background: "#175cd3", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" };
+const danger: CSSProperties = { flexShrink: 0, border: "1px solid #fecdca", borderRadius: 999, padding: "4px 8px", background: "#fff", color: "#b42318", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" };
 const disabledPrimary: CSSProperties = { ...primary, background: "#98a2b3", cursor: "not-allowed" };
 const disabledDanger: CSSProperties = { ...danger, color: "#98a2b3", borderColor: "#eaecf0", cursor: "not-allowed" };
 const noticeStyle: CSSProperties = { border: "1px solid", borderRadius: 8, padding: "8px 10px", fontSize: 11, marginBottom: 10 };
 const closeButton: CSSProperties = { border: 0, background: "transparent", color: "inherit", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0 };
-const list: CSSProperties = { display: "grid", gap: 8 };
-const row: CSSProperties = { display: "flex", alignItems: "flex-start", gap: 10, border: "1px solid", borderRadius: 9, padding: "9px 11px" };
-const rowTitle: CSSProperties = { fontSize: 13, fontWeight: 700, color: "#101828" };
-const pendingBadge: CSSProperties = { marginLeft: 6, borderRadius: 999, padding: "2px 7px", background: "#fffaeb", color: "#b54708", fontSize: 11 };
-const meta: CSSProperties = { marginTop: 5, color: "#475467", fontSize: 11, lineHeight: 1.5 };
-const estimateStyle: CSSProperties = { marginTop: 4, color: "#175cd3", fontSize: 11, fontWeight: 700 };
-const rowActions: CSSProperties = { display: "flex", gap: 6, flexWrap: "wrap", alignSelf: "center" };
+const list: CSSProperties = { display: "grid", alignContent: "start", gap: 6, minWidth: 0, maxHeight: 280, overflowY: "auto" };
+const row: CSSProperties = { display: "flex", alignItems: "center", gap: 8, minWidth: 0, overflow: "hidden", border: "1px solid", borderRadius: 8, padding: "7px 9px" };
+const rowMain: CSSProperties = { flex: 1, minWidth: 0, overflow: "hidden" };
+const rowTitleLine: CSSProperties = { display: "flex", alignItems: "center", gap: 6, minWidth: 0 };
+const rowTitle: CSSProperties = { minWidth: 0, flex: 1, fontSize: 12, fontWeight: 700, color: "#101828", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const pendingBadge: CSSProperties = { flexShrink: 0, borderRadius: 999, padding: "1px 6px", background: "#fffaeb", color: "#b54708", fontSize: 10, fontWeight: 700 };
+const meta: CSSProperties = { marginTop: 2, color: "#475467", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const estimateStyle: CSSProperties = { marginTop: 2, color: "#4a6785", fontSize: 10, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const rowActions: CSSProperties = { display: "flex", gap: 6, flexShrink: 0, alignSelf: "center" };
 const button: CSSProperties = { border: "1px solid #b9d4ff", borderRadius: 6, padding: "6px 9px", background: "#fff", color: "#175cd3", fontSize: 11, fontWeight: 700, cursor: "pointer" };
 const disabledButton: CSSProperties = { ...button, color: "#98a2b3", borderColor: "#eaecf0", cursor: "not-allowed" };
 const empty: CSSProperties = { border: "1px dashed #d0d5dd", borderRadius: 8, padding: 14, color: "#667085", fontSize: 12 };

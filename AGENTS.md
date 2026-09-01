@@ -30,7 +30,7 @@ The current repository still contains the legacy LangGraph/DSL Discovery impleme
 - Connector output remains `{items, stats}` and must continue through `CrawlOutputIngester` and the existing news Pipeline.
 - Preserve external Discovery HTTP contracts, review flow, cancellation, ingestion, and formal fetch result shape; replace the internal website/WeChat implementation.
 - Legacy website/WeChat DSLs are migration-only: dual-run per site, retain rollback for at least 7 days and 3 successful formal runs, then remove them. Protect the internal-forum compatibility seam before deleting shared legacy code.
-- Discovery loop limit: 5 minutes and at most 5 write/execute/repair rounds.
+- Discovery loop limit: 30 minutes. Sandbox-capacity queue time is excluded from this shared execution budget.
 - Formal failures: after 3 consecutive failures, start one bounded repair run; every repaired version returns to pending review and is never auto-published.
 
 ## Tech Stack
@@ -190,10 +190,18 @@ This project follows **Subagent-Driven Development (SDD)** via the Superpowers m
 - Keep Agent decisions separate from deterministic execution and evaluation. The model must never self-certify that its connector ran successfully.
 - Untrusted generated code must execute through the gVisor sandbox abstraction. If `runsc` is unavailable, report the environment blocker; do not silently execute it with ordinary `runc`/Docker or import it into the backend process.
 - Only the dev database may be migrated during implementation unless the user explicitly authorizes a production rollout. Never infer authorization to touch the production database or `os-news-tracker_pgdata` volume.
+- Root `docker-compose.yml` is permanently retired. Never run a bare `docker compose` command: development must use `docker compose -f docker-compose.dev.yml ...`; formal release must use `docker compose -p <release-project> -f docker-compose.production.yml ...`. Both backends use `os-news-tracker_pgdata_dev`; do not create or switch to a separate production database volume.
 - Preserve unrelated worktree changes and untracked files. In particular, do not add `backend/uv.lock` unless the task explicitly requires it.
 - Do **not** proactively create or modify tests. Only add or change tests when the user explicitly asks for tests.
 - Do not follow TDD by default. Implement the requested code change directly, then run existing relevant checks when practical.
 - Existing tests may be used for verification, but do not write new tests just to satisfy a change.
+
+## Production Release
+
+- A production release starts by committing all intended local changes. Build the exact release commit from a dedicated clean worktree; never build production images from a dirty development worktree.
+- Production is image-based and does not hot-reload source. Build and replace only `backend-prod` and `frontend-prod`; do not recreate the database, remove persistent volumes, or run a database migration unless the user explicitly authorizes it.
+- Before replacing the services, confirm that no process-local Discovery or manual fetch is running. Use a release-specific Compose project name so Compose cannot delete the retained pair; stop and retain the current backend and frontend containers as the immediately previous release, then start the new pair on the shared external network.
+- Retain only the running production pair and the immediately previous stopped pair. Remove older production containers only after the new pair passes homepage and API health checks. Never delete production volumes, connector data, networks, or approved runtime images during this cleanup.
 - Pure logic (normalizer, dedup) should stay isolated and easy to verify without I/O
 - Fetchers, extractors, and search are behind Protocols — testable with fixtures, swappable
 

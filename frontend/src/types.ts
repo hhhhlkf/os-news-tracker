@@ -387,6 +387,12 @@ export interface MultiDiscoveryStartRequest extends DiscoveryRouteInfo {
   display_input?: string | null;
   force: boolean;
   name?: string | null;
+  agent_budget?: {
+    contextMemory: number;
+    toolKb: number;
+    depth: number;
+    tokenBudget: number;
+  };
 }
 
 export interface MultiDiscoveryNameRequest extends DiscoveryRouteInfo {
@@ -420,6 +426,39 @@ export interface MultiDiscoveryStartResponse {
 export interface MultiDiscoveryNameResponse {
   name: string;
   resolved_route_type: DiscoveryRouteType | null;
+}
+
+export type DiscoveryQueueItemStatus = "queued" | "starting" | "running" | "cancelling" | "failed" | "completed";
+
+export interface DiscoveryQueueItem {
+  id: number;
+  name: string | null;
+  input: string;
+  display_input?: string | null;
+  selected_route_type: DiscoveryRouteType | null;
+  resolved_route_type: DiscoveryRouteType | null;
+  route_source: DiscoveryRouteSource;
+  status: DiscoveryQueueItemStatus;
+  run_id: number | null;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+}
+
+export interface DiscoveryQueueSnapshot {
+  pending: DiscoveryQueueItem[];
+  failed: DiscoveryQueueItem[];
+  completed?: DiscoveryQueueItem[];
+  running_count: number;
+  max_parallel: number;
+}
+
+export interface DiscoveryQueueEnqueueResponse {
+  status: "queued" | "duplicate" | "started" | "accepted";
+  item?: DiscoveryQueueItem;
+  existing_method?: MultiDiscoveryStartResponse["existing_method"];
+  run_id?: number | null;
+  viewer_token?: string;
 }
 
 // ---- Token usage statistics ----

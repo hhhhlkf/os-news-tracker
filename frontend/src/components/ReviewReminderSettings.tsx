@@ -76,8 +76,8 @@ export function ReviewReminderSettings() {
   </section>;
 }
 
-const section: CSSProperties = { marginTop: 10, border: "1px solid #d0d5dd", borderRadius: 10, background: "#f8fafc", padding: 12 };
-const title: CSSProperties = { fontSize: 12, fontWeight: 800, color: "#101828" };
+const section: CSSProperties = { border: "1px solid #d0d5dd", borderRadius: 10, background: "#f8fafc", padding: "14px 12px 12px" };
+const title: CSSProperties = { fontSize: 12, fontWeight: 800, color: "#101828", lineHeight: 1.4 };
 const subtitle: CSSProperties = { marginTop: 3, marginBottom: 10, color: "#667085", fontSize: 11 };
 const noticeStyle: CSSProperties = { border: "1px solid", borderRadius: 8, padding: "8px 10px", fontSize: 11, marginBottom: 10 };
 const closeButton: CSSProperties = { border: 0, background: "transparent", color: "inherit", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0 };

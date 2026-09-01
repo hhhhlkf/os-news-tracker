@@ -1,0 +1,8 @@
+services:
+  # The existing development data services retain their public 15432/8100
+  # bindings.  This isolated stack uses its own internal database and
+  # embedding-worker network endpoints instead.
+  db:
+    ports: !reset []
+  embedding-worker:
+    ports: !reset []

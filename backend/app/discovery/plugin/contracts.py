@@ -29,6 +29,11 @@ class ConnectorManifest(BaseModel):
     runtime_version: str
     checksum: str
     allowed_domains: tuple[str, ...] = Field(min_length=1)
+    # Publication timestamps are the normal news contract.  A ranking or
+    # changing collection can instead be an observed snapshot: its items do
+    # not invent publication dates and the host binds the observation time to
+    # the sandbox invocation/attestation.
+    time_semantics: Literal["publication", "snapshot"] = "publication"
 
     @field_validator("connector_key")
     @classmethod
@@ -141,6 +146,33 @@ class ConnectorStats(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     discovered_count: int = Field(ge=0)
+    # These optional diagnostics intentionally remain extras.  Existing
+    # connector output digests must not gain null fields merely because the
+    # runtime learned to request better zero-result diagnostics.
+
+    @model_validator(mode="after")
+    def validate_optional_diagnostics(self) -> ConnectorStats:
+        extras = self.model_extra or {}
+        for field_name in ("candidate_count", "rejected_count"):
+            if field_name not in extras:
+                continue
+            value = extras[field_name]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"stats.{field_name} must be a non-negative integer")
+        if "rejection_reasons" not in extras:
+            return self
+        value = extras["rejection_reasons"]
+        if not isinstance(value, dict) or len(value) > 20:
+            raise ValueError("stats.rejection_reasons may contain at most 20 entries")
+        normalized: dict[str, int] = {}
+        for reason, count in value.items():
+            if not isinstance(reason, str) or not reason.strip() or len(reason) > 120:
+                raise ValueError("stats.rejection_reasons keys must be bounded non-empty strings")
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                raise ValueError("stats.rejection_reasons values must be non-negative integers")
+            normalized[reason] = count
+        extras["rejection_reasons"] = normalized
+        return self
 
 
 class ConnectorOutput(BaseModel):

@@ -99,35 +99,55 @@ async def crawl(request, context):
 
 
 class _ExecutionBudget:
-    """Ten-minute budget whose clock pauses for every sandbox capacity wait."""
+    """Thirty-minute budget whose clock pauses for every sandbox capacity wait."""
 
     def __init__(self, maximum_seconds: float, *, already_elapsed: float = 0.0) -> None:
-        self.maximum_seconds = min(1200.0, max(0.1, maximum_seconds))
+        self.maximum_seconds = min(1800.0, max(0.1, maximum_seconds))
         self.already_elapsed = max(0.0, already_elapsed)
         self.started_at: float | None = time.monotonic() if self.already_elapsed > 0 else None
         self.excluded_queue_seconds = 0.0
+        self.pending_queue_started_at: float | None = None
+        self._lock = threading.Lock()
 
-    def capacity_acquired(self, queued_at: float) -> None:
+    def capacity_queued(self) -> float:
+        """Mark a capacity wait before submitting the sandbox job."""
+        with self._lock:
+            queued_at = time.monotonic()
+            self.pending_queue_started_at = queued_at
+            return queued_at
+
+    def capacity_acquired(self, queued_at: float) -> float:
         now = time.monotonic()
-        if self.started_at is None:
-            self.started_at = now
-        else:
-            self.excluded_queue_seconds += max(0.0, now - queued_at)
+        with self._lock:
+            queue_started_at = self.pending_queue_started_at or queued_at
+            queue_wait_seconds = max(0.0, now - queue_started_at)
+            if self.started_at is None:
+                self.started_at = now
+            else:
+                self.excluded_queue_seconds += queue_wait_seconds
+            self.pending_queue_started_at = None
+            return queue_wait_seconds
 
     def elapsed(self) -> float:
-        if self.started_at is None:
-            return self.already_elapsed
-        return self.already_elapsed + max(
-            0.0,
-            time.monotonic() - self.started_at - self.excluded_queue_seconds,
-        )
+        with self._lock:
+            if self.started_at is None:
+                return self.already_elapsed
+            pending_queue_seconds = (
+                max(0.0, time.monotonic() - self.pending_queue_started_at)
+                if self.pending_queue_started_at is not None
+                else 0.0
+            )
+            return self.already_elapsed + max(
+                0.0,
+                time.monotonic() - self.started_at - self.excluded_queue_seconds - pending_queue_seconds,
+            )
 
     def remaining(self) -> float:
         return max(0.0, self.maximum_seconds - self.elapsed())
 
     def check(self) -> None:
         if self.remaining() <= 0:
-            raise TimeoutError("WeChat Discovery 已达到 15 分钟执行预算")
+            raise TimeoutError("WeChat Discovery 已达到 30 分钟执行预算")
 
 
 def _domain_package_lock(domain: str) -> threading.RLock:
@@ -223,6 +243,8 @@ class WechatDiscoveryEngine:
         self.sandbox = sandbox or SandboxRuntime(settings=self.settings)
         self.checkpoints = checkpoint_store or CheckpointStore(self.settings)
         self._jobs: dict[int, set[str]] = {}
+        self._phase_started_elapsed: dict[int, tuple[str, float]] = {}
+        self._budgets: dict[int, _ExecutionBudget] = {}
         self._lock = threading.Lock()
 
     def start(
@@ -380,6 +402,8 @@ class WechatDiscoveryEngine:
             self.settings.discovery_loop_max_seconds,
             already_elapsed=resume_checkpoint.elapsed_seconds if resume_checkpoint else 0.0,
         )
+        with self._lock:
+            self._budgets[run_id] = budget
         evidence: list[dict[str, Any]] = []
         execution_state: dict[str, Any] = dict(
             resume_checkpoint.execution_result or {}
@@ -387,11 +411,9 @@ class WechatDiscoveryEngine:
         try:
             budget.check()
             artifact = load_wechat_sogou_artifact(self.settings)
-            if artifact.manifest.runtime_version != self.settings.discovery_runtime_version:
-                raise ValueError("shared WeChat connector Runtime version is not enabled")
             self._validate_checkpoint_artifact(resume_checkpoint, artifact)
             if self._can_resume_package(resume_checkpoint):
-                self._phase(run_id, "package", trace, "从已通过验收的微信检查点继续封装。")
+                self._phase(run_id, "package", trace, "从已通过验收的微信检查点继续封装。", budget=budget)
                 budget.check()
                 self._package(
                     run_id=run_id,
@@ -407,7 +429,7 @@ class WechatDiscoveryEngine:
                 )
                 return
             if resume_checkpoint is None or resume_checkpoint.phase == "context":
-                self._phase(run_id, "context", trace, "准备共享无登录搜狗微信采集器配置。")
+                self._phase(run_id, "context", trace, "准备共享无登录搜狗微信采集器配置。", budget=budget)
             if resume_checkpoint is not None and resume_checkpoint.phase == "evaluate":
                 # A failed completed evaluation gets a fresh deterministic trial,
                 # but retains its consumed budget and prior diagnosis.
@@ -419,7 +441,7 @@ class WechatDiscoveryEngine:
             outputs = [snapshot.output for snapshot in trial_snapshots if snapshot.complete and snapshot.output is not None]
             trial_attestations = list(execution_state.get("trial_attestations") or [])[:len(outputs)]
             auxiliary_proofs = list(execution_state.get("auxiliary_proofs") or [])
-            self._phase(run_id, "execute", trace, "通过 gVisor 对共享采集器独立试运行两次。")
+            self._phase(run_id, "execute", trace, "通过 gVisor 对共享采集器独立试运行两次。", budget=budget)
             page_one_config = {**config.model_dump(mode="json"), "page": 1, "max_pages": 1}
             for trial in range(len(outputs) + 1, 3):
                 result = self._execute(
@@ -492,7 +514,7 @@ class WechatDiscoveryEngine:
                 or WechatCheckpointOutput.model_validate(persisted_page).complete is not True
             ):
                 raise ValueError("complete WeChat pagination output does not fit durable review evidence")
-            self._phase(run_id, "evaluate", trace, "执行搜狗摘要字段、去重、分页与双试跑验收。")
+            self._phase(run_id, "evaluate", trace, "执行搜狗摘要字段、去重、分页与双试跑验收。", budget=budget)
             budget.check()
             evaluation = evaluate_connector_outputs(
                 outputs,
@@ -500,6 +522,8 @@ class WechatDiscoveryEngine:
                 supports_pagination=config.max_pages > 1,
                 pagination_output=page_output,
                 require_url_accessibility=False,
+                enforce_fixed_listing_page=False,
+                enforce_text_coverage=False,
             )
             evaluation_document = evaluation.as_dict()
             method_audit = audit_plugin_trial(
@@ -565,7 +589,7 @@ class WechatDiscoveryEngine:
             if not plugin_review["package_eligible"]:
                 raise ValueError(f"shared WeChat connector acceptance failed: {evaluation.failures}")
             budget.check()
-            self._phase(run_id, "package", trace, "保存每公众号配置并进入人工审核。")
+            self._phase(run_id, "package", trace, "保存每公众号配置并进入人工审核。", budget=budget)
             budget.check()
             self._package(
                 run_id=run_id,
@@ -611,12 +635,14 @@ class WechatDiscoveryEngine:
                 phase=str(trace[-1].get("step") if trace else "context"),
                 round_number=1,
                 level="error",
-                payload={"error": safe_error},
+                payload={"error": safe_error, **self._current_timing_payload(run_id, budget=budget)},
             )
             finish_discovery_run(run_id, status="failed", error_message=safe_error, node_trace=trace, llm_token_usage=0)
         finally:
             with self._lock:
                 self._jobs.pop(run_id, None)
+                self._phase_started_elapsed.pop(run_id, None)
+                self._budgets.pop(run_id, None)
             deactivate_run(token)
             unregister_run(run_id)
 
@@ -744,6 +770,7 @@ class WechatDiscoveryEngine:
         with self._lock:
             self._jobs.setdefault(run_id, set()).add(job_id)
         elapsed_snapshot = budget.elapsed()
+        queued_at = budget.capacity_queued()
         append_discovery_event(
             run_id,
             event_type="sandbox_capacity_queued",
@@ -753,23 +780,25 @@ class WechatDiscoveryEngine:
             payload={
                 "maximum_seconds": budget.maximum_seconds,
                 "elapsed_snapshot": elapsed_snapshot,
+                "active_execution_elapsed_seconds": round(elapsed_snapshot, 3),
             },
         )
         self._set_status(run_id, "queued")
-        queued_at = time.monotonic()
         try:
             def mark_started() -> None:
-                budget.capacity_acquired(queued_at)
+                queue_wait_seconds = round(budget.capacity_acquired(queued_at), 3)
                 self._set_status(run_id, "running")
                 append_discovery_event(
                     run_id,
                     event_type="sandbox_capacity_acquired",
-                    summary="已获得 gVisor 沙箱容量，二十分钟总执行预算继续计时。",
+                    summary="已获得 gVisor 沙箱容量，三十分钟总执行预算继续计时。",
                     phase=phase,
                     round_number=round_number,
                     payload={
                         "maximum_seconds": budget.maximum_seconds,
                         "already_elapsed_seconds": budget.elapsed(),
+                        "active_execution_elapsed_seconds": round(budget.elapsed(), 3),
+                        "queue_wait_seconds": queue_wait_seconds,
                     },
                 )
 
@@ -820,10 +849,33 @@ class WechatDiscoveryEngine:
         finally:
             db.close()
 
-    @staticmethod
-    def _phase(run_id: int, phase: str, trace: list[dict[str, Any]], summary: str) -> None:
+    def _phase(
+        self,
+        run_id: int,
+        phase: str,
+        trace: list[dict[str, Any]],
+        summary: str,
+        *,
+        budget: _ExecutionBudget,
+    ) -> None:
         if phase not in WECHAT_PHASES:
             raise ValueError("invalid WeChat Discovery phase")
+        active_elapsed = round(budget.elapsed(), 3)
+        timing_payload: dict[str, Any] = {
+            "source_kind": "wechat",
+            "active_execution_elapsed_seconds": active_elapsed,
+        }
+        with self._lock:
+            previous = self._phase_started_elapsed.get(run_id)
+        if previous is not None:
+            previous_phase, started_elapsed = previous
+            completed_elapsed = max(0.0, round(active_elapsed - started_elapsed, 3))
+            timing_payload.update({
+                "completed_phase": previous_phase,
+                "completed_phase_elapsed_seconds": completed_elapsed,
+                "phase_elapsed_seconds": completed_elapsed,
+                "timed_phase": previous_phase,
+            })
         trace.append({"step": phase, "round": 1, "summary": summary, "source_kind": "wechat"})
         db = SessionLocal()
         try:
@@ -843,12 +895,42 @@ class WechatDiscoveryEngine:
                 summary=summary,
                 phase=phase,
                 round_number=1,
-                payload={"source_kind": "wechat"},
+                payload=timing_payload,
                 session=db,
             )
             db.commit()
         finally:
             db.close()
+        with self._lock:
+            self._phase_started_elapsed[run_id] = (phase, round(budget.elapsed(), 3))
+
+    def _current_timing_payload(
+        self,
+        run_id: int,
+        *,
+        budget: _ExecutionBudget,
+    ) -> dict[str, Any]:
+        active_elapsed = round(budget.elapsed(), 3)
+        payload: dict[str, Any] = {
+            "active_execution_elapsed_seconds": active_elapsed,
+        }
+        with self._lock:
+            current = self._phase_started_elapsed.get(run_id)
+        if current is not None:
+            phase, started_elapsed = current
+            payload.update({
+                "timed_phase": phase,
+                "phase_elapsed_seconds": max(0.0, round(active_elapsed - started_elapsed, 3)),
+            })
+        return payload
+
+    def current_timing_payload(self, run_id: int) -> dict[str, Any]:
+        """Return a bounded live timing snapshot for a user cancellation event."""
+        with self._lock:
+            budget = self._budgets.get(run_id)
+        # A cancellation before the worker starts has no active execution time
+        # and must not be approximated from wall time.
+        return self._current_timing_payload(run_id, budget=budget) if budget is not None else {}
 
     @staticmethod
     def _sandbox_priority(run_id: int) -> SandboxJobPriority:
@@ -1030,8 +1112,8 @@ class WechatDiscoveryEngine:
         finally:
             db.close()
 
-    @staticmethod
     def _package(
+        self,
         *,
         run_id: int,
         artifact: ConnectorArtifact,
@@ -1191,6 +1273,7 @@ class WechatDiscoveryEngine:
                         "method_id": method.id,
                         "connector_key": SHARED_CONNECTOR_KEY,
                         "review_status": REVIEW_PENDING,
+                        **self._current_timing_payload(run_id, budget=budget),
                     },
                     session=db,
                 )
@@ -1253,3 +1336,10 @@ def cancel_wechat_discovery_run(run_id: int) -> bool:
     with _engine_lock:
         engine = _engine
     return engine.cancel(run_id) if engine is not None else False
+
+
+def wechat_discovery_timing_payload(run_id: int) -> dict[str, Any]:
+    """Read the live queue-excluding timing snapshot without creating an engine."""
+    with _engine_lock:
+        engine = _engine
+    return engine.current_timing_payload(run_id) if engine is not None else {}

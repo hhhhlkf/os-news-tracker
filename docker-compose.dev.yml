@@ -6,9 +6,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-osnews_app}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     volumes:
-      - pgdata_dev:/var/lib/postgresql/data
-    ports:
-      - "15432:5432"
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 2s
@@ -21,7 +19,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile.dev
     working_dir: /app
-    command: sh -c 'chmod 700 /var/lib/os-news-tracker/discovery-attestation && exec uvicorn app.entry:app --host 0.0.0.0 --port 8000 --reload'
+    command: sh -c 'chmod 700 /var/lib/os-news-tracker/discovery-attestation && exec uvicorn app.entry:app --host 0.0.0.0 --port 8000 --reload --reload-exclude /app/connectors/sites'
     volumes:
       - ./backend:/app
       - wechat_browser_data_dev:/var/lib/os-news-tracker/wechat-browser
@@ -45,33 +43,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    networks:
+      - default
+      - shared_services
     ports:
       - "8000:8000"
-
-  embedding-worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.embedding-worker
-    working_dir: /app
-    command: uvicorn app.trends.embedding_service:app --host 0.0.0.0 --port 8100 --reload
-    volumes:
-      - ./backend:/app
-      - embedding_model_cache_dev:/var/lib/os-news-tracker/embedding-models
-    env_file: .env
-    environment:
-      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
-      ENABLE_SCHEDULER: "0"
-      ENABLE_MAIL_SCHEDULER: "0"
-      ENABLE_MORNING_CRAWL_SCHEDULER: "0"
-      ENABLE_TREND_SCHEDULER: "0"
-      WATCHFILES_FORCE_POLLING: "true"
-    mem_limit: 8g
-    depends_on:
-      db:
-        condition: service_healthy
-    # Published in dev only, for direct probing of /health and /embed.
-    ports:
-      - "8100:8100"
 
   frontend:
     build:
@@ -90,11 +66,17 @@ services:
       - "5174:5173"
 
 volumes:
-  pgdata_dev:
+  pgdata:
+    name: os-news-tracker_pgdata
+    external: true
   frontend_node_modules:
   wechat_browser_data_dev:
   discovery_attestation_keys_dev:
   discovery_checkpoints_dev:
     name: os-news-tracker_discovery_checkpoints_dev
     external: true
-  embedding_model_cache_dev:
+
+networks:
+  shared_services:
+    name: os-news-tracker_default
+    external: true

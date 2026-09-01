@@ -720,7 +720,7 @@ class CrawlMethodRun(Base):
 
 
 class CrawlMethodDomain(Base):
-    """去重映射：domain → crawl_method，同类站复用已存 method。"""
+    """去重映射：方法身份键 → crawl_method；普通网站键为规范化完整入口 URL。"""
     __tablename__ = "crawl_method_domains"
     id: Mapped[int] = mapped_column(primary_key=True)
     domain: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
@@ -868,6 +868,7 @@ class SiteDiscoveryRun(Base):
         ForeignKey("crawl_methods.id", ondelete="SET NULL"), nullable=True, index=True
     )
     runtime_version: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    agent_budget: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     viewer_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     event_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     node_trace: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
@@ -877,6 +878,52 @@ class SiteDiscoveryRun(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cleanup_claim_owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cleanup_claim_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class DiscoveryQueueItem(Base):
+    """Durable work item for the shared, two-slot Discovery queue."""
+
+    __tablename__ = "discovery_queue_items"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'starting', 'running', 'cancelling', 'failed', 'completed')",
+            name="ck_discovery_queue_items_status",
+        ),
+        Index("ix_discovery_queue_items_status_created", "status", "created_at", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    input: Mapped[str] = mapped_column(String(2000), nullable=False)
+    display_input: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    selected_route_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    resolved_route_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    route_source: Mapped[str] = mapped_column(String(20), nullable=False, default="inferred")
+    force: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    agent_budget: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("site_discovery_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    delete_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DiscoveryQueueState(Base):
+    """The single durable lock row that serializes globally visible queue slots."""
+
+    __tablename__ = "discovery_queue_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
 
 
 class DiscoveryExperience(Base):
@@ -949,6 +996,14 @@ class LlmUsageEvent(Base):
         Index("ix_llm_usage_events_morning_run", "morning_crawl_run_id"),
         Index("ix_llm_usage_events_morning_method", "morning_crawl_run_method_id"),
         Index("ix_llm_usage_events_method", "method_id"),
+        Index(
+            "uq_llm_usage_events_trusted_relay",
+            "discovery_run_id",
+            "usage_provenance",
+            "relay_session_id",
+            "relay_sequence",
+            unique=True,
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -959,6 +1014,10 @@ class LlmUsageEvent(Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    usage_provenance: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    relay_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    relay_sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    relay_usage_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     discovery_run_id: Mapped[int | None] = mapped_column(
         ForeignKey("site_discovery_runs.id", ondelete="CASCADE"), nullable=True
     )

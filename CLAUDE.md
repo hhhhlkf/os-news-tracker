@@ -38,8 +38,8 @@ os-news-tracker/
 ├── CLAUDE.md                              # This file
 ├── AGENTS.md                              # Subagent config
 ├── README.md
-├── docker-compose.yml                     # Production Docker Compose
 ├── docker-compose.dev.yml                 # Development Docker Compose (hot-reload)
+├── docker-compose.production.yml          # Immutable formal-release Compose
 ├── backend/
 │   ├── pyproject.toml                     # Python deps (FastAPI, SQLAlchemy, python-jose, passlib, etc.)
 │   ├── alembic.ini                        # DB migrations config

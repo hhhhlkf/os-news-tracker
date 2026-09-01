@@ -1,6 +1,6 @@
 """DEPRECATED / MIGRATION-ONLY: old LangChain Explorer/Validator tools.
 
-The active Single Agent Loop uses ``loop.explore_tools`` inside gVisor.  This
+The active Single Agent Loop uses ``loop.explore_session`` inside gVisor.  This
 module is retained only because the legacy DSL interpreter still references
 some helpers during migration/rollback.  Do not expose these tools to new
 Discovery code.

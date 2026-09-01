@@ -199,7 +199,7 @@ export function TechHighlightsList(props: { items: string[]; compact?: boolean }
           >
             {parsed ? (
               <>
-                <strong style={{ color: "#175cd3" }}>[{parsed.keyword}]</strong>{" "}
+                <strong style={{ color: "#3d5a80" }}>[{parsed.keyword}]</strong>{" "}
                 {parsed.detail}
               </>
             ) : (

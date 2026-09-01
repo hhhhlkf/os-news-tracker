@@ -19,7 +19,7 @@ type RowState =
   | { kind: "cancelled" }
   | { kind: "error"; msg: string };
 
-const PAGE_SIZE_OPTIONS = [10, 20, 50];
+const PAGE_SIZE_OPTIONS = [8, 16, 32];
 const STORAGE_KEY = "crawl-method-list-state:v1";
 
 type SummaryState = { text: string; tone: "success" | "danger"; showItemsLink: boolean } | null;
@@ -72,6 +72,7 @@ function readPersistedViewState(): PersistedViewState {
       parsed.batchRunning || parsed.batchCancelling || parsed.batchDeleting
       || Object.values(rawRowStates).some((state) => state?.kind === "running"),
     );
+    const staleDeleteError = parsed.summary?.text.startsWith("failed to delete method (HTTP ") ?? false;
     const rowStates = sanitizeRowStates(rawRowStates);
     // 批量抓取循环只活在当前页面实例里。刷新后绝不能恢复 batchRunning/batchCancelling，
     // 否则会出现“取消中…”且按钮被禁用、无法再抓取的死锁。
@@ -80,14 +81,14 @@ function readPersistedViewState(): PersistedViewState {
       rowStates,
       summary: hadStaleBatchLock
         ? { text: "检测到未完成的批量抓取（页面曾刷新/离开），已自动解锁。可重新选择后继续抓取。", tone: "danger", showItemsLink: false }
-        : (parsed.summary ?? null),
+        : (staleDeleteError ? null : (parsed.summary ?? null)),
       batchRunning: false,
       batchCancelling: false,
       batchDeleting: false,
       page: Math.max(1, Number(parsed.page) || 1),
       pageSize,
     };
-    if (hadStaleBatchLock) {
+    if (hadStaleBatchLock || staleDeleteError) {
       writePersistedViewState(restored);
     }
     return restored;
@@ -446,8 +447,8 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState, allo
   }
 
   return (
-    <section style={{ background: "#fff", border: "1px solid #d0d5dd", borderRadius: 10, padding: 16, marginTop: 14 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
+    <section>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
         <div>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#101828" }}>抓取模块 · 爬取方式库</div>
           <div style={{ fontSize: 11, color: "#667085", marginTop: 2 }}>按顺序抓取已选方式，可随时取消当前批次。结果会进入新闻流和运行日志。</div>
@@ -493,7 +494,7 @@ export function CrawlMethodList({ onOpenMethod, highlightId, runLimitState, allo
             </div>
           )}
 
-          <div style={{ display: "grid", gap: 8 }}>
+          <div style={{ display: "grid", gap: 6 }}>
             {list.isLoading && (
               <div style={infoBox}>
                 加载爬取方式中...
@@ -582,8 +583,8 @@ function MethodRow({ m, selected, state, onToggle, onOpen, highlight, busy, batc
   const primaryLabel = m.source_name?.trim() || m.domain;
   const status = formatRowStatus(state, m, batchCancelling);
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 12, border: `1px solid ${selected ? "#b9d4ff" : highlight ? "#175cd3" : "#eaecf0"}`,
-      borderRadius: 9, padding: "9px 11px", background: selected ? "#f8fbff" : highlight ? "#eff6ff" : "#fff" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, border: `1px solid ${selected ? "#b9d4ff" : highlight ? "#175cd3" : "#eaecf0"}`,
+      borderRadius: 8, padding: "6px 10px", background: selected ? "#f8fbff" : highlight ? "#eff6ff" : "#fff" }}>
       {!readOnly && <input type="checkbox" aria-label={`选择 ${primaryLabel}`} checked={selected} disabled={disabled || busy} onChange={(e) => onToggle(e.target.checked)} />}
       <QualityBadge method={m} />
       <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={onOpen}>
@@ -681,8 +682,8 @@ const pagerBar: CSSProperties = {
   justifyContent: "space-between",
   gap: 12,
   flexWrap: "wrap",
-  marginTop: 12,
-  paddingTop: 12,
+  marginTop: 8,
+  paddingTop: 8,
   borderTop: "1px solid #eaecf0",
   fontSize: 11,
 };

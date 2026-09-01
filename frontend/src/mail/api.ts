@@ -109,6 +109,8 @@ export function buildMailFilterSnapshot(params: ItemQueryParams): MailTemplateCr
   const publishedAfter = resolvePublishedAfterBoundary(params);
   return {
     q: params.q ?? null,
+    keywords: params.keywords ?? [],
+    strict_title: params.strict_title ?? false,
     main_category: params.main_category ?? null,
     info_type: params.info_type ?? null,
     importance: params.importance ?? null,

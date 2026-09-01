@@ -298,6 +298,7 @@ def _execute_discovery_fetch_impl(
         discovered_count = 0
         final_status = "empty"
         partial_error: PartialExecutionError | None = None
+        execution_metadata: dict[str, Any] = {}
         try:
             def _log_fetch_progress(event: str, payload: dict[str, Any]) -> None:
                 """把 discovery 进度事件适配成统一运行日志。
@@ -341,6 +342,7 @@ def _execute_discovery_fetch_impl(
                     request_parameters=(
                         request.model_dump(mode="json") if request is not None else None
                     ),
+                    execution_metadata_callback=execution_metadata.update,
                 )
                 _ensure_not_cancelled("after sandbox")
                 if stage_callback is not None:
@@ -385,7 +387,15 @@ def _execute_discovery_fetch_impl(
                     phase="connector_sandbox",
                 )
 
-            filtered_items = apply_fetch_limits(raw_items, request)
+            filtered_items = apply_fetch_limits(
+                raw_items,
+                request,
+                time_semantics=str(execution_metadata.get("time_semantics") or "publication"),
+                host_observed_at=(
+                    str(execution_metadata["host_observed_at"])
+                    if execution_metadata.get("host_observed_at") is not None else None
+                ),
+            )
             output["items"] = filtered_items
             _log(
                 log_stage,

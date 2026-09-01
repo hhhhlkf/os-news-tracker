@@ -26,8 +26,24 @@ class LlmClient:
 
         return httpx.Client(timeout=60.0)
 
-    def _key(self, prompt: str, *, temperature: float, response_format: dict | None) -> str:
-        extra = jsonlib.dumps(response_format, ensure_ascii=False, sort_keys=True) if response_format else ""
+    def _key(
+        self,
+        prompt: str,
+        *,
+        temperature: float,
+        response_format: dict | None,
+        max_tokens: int | None,
+        thinking: bool | None,
+    ) -> str:
+        extra = jsonlib.dumps(
+            {
+                "response_format": response_format,
+                "max_tokens": max_tokens,
+                "thinking": thinking,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
         return hashlib.sha256(
             f"{self._model}:{temperature}:{extra}:{prompt}".encode("utf-8")
         ).hexdigest()
@@ -38,6 +54,8 @@ class LlmClient:
         *,
         temperature: float = 0.2,
         response_format: dict | None = None,
+        max_tokens: int | None = None,
+        thinking: bool | None = None,
         timeout: float | None = None,
         _cancel_event: Event | None = None,
     ) -> str:
@@ -45,6 +63,8 @@ class LlmClient:
             [{"role": "user", "content": prompt}],
             temperature=temperature,
             response_format=response_format,
+            max_tokens=max_tokens,
+            thinking=thinking,
             timeout=timeout,
             _cancel_event=_cancel_event,
         )
@@ -55,6 +75,8 @@ class LlmClient:
         *,
         temperature: float = 0.2,
         response_format: dict | None = None,
+        max_tokens: int | None = None,
+        thinking: bool | None = None,
         timeout: float | None = None,
         _cancel_event: Event | None = None,
     ) -> str:
@@ -65,7 +87,13 @@ class LlmClient:
             for message in messages
         ]
         conversation = jsonlib.dumps(normalized_messages, ensure_ascii=False, separators=(",", ":"))
-        key = self._key(conversation, temperature=temperature, response_format=response_format)
+        key = self._key(
+            conversation,
+            temperature=temperature,
+            response_format=response_format,
+            max_tokens=max_tokens,
+            thinking=thinking,
+        )
         if key in self._cache:
             content = self._cache[key]
             self._raise_if_cancelled(_cancel_event)
@@ -83,16 +111,34 @@ class LlmClient:
         }
         if response_format is not None:
             payload["response_format"] = response_format
+        if max_tokens is not None:
+            payload["max_tokens"] = max(1, int(max_tokens))
+        if thinking is not None:
+            payload["thinking"] = {"type": "enabled" if thinking else "disabled"}
         deadline = time.monotonic() + timeout if timeout is not None else None
-        try:
-            content = self._retry_post_complete(payload, deadline=deadline, cancel_event=_cancel_event)
-        except Exception as exc:
-            if response_format is not None and self._should_retry_without_response_format(exc):
-                retry_payload = dict(payload)
-                retry_payload.pop("response_format", None)
-                content = self._retry_post_complete(retry_payload, deadline=deadline, cancel_event=_cancel_event)
-            else:
-                raise
+        candidate_payload = payload
+        for _ in range(3):
+            try:
+                content = self._retry_post_complete(
+                    candidate_payload,
+                    deadline=deadline,
+                    cancel_event=_cancel_event,
+                )
+                break
+            except Exception as exc:
+                retry_payload = dict(candidate_payload)
+                if (
+                    "response_format" in retry_payload
+                    and self._should_retry_without_response_format(exc)
+                ):
+                    retry_payload.pop("response_format", None)
+                elif "thinking" in retry_payload and self._should_retry_without_thinking(exc):
+                    retry_payload.pop("thinking", None)
+                else:
+                    raise
+                candidate_payload = retry_payload
+        else:  # pragma: no cover - each fallback either returns or raises
+            raise RuntimeError("LLM compatibility fallbacks were exhausted")
         self._raise_if_cancelled(_cancel_event)
         self._cache[key] = content
         return content
@@ -103,6 +149,7 @@ class LlmClient:
         *,
         tools: list[dict],
         temperature: float = 0.1,
+        thinking: bool | None = None,
         timeout: float | None = None,
         _cancel_event: Event | None = None,
     ) -> dict:
@@ -114,8 +161,11 @@ class LlmClient:
             "messages": messages,
             "tools": tools,
         }
+        if thinking is not None:
+            payload["thinking"] = {"type": "enabled" if thinking else "disabled"}
         deadline = time.monotonic() + timeout if timeout is not None else None
         last_exc: Exception | None = None
+        used_thinking_fallback = False
         for attempt in range(4):
             self._raise_if_cancelled(_cancel_event)
             remaining = None if deadline is None else deadline - time.monotonic()
@@ -129,6 +179,15 @@ class LlmClient:
                 )
             except Exception as exc:
                 last_exc = exc
+                if (
+                    not used_thinking_fallback
+                    and "thinking" in payload
+                    and self._should_retry_without_thinking(exc)
+                ):
+                    payload = dict(payload)
+                    payload.pop("thinking", None)
+                    used_thinking_fallback = True
+                    continue
                 if not self._is_retryable_transient_error(exc) or attempt == 3:
                     raise
                 delay = min(float(attempt + 1), max(0.0, remaining or float(attempt + 1)))
@@ -332,6 +391,21 @@ class LlmClient:
             or "unsupported" in text
             or "invalid_request_error" in text
         )
+
+    def _should_retry_without_thinking(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        return "thinking" in text and any(token in text for token in (
+            "unavailable",
+            "unsupported",
+            "unrecognized",
+            "unknown field",
+            "unknown parameter",
+            "unexpected",
+            "invalid_request_error",
+            "extra fields",
+            "additional properties",
+            "not permitted",
+        ))
 
     def _is_retryable_transient_error(self, exc: Exception) -> bool:
         text = str(exc).lower()

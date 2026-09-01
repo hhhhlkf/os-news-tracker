@@ -1,0 +1,2 @@
+ARG BASE_IMAGE=localhost:5000/os-news/os-news-tracker-frontend-base@sha256:4b27aaebb57812b78641e561dcc8372fa233a8cc4e56ed6e42e39d8e44fa1e72
+FROM ${BASE_IMAGE}

@@ -1,1 +1,0 @@
-{"recipe_type": "python_plugin", "connector_key": "kvcache_ai_db4a5413", "version": 1, "entry": "https://kvcache.ai/blog/", "entrypoint": "crawler:crawl", "runtime_version": "crawler-runtime:2", "checksum": "4c9507a29704838d72f4b4e4526e5e356fb66aee543f374cb3217e8f139f68db", "allowed_domains": ["kvcache.ai"]}

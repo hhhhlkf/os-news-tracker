@@ -6,47 +6,22 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscoveryPanel } from "./DiscoveryPanel";
 
-const startDiscoveryRun = vi.fn();
-const getDiscoveryRun = vi.fn();
-const cancelDiscoveryRun = vi.fn();
+const enqueueDiscoveryQueue = vi.fn();
 const suggestDiscoveryName = vi.fn();
 const DISCOVERY_PANEL_STORAGE_KEY = "os-news-tracker.discovery-panel";
 
 vi.mock("../api/client", () => ({
   ApiError: class ApiError extends Error {},
-  getDiscoveryRun: (...args: unknown[]) => getDiscoveryRun(...args),
-  startDiscoveryRun: (...args: unknown[]) => startDiscoveryRun(...args),
-  cancelDiscoveryRun: (...args: unknown[]) => cancelDiscoveryRun(...args),
+  enqueueDiscoveryQueue: (...args: unknown[]) => enqueueDiscoveryQueue(...args),
   suggestDiscoveryName: (...args: unknown[]) => suggestDiscoveryName(...args),
-}));
-
-vi.mock("./DiscoveryFlowChart", () => ({
-  DiscoveryFlowChart: ({
-    onSelectNode,
-    selectedNode,
-  }: {
-    onSelectNode?: (id: string) => void;
-    selectedNode?: string | null;
-  }) => (
-    <div>
-      <button
-        type="button"
-        data-testid="mock-flow-select-explorer"
-        onClick={() => onSelectNode?.("explorer")}
-      >
-        flow
-      </button>
-      <div data-testid="mock-flow-selected">{selectedNode ?? ""}</div>
-    </div>
-  ),
-}));
-
-vi.mock("./DiscoveryNodeDetail", () => ({
-  DiscoveryNodeDetail: ({ nodeId }: { nodeId: string }) => <div data-testid="detail-node">{nodeId}</div>,
-}));
-
-vi.mock("./DiscoveryLogPanel", () => ({
-  DiscoveryLogPanel: () => <div data-testid="discovery-logs">logs</div>,
+  listDiscoveryQueue: () => Promise.resolve({
+    pending: [],
+    failed: [],
+    completed: [],
+    running_count: 0,
+    max_parallel: 2,
+  }),
+  getBatchDiscoveryRun: () => Promise.reject(new Error("no discovery run in test")),
 }));
 
 vi.mock("../hooks/useDiscoveryLogs", () => ({
@@ -84,11 +59,9 @@ describe("DiscoveryPanel", () => {
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
-    getDiscoveryRun.mockReset();
-    startDiscoveryRun.mockReset();
-    cancelDiscoveryRun.mockReset();
+    enqueueDiscoveryQueue.mockReset();
     suggestDiscoveryName.mockReset();
-    window.localStorage.clear();
+    window.sessionStorage.clear();
   });
 
   afterEach(() => {
@@ -98,15 +71,15 @@ describe("DiscoveryPanel", () => {
     container.remove();
     queryClient.clear();
     vi.restoreAllMocks();
-    window.localStorage.clear();
+    window.sessionStorage.clear();
   });
 
-  it("disables the start button as soon as the start request is pending", async () => {
-    let resolveStart: ((value: { status: "started"; run_id: number }) => void) | null = null;
-    startDiscoveryRun.mockImplementation(
+  it("disables the enqueue button as soon as the queue request is pending", async () => {
+    let resolveEnqueue: ((value: { status: "queued" }) => void) | null = null;
+    enqueueDiscoveryQueue.mockImplementation(
       () =>
         new Promise((resolve) => {
-          resolveStart = resolve as typeof resolveStart;
+          resolveEnqueue = resolve as typeof resolveEnqueue;
         }),
     );
 
@@ -119,31 +92,31 @@ describe("DiscoveryPanel", () => {
     });
     await flush();
 
-    changeInput(container.querySelector("input[placeholder='站点 URL，如 openanolis.cn/blog']")!, "https://example.com");
+    changeInput(container.querySelector("input[placeholder='输入网页 URL 或搜索关键词']")!, "https://example.com");
     await flush();
 
-    const button = [...container.querySelectorAll("button")].find((node) => node.textContent === "开始探查") as HTMLButtonElement;
+    const button = [...container.querySelectorAll("button")].find((node) => node.textContent === "加入队列") as HTMLButtonElement;
     expect(button.disabled).toBe(false);
     act(() => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     await flush();
 
-    expect(startDiscoveryRun).toHaveBeenCalledOnce();
-    const startButtonAfterClick = [...container.querySelectorAll("button")].find((node) =>
-      node.textContent === "开始探查" || node.textContent === "启动中…",
+    expect(enqueueDiscoveryQueue).toHaveBeenCalledOnce();
+    const enqueueButtonAfterClick = [...container.querySelectorAll("button")].find((node) =>
+      node.textContent === "加入队列" || node.textContent === "加入中…",
     ) as HTMLButtonElement;
-    expect(startButtonAfterClick.disabled).toBe(true);
+    expect(enqueueButtonAfterClick.disabled).toBe(true);
 
     await act(async () => {
-      resolveStart?.({ status: "started", run_id: 11 });
+      resolveEnqueue?.({ status: "queued" });
     });
   });
 
-  it("prevents duplicate override starts while the force restart request is pending", async () => {
+  it("prevents duplicate override enqueue while the force request is pending", async () => {
     let callCount = 0;
-    let resolveOverride: ((value: { status: "started"; run_id: number }) => void) | null = null;
-    startDiscoveryRun.mockImplementation(() => {
+    let resolveOverride: ((value: { status: "queued" }) => void) | null = null;
+    enqueueDiscoveryQueue.mockImplementation(() => {
       callCount += 1;
       if (callCount === 1) {
         return Promise.resolve({
@@ -172,12 +145,12 @@ describe("DiscoveryPanel", () => {
     });
     await flush();
 
-    changeInput(container.querySelector("input[placeholder='站点 URL，如 openanolis.cn/blog']")!, "https://example.com");
+    changeInput(container.querySelector("input[placeholder='输入网页 URL 或搜索关键词']")!, "https://example.com");
     await flush();
 
-    const startButton = [...container.querySelectorAll("button")].find((node) => node.textContent === "开始探查") as HTMLButtonElement;
+    const enqueueButton = [...container.querySelectorAll("button")].find((node) => node.textContent === "加入队列") as HTMLButtonElement;
     act(() => {
-      startButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      enqueueButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     await flush();
 
@@ -190,175 +163,15 @@ describe("DiscoveryPanel", () => {
     });
     await flush();
 
-    expect(startDiscoveryRun).toHaveBeenCalledTimes(2);
+    expect(enqueueDiscoveryQueue).toHaveBeenCalledTimes(2);
     const pendingOverrideButton = [...container.querySelectorAll("button")].find((node) =>
-      node.textContent === "覆盖重探" || node.textContent === "启动中…",
+      node.textContent === "覆盖重探" || node.textContent === "加入中…",
     ) as HTMLButtonElement;
     expect(pendingOverrideButton.disabled).toBe(true);
 
     await act(async () => {
-      resolveOverride?.({ status: "started", run_id: 12 });
+      resolveOverride?.({ status: "queued" });
     });
-  });
-
-  it("prevents duplicate retry starts while the rerun request is pending after a failed run", async () => {
-    let callCount = 0;
-    let resolveRetry: ((value: { status: "started"; run_id: number }) => void) | null = null;
-    startDiscoveryRun.mockImplementation(() => {
-      callCount += 1;
-      if (callCount === 1) {
-        return Promise.resolve({ status: "started", run_id: 21 });
-      }
-      return new Promise((resolve) => {
-        resolveRetry = resolve as typeof resolveRetry;
-      });
-    });
-    getDiscoveryRun.mockResolvedValue({
-      id: 21,
-      site_url: "https://example.com",
-      status: "failed",
-      resulting_method_id: null,
-      llm_token_usage: 0,
-      node_trace: [],
-      retry_count: 0,
-      current_step: "writer",
-      started_at: null,
-      ended_at: null,
-      error_message: "boom",
-    });
-
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <DiscoveryPanel />
-        </QueryClientProvider>,
-      );
-    });
-    await flush();
-
-    changeInput(container.querySelector("input[placeholder='站点 URL，如 openanolis.cn/blog']")!, "https://example.com");
-    await flush();
-
-    const startButton = [...container.querySelectorAll("button")].find((node) => node.textContent === "开始探查") as HTMLButtonElement;
-    act(() => {
-      startButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    await flush();
-    await flush();
-    await flush();
-
-    const retryButton = [...container.querySelectorAll("button")].find((node) => node.textContent === "重新探查") as HTMLButtonElement;
-    expect(retryButton.disabled).toBe(false);
-
-    act(() => {
-      retryButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      retryButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    await flush();
-
-    expect(startDiscoveryRun).toHaveBeenCalledTimes(2);
-    const pendingRetryButton = [...container.querySelectorAll("button")].find((node) =>
-      node.textContent === "重新探查" || node.textContent === "启动中…",
-    ) as HTMLButtonElement;
-    expect(pendingRetryButton.disabled).toBe(true);
-
-    await act(async () => {
-      resolveRetry?.({ status: "started", run_id: 22 });
-    });
-  });
-
-  it("uses equal-width columns for the discovery workspace layout", async () => {
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <DiscoveryPanel />
-        </QueryClientProvider>,
-      );
-    });
-    await flush();
-
-    changeInput(container.querySelector("input[placeholder='站点 URL，如 openanolis.cn/blog']")!, "https://example.com");
-    startDiscoveryRun.mockResolvedValueOnce({ status: "started", run_id: 31 });
-    getDiscoveryRun.mockResolvedValue({
-      id: 31,
-      site_url: "https://example.com",
-      status: "running",
-      resulting_method_id: null,
-      llm_token_usage: 0,
-      node_trace: [],
-      retry_count: 0,
-      current_step: "explorer",
-      started_at: null,
-      ended_at: null,
-      error_message: null,
-    });
-
-    const startButton = [...container.querySelectorAll("button")].find((node) => node.textContent === "开始探查") as HTMLButtonElement;
-    act(() => {
-      startButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    await flush();
-    await flush();
-
-    const grid = container.querySelector("[data-testid='discovery-layout-grid']");
-    expect(grid?.getAttribute("style")).toContain("grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)");
-  });
-
-  it("shows a cancel button while running and sends cancel request", async () => {
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <DiscoveryPanel />
-        </QueryClientProvider>,
-      );
-    });
-    await flush();
-
-    changeInput(container.querySelector("input[placeholder='站点 URL，如 openanolis.cn/blog']")!, "https://example.com");
-    startDiscoveryRun.mockResolvedValueOnce({ status: "started", run_id: 41 });
-    getDiscoveryRun.mockResolvedValue({
-      id: 41,
-      site_url: "https://example.com",
-      status: "running",
-      resulting_method_id: null,
-      llm_token_usage: 0,
-      node_trace: [],
-      retry_count: 0,
-      current_step: "explorer",
-      started_at: null,
-      ended_at: null,
-      error_message: null,
-    });
-    cancelDiscoveryRun.mockResolvedValue({
-      id: 41,
-      site_url: "https://example.com",
-      status: "cancelled",
-      resulting_method_id: null,
-      llm_token_usage: 0,
-      node_trace: [],
-      retry_count: 0,
-      current_step: "explorer",
-      started_at: null,
-      ended_at: null,
-      error_message: "已手动取消",
-    });
-
-    const startButton = [...container.querySelectorAll("button")].find((node) => node.textContent === "开始探查") as HTMLButtonElement;
-    act(() => {
-      startButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    await flush();
-    await flush();
-
-    const cancelButton = [...container.querySelectorAll("button")].find((node) => node.textContent === "取消探查") as HTMLButtonElement;
-    expect(cancelButton).toBeTruthy();
-
-    act(() => {
-      cancelButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    await flush();
-
-    expect(cancelDiscoveryRun).toHaveBeenCalledWith(41);
   });
 
   it("shows a visible error when auto naming fails", async () => {
@@ -373,7 +186,7 @@ describe("DiscoveryPanel", () => {
     });
     await flush();
 
-    changeInput(container.querySelector("input[placeholder='站点 URL，如 openanolis.cn/blog']")!, "https://example.com");
+    changeInput(container.querySelector("input[placeholder='输入网页 URL 或搜索关键词']")!, "https://example.com");
     await flush();
 
     const autoButton = [...container.querySelectorAll("button")].find((node) => node.textContent === "✨ 自动") as HTMLButtonElement;
@@ -385,7 +198,7 @@ describe("DiscoveryPanel", () => {
     expect(container.textContent).toContain("自动命名超时");
   });
 
-  it("stays expanded before a run starts and supports collapsing", async () => {
+  it("stays expanded and does not offer a collapse control", async () => {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
@@ -395,41 +208,16 @@ describe("DiscoveryPanel", () => {
     });
     await flush();
 
-    expect(container.querySelector("[data-testid='discovery-layout-grid']")).toBeTruthy();
-
-    const toggleButton = [...container.querySelectorAll("button")].find((node) => node.textContent === "收起") as HTMLButtonElement;
-    expect(toggleButton).toBeTruthy();
-
-    act(() => {
-      toggleButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    await flush();
-
-    expect(container.querySelector("[data-testid='discovery-layout-grid']")).toBeNull();
-    expect(container.textContent).toContain("展开");
+    expect(container.querySelector("input[placeholder='输入网页 URL 或搜索关键词']")).toBeTruthy();
+    expect([...container.querySelectorAll("button")].some((node) => node.textContent === "展开")).toBe(false);
   });
 
-  it("restores persisted discovery state and resumes polling the same run", async () => {
-    window.localStorage.setItem(DISCOVERY_PANEL_STORAGE_KEY, JSON.stringify({
-      url: "https://persisted.example.com",
+  it("restores persisted discovery form state", async () => {
+    window.sessionStorage.setItem(DISCOVERY_PANEL_STORAGE_KEY, JSON.stringify({
+      rawInput: "https://persisted.example.com",
       name: "Persisted Run",
-      runId: 77,
-      selectedNode: "explorer",
       expanded: true,
     }));
-    getDiscoveryRun.mockResolvedValue({
-      id: 77,
-      site_url: "https://persisted.example.com",
-      status: "running",
-      resulting_method_id: null,
-      llm_token_usage: 0,
-      node_trace: [],
-      retry_count: 0,
-      current_step: "explorer",
-      started_at: null,
-      ended_at: null,
-      error_message: null,
-    });
 
     await act(async () => {
       root.render(
@@ -439,32 +227,15 @@ describe("DiscoveryPanel", () => {
       );
     });
     await flush();
-    await flush();
 
-    expect((container.querySelector("input[placeholder='站点 URL，如 openanolis.cn/blog']") as HTMLInputElement).value)
+    expect((container.querySelector("input[placeholder='输入网页 URL 或搜索关键词']") as HTMLInputElement).value)
       .toBe("https://persisted.example.com");
     expect((container.querySelector("input[placeholder='名称（选填）']") as HTMLInputElement).value)
       .toBe("Persisted Run");
-    expect(getDiscoveryRun).toHaveBeenCalledWith(77);
-    expect(container.querySelector("[data-testid='discovery-layout-grid']")).toBeTruthy();
-    expect(container.querySelector("[data-testid='mock-flow-selected']")?.textContent).toBe("explorer");
   });
 
-  it("persists latest discovery panel state after user interactions", async () => {
-    startDiscoveryRun.mockResolvedValueOnce({ status: "started", run_id: 55 });
-    getDiscoveryRun.mockResolvedValue({
-      id: 55,
-      site_url: "https://example.com",
-      status: "running",
-      resulting_method_id: null,
-      llm_token_usage: 0,
-      node_trace: [],
-      retry_count: 0,
-      current_step: "explorer",
-      started_at: null,
-      ended_at: null,
-      error_message: null,
-    });
+  it("persists latest discovery panel form state after user interactions", async () => {
+    enqueueDiscoveryQueue.mockResolvedValueOnce({ status: "queued" });
 
     await act(async () => {
       root.render(
@@ -475,36 +246,21 @@ describe("DiscoveryPanel", () => {
     });
     await flush();
 
-    changeInput(container.querySelector("input[placeholder='站点 URL，如 openanolis.cn/blog']")!, "https://example.com");
+    changeInput(container.querySelector("input[placeholder='输入网页 URL 或搜索关键词']")!, "https://example.com");
     changeInput(container.querySelector("input[placeholder='名称（选填）']")!, "Example Run");
     await flush();
 
-    const startButton = [...container.querySelectorAll("button")].find((node) => node.textContent === "开始探查") as HTMLButtonElement;
+    const enqueueButton = [...container.querySelectorAll("button")].find((node) => node.textContent === "加入队列") as HTMLButtonElement;
     act(() => {
-      startButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    await flush();
-    await flush();
-
-    act(() => {
-      (container.querySelector("[data-testid='mock-flow-select-explorer']") as HTMLButtonElement)
-        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      enqueueButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     await flush();
 
-    const toggleButton = [...container.querySelectorAll("button")].find((node) => node.textContent === "收起") as HTMLButtonElement;
-    act(() => {
-      toggleButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    await flush();
-
-    const persisted = JSON.parse(window.localStorage.getItem(DISCOVERY_PANEL_STORAGE_KEY) ?? "{}");
+    const persisted = JSON.parse(window.sessionStorage.getItem(DISCOVERY_PANEL_STORAGE_KEY) ?? "{}");
     expect(persisted).toMatchObject({
-      url: "https://example.com",
+      rawInput: "https://example.com",
       name: "Example Run",
-      runId: 55,
-      selectedNode: "explorer",
-      expanded: false,
+      expanded: true,
     });
   });
 });

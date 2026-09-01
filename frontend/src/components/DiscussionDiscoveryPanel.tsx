@@ -85,13 +85,15 @@ type DiscussionDiscoveryPanelProps = {
   onTechnicalTabChange: (tab: TechnicalDiscoveryTab) => void;
   /** 管理员才可变更技术讨论的持久配置。 */
   canManage: boolean;
+  hideLogs?: boolean;
+  onResetRun?: () => void;
 };
 
 export function DiscussionDiscoveryPanel(props: DiscussionDiscoveryPanelProps) {
   return <DiscussionDiscoveryPanelContent {...props} />;
 }
 
-function DiscussionDiscoveryPanelContent({ runLimitState, runId, technicalTab, onTechnicalTabChange, canManage }: DiscussionDiscoveryPanelProps) {
+function DiscussionDiscoveryPanelContent({ runLimitState, runId, technicalTab, onTechnicalTabChange, canManage, hideLogs = false, onResetRun }: DiscussionDiscoveryPanelProps) {
   const queryClient = useQueryClient();
   const [connection, setConnection] = useState(initialConnection);
   const [sourceName, setSourceName] = useState("");
@@ -99,7 +101,6 @@ function DiscussionDiscoveryPanelContent({ runLimitState, runId, technicalTab, o
   const [ruleValue, setRuleValue] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(true);
   const [runView, setRunView] = useState<RunView>("overview");
   const [resetAt, setResetAt] = useState<ResetAtByChannel>(() => readDiscussionPanelResetAt());
   const [stopBusy, setStopBusy] = useState(false);
@@ -189,6 +190,7 @@ function DiscussionDiscoveryPanelContent({ runLimitState, runId, technicalTab, o
   const runChannel = run?.github_repository_ids !== null && run?.source_ids === null ? "GitHub" : run?.source_ids !== null && run?.github_repository_ids === null ? "邮件" : run?.result?.github?.length && !receipt.length ? "GitHub" : run?.result?.github?.length ? "技术探查" : "邮件";
   const mailRunActive = Boolean(run && ["running", "stopping"].includes(run.status) && run.source_ids !== null && run.github_repository_ids === null);
   const githubRunActive = Boolean(run && ["running", "stopping"].includes(run.status) && run.github_repository_ids !== null && run.source_ids === null);
+  const resetDisabled = Boolean(run && ["running", "stopping"].includes(run.status));
 
   async function refresh(): Promise<void> {
     await Promise.all([connections.refetch(), runStream.refetch(), groupCounts.refetch(), groupPages.refetch()]);
@@ -199,6 +201,7 @@ function DiscussionDiscoveryPanelContent({ runLimitState, runId, technicalTab, o
   }
 
   function resetPanelState(): void {
+    if (resetDisabled) return;
     const now = Date.now();
     const nextResetAt = { ...resetAt, [technicalTab]: now };
     writeDiscussionPanelResetAt(nextResetAt);
@@ -211,8 +214,8 @@ function DiscussionDiscoveryPanelContent({ runLimitState, runId, technicalTab, o
     }
     setNotice(`${technicalTab === "email" ? "邮件" : "GitHub"}探查状态已重置；历史讨论树会保留，下一次探查会在这里显示新的进展。`);
     setError(null);
-    setExpanded(true);
     setRunView("overview");
+    onResetRun?.();
   }
 
   async function stopCurrentRun(): Promise<void> {
@@ -250,28 +253,30 @@ function DiscussionDiscoveryPanelContent({ runLimitState, runId, technicalTab, o
     } catch (value) { reportFailure(value); }
   }
 
-  return <section style={section}>
+  return <section style={hideLogs ? embeddedSection : section}>
     <div style={headerRow}>
       <div>
         <div style={headerTitleGroup}><div style={title}>技术探查</div>{badge && <span style={{ ...badgeStyle, color: badge.color, background: badge.background, borderColor: badge.border }}>{runChannel} · {badge.text}</span>}</div>
-        <div style={subtitle}>统一探查邮件与 GitHub 技术讨论候选；候选内容需经过筛选、价值判断和整理，才会成为技术讨论条目。</div>
+        {!hideLogs && <div style={subtitle}>统一探查邮件与 GitHub 技术讨论候选；候选内容需经过筛选、价值判断和整理，才会成为技术讨论条目。</div>}
       </div>
       <div style={actions}>
-        {expanded && <button type="button" onClick={resetPanelState} style={resetButton}>重置状态</button>}
+        <button type="button" disabled={resetDisabled} onClick={resetPanelState} style={resetDisabled ? disabledResetButton : resetButton}>重置状态</button>
         {canManage && technicalTab === "email" && mailRunActive && <button type="button" onClick={() => void stopCurrentRun()} disabled={stopBusy || run?.status === "stopping"} style={stopBusy || run?.status === "stopping" ? disabledDangerButton : stopButton}>{run?.status === "stopping" ? "邮件停止中…" : stopBusy ? "停止中…" : "停止邮件探查"}</button>}
         {canManage && technicalTab === "github" && githubRunActive && <button type="button" onClick={() => void stopCurrentRun()} disabled={stopBusy || run?.status === "stopping"} style={stopBusy || run?.status === "stopping" ? disabledDangerButton : stopButton}>{run?.status === "stopping" ? "GitHub 停止中…" : stopBusy ? "停止中…" : "停止 GitHub 探查"}</button>}
-        <button type="button" onClick={() => setExpanded((value) => !value)} style={ghostButton}>{expanded ? "收起" : "展开"}</button>
       </div>
     </div>
     {error && <Notice tone="error" text={error} onClose={() => setError(null)} />}
     {notice && <Notice tone="success" text={notice} onClose={() => setNotice(null)} />}
-    {!expanded ? null : <>
+    <div style={hideLogs ? embeddedBody : undefined}>
       <div style={technicalTabs}>
         <TechnicalTab active={technicalTab === "email"} onClick={() => onTechnicalTabChange("email")}>邮件探查</TechnicalTab>
         <TechnicalTab active={technicalTab === "github"} onClick={() => onTechnicalTabChange("github")}>GitHub 探查</TechnicalTab>
       </div>
-      <div style={workspace}>
-        <div style={technicalTab === "email" ? mailLeftColumn : leftColumn}>
+      <div style={hideLogs ? embeddedWorkspace : workspace}>
+        <div
+          style={hideLogs ? embeddedLeftColumn : technicalTab === "email" ? mailLeftColumn : leftColumn}
+          data-home-scroll={hideLogs ? "true" : undefined}
+        >
           {technicalTab === "email" ? <>
           {canManage && <Panel title="邮箱连接" subtitle="凭据只从后端环境变量读取；此处不会显示或保存密码。" compact>
             {connections.data?.length ? <div style={connectionCard}>{connections.data.map((item) => <div key={item.id} style={connectionRow}><b>{item.name}</b><span>{item.host}:{item.port}/{item.folder} · {item.enabled ? "启用" : "停用"} · {item.health_status}</span>{item.last_error && <span style={{ color: "#b42318" }}>{item.last_error}</span>}</div>)}</div> : <form onSubmit={(event) => void saveConnection(event)} style={form}>
@@ -285,10 +290,21 @@ function DiscussionDiscoveryPanelContent({ runLimitState, runId, technicalTab, o
           </Panel>}
           <Panel title="添加邮件列表与识别规则" subtitle="提交后不会立即收取，审核通过后会加入邮件探查方式库。">
             <form onSubmit={(event) => void addSource(event)} style={form}>
-              <input required value={sourceName} onChange={(event) => setSourceName(event.target.value)} placeholder="邮件列表名称，例如：glibc libc-alpha" style={input} />
-              <select value={ruleType} onChange={(event) => setRuleType(event.target.value)} style={input}><option value="list_id">List-Id</option><option value="list_post">List-Post</option><option value="delivered_to">Delivered-To</option><option value="to">To</option><option value="cc">Cc</option></select>
-              <input required value={ruleValue} onChange={(event) => setRuleValue(event.target.value)} placeholder="识别值，例如：&lt;libc-alpha.sourceware.org&gt;" style={input} />
-              <button type="submit" style={primaryButton}>加入待审核</button>
+              <div style={compactFieldRow}>
+                <label style={compactField}>
+                  <span style={compactFieldLabel}>邮件列表名称</span>
+                  <input required value={sourceName} onChange={(event) => setSourceName(event.target.value)} placeholder="例如 glibc libc-alpha" style={compactNameInput} />
+                </label>
+                <label style={compactField}>
+                  <span style={compactFieldLabel}>识别规则</span>
+                  <select value={ruleType} onChange={(event) => setRuleType(event.target.value)} style={compactSelect}><option value="list_id">List-Id</option><option value="list_post">List-Post</option><option value="delivered_to">Delivered-To</option><option value="to">To</option><option value="cc">Cc</option></select>
+                </label>
+                <label style={compactField}>
+                  <span style={compactFieldLabel}>识别值</span>
+                  <input required value={ruleValue} onChange={(event) => setRuleValue(event.target.value)} placeholder="例如 &lt;libc-alpha.sourceware.org&gt;" style={compactInput} />
+                </label>
+                <button type="submit" style={{ ...primaryButton, borderRadius: 999, padding: "7px 12px", alignSelf: "end", flexShrink: 0 }}>加入审核</button>
+              </div>
             </form>
           </Panel>
           <Panel title="运行控制" subtitle="收取入口在“技术探查 · 邮件探查”的邮件列表库。这里可查看每次收取的口径，以及已保存的全部讨论树。">
@@ -308,15 +324,25 @@ function DiscussionDiscoveryPanelContent({ runLimitState, runId, technicalTab, o
           </Panel>
           </> : <GitHubDiscoveryContent runLimitState={runLimitState} run={run} />}
         </div>
-        <div style={rightColumn}>
-          <div style={logBody}><DiscoveryLogPanel logs={logs} variant="technical" /></div>
-        </div>
+        {!hideLogs && (
+          <div style={rightColumn}>
+            <div style={logBody}><DiscoveryLogPanel logs={logs} variant="technical" /></div>
+          </div>
+        )}
       </div>
-    </>}
+    </div>
   </section>;
 }
 
-function Panel({ title, subtitle, children, compact = false }: { title: string; subtitle?: string; children: ReactNode; compact?: boolean }) { return <section style={compact ? compactPanel : panel}><div style={panelTitle}>{title}</div>{subtitle && <div style={panelSubtitle}>{subtitle}</div>}{children}</section>; }
+function Panel({ title, subtitle, children, compact = false }: { title: string; subtitle?: string; children: ReactNode; compact?: boolean }) {
+  return (
+    <section style={compact ? compactPanel : panel}>
+      <div style={panelTitle}>{title}</div>
+      {subtitle && <div style={panelSubtitle}>{subtitle}</div>}
+      {children}
+    </section>
+  );
+}
 function Metric({ label, value, detail }: { label: string; value: string; detail: string }) { return <div style={metric}><span style={metricLabel}>{label}</span><b style={metricValue}>{value}</b><span style={metricDetail}>{detail}</span></div>; }
 function RunTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) { return <button type="button" onClick={onClick} style={active ? activeRunTab : runTab}>{children}</button>; }
 function TechnicalTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) { return <button type="button" onClick={onClick} style={active ? activeTechnicalTab : technicalTab}>{children}</button>; }
@@ -390,7 +416,7 @@ function GitHubDiscoveryContent({ runLimitState, run }: { runLimitState: NewsRun
         <input value={githubForm.display_name} onChange={(event) => setGithubForm({ ...githubForm, display_name: event.target.value })} placeholder="展示名称（默认 owner/repo）" style={input} />
         <label style={credentialField}>
           <span style={credentialLabel}>后端 Token 环境变量名</span>
-          <input required value={githubForm.token_env_key} onChange={(event) => setGithubForm({ ...githubForm, token_env_key: event.target.value })} placeholder="默认：GITHUB_TOKEN" style={input} />
+          <input readOnly value={githubForm.token_env_key} aria-readonly="true" style={{ ...input, background: "#f2f4f7", color: "#667085", cursor: "default" }} />
         </label>
         <div style={tokenStatus?.data?.configured ? credentialReady : credentialMissing}>
           {tokenStatus.isLoading ? "正在检查后端凭据…" : tokenStatus.isError ? "无法确认后端凭据状态；请检查后端连接后重试。" : tokenStatus.data?.configured ? `已检测到后端环境变量「${tokenStatus.data.token_env_key}」。Token 已隐藏，不会写入数据库或显示在此处。` : `后端未检测到环境变量「${tokenEnvKey || "GITHUB_TOKEN"}」。请在 .env 配置后重启后端。`}
@@ -449,15 +475,19 @@ function formatTime(value: string | null) {
 }
 function Notice({ tone, text, onClose }: { tone: "success" | "error"; text: string; onClose: () => void }) { const success = tone === "success"; return <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 12, padding: "9px 11px", borderRadius: 8, fontSize: 13, color: success ? "#067647" : "#b42318", background: success ? "#ecfdf3" : "#fef2f2", border: `1px solid ${success ? "#a3e0c4" : "#fca5a5"}` }}><span style={{ flex: 1 }}>{text}</span><button type="button" onClick={onClose} style={{ border: 0, background: "transparent", color: "inherit", cursor: "pointer", fontSize: 15 }}>×</button></div>; }
 
-const section = { background: "#fff", border: "1px solid #d0d5dd", borderRadius: 10, padding: 16, marginTop: 18 };
-const headerRow = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" as const };
+const section = { position: "relative" as const, background: "#fff", border: "1px solid #d0d5dd", borderRadius: 10, padding: 16, marginTop: 18 };
+const embeddedSection = { ...section, marginTop: 0, padding: 10, height: "100%", minHeight: 0, display: "flex", flexDirection: "column" as const };
+const embeddedWorkspace = { display: "flex", flexDirection: "column" as const, minHeight: 0 };
+const embeddedBody = { display: "flex", flexDirection: "column" as const, minHeight: 0 };
+const embeddedLeftColumn = { display: "grid", gap: 8, minWidth: 0, alignContent: "start" as const };
+const headerRow = { display: "flex", alignItems: "center", gap: 8, marginBottom: 8, paddingRight: 96, minHeight: 32 };
 const headerTitleGroup = { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" as const };
 const title = { fontSize: 15, fontWeight: 700, color: "#101828" };
-const subtitle = { marginTop: 4, fontSize: 12, color: "#667085", maxWidth: 760 };
-const actions = { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" as const };
+const subtitle = { marginTop: 2, fontSize: 11, color: "#667085", maxWidth: 760, lineHeight: 1.35 };
+const actions = { position: "absolute" as const, top: 10, right: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "nowrap" as const };
 const badgeStyle = { border: "1px solid", borderRadius: 999, padding: "3px 11px", fontSize: 12, fontWeight: 700 };
 const workspace = { display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 14, alignItems: "stretch" };
-const technicalTabs = { display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" as const, borderBottom: "1px solid #d0d5dd", marginBottom: 12 };
+const technicalTabs = { display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" as const, borderBottom: "1px solid #d0d5dd", marginBottom: 8 };
 const technicalTab = { border: "none", borderBottom: "2px solid transparent", padding: "7px 10px", marginBottom: -1, background: "transparent", color: "#667085", fontSize: 13, fontWeight: 700, cursor: "pointer" };
 const activeTechnicalTab = { ...technicalTab, color: "#175cd3", borderBottomColor: "#175cd3" };
 const leftColumn = { display: "grid", gap: 12, minWidth: 0 };
@@ -466,36 +496,43 @@ const leftColumn = { display: "grid", gap: 12, minWidth: 0 };
 const TECHNICAL_LOG_HEIGHT = 640;
 const mailLeftColumn = { ...leftColumn, minHeight: TECHNICAL_LOG_HEIGHT, alignContent: "start" };
 const rightColumn = { display: "flex", minWidth: 0, height: TECHNICAL_LOG_HEIGHT, alignSelf: "start" };
-const panel = { border: "1px solid #eaecf0", borderRadius: 10, background: "#f8fafc", padding: 12 };
+const panel = { border: "1px solid #eaecf0", borderRadius: 8, background: "#f8fafc", padding: 8 };
 const compactPanel = { ...panel, padding: "5px 8px" };
 const panelTitle = { fontSize: 13, fontWeight: 700, color: "#101828" };
-const panelSubtitle = { fontSize: 12, color: "#667085", lineHeight: 1.5, margin: "4px 0 10px" };
-const form = { display: "grid", gap: 8 };
-const input = { border: "1px solid #d0d5dd", borderRadius: 7, padding: "8px 10px", color: "#101828", background: "#fff", fontSize: 13, width: "100%", boxSizing: "border-box" as const };
+const panelSubtitle = { fontSize: 11, color: "#667085", lineHeight: 1.4, margin: "2px 0 6px" };
+const form = { display: "grid", gap: 6 };
+const input = { border: "1px solid #d0d5dd", borderRadius: 7, padding: "6px 8px", color: "#101828", background: "#fff", fontSize: 13, width: "100%", boxSizing: "border-box" as const };
+const compactFieldRow = { display: "flex", flexWrap: "nowrap" as const, gap: 8, alignItems: "end" };
+const compactField = { display: "grid", gap: 4, minWidth: 0 };
+const compactFieldLabel = { fontSize: 11, color: "#667085", fontWeight: 700 };
+const compactNameInput = { ...input, width: 148, maxWidth: "100%" };
+const compactInput = { ...input, width: 220, maxWidth: "100%" };
+const compactSelect = { ...input, width: 120, maxWidth: "100%" };
 const twoColumns = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 };
-const primaryButton = { border: "none", borderRadius: 7, padding: "8px 12px", background: "#175cd3", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" };
+const primaryButton = { border: "none", borderRadius: 7, padding: "6px 10px", background: "#175cd3", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" };
 const ghostButton = { border: "1px solid #d0d5dd", borderRadius: 999, padding: "8px 14px", background: "#fff", color: "#344054", fontSize: 13, fontWeight: 700, cursor: "pointer" };
-const resetButton = { ...ghostButton, color: "#047857", borderColor: "#6ee7b7", background: "#ecfdf3" };
+const resetButton = { ...ghostButton, color: "#3d6b62", borderColor: "#c5d6d3", background: "#ecf2f1" };
+const disabledResetButton = { ...resetButton, cursor: "not-allowed", opacity: 0.55 };
 const stopButton = { ...ghostButton, color: "#b42318", borderColor: "#fecdca", background: "#fff" };
 const disabledDangerButton = { ...stopButton, color: "#98a2b3", borderColor: "#eaecf0", cursor: "not-allowed" };
 const connectionCard = { display: "grid", gap: 6 };
 const connectionRow = { display: "grid", gap: 3, padding: "9px 10px", border: "1px solid #dfe6ee", background: "#fff", borderRadius: 8, fontSize: 12, color: "#475467" };
-const metrics = { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gridTemplateRows: "repeat(2, minmax(0, 1fr))", gap: 8, height: 148 };
-const runTabs = { display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" as const, borderBottom: "1px solid #d0d5dd", marginBottom: 10 };
+const metrics = { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6 };
+const runTabs = { display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" as const, borderBottom: "1px solid #d0d5dd", marginBottom: 6 };
 const runTab = { border: "none", borderBottom: "2px solid transparent", padding: "6px 8px", marginBottom: -1, background: "transparent", color: "#667085", fontSize: 11, fontWeight: 700, cursor: "pointer" };
 const activeRunTab = { ...runTab, color: "#175cd3", borderBottomColor: "#175cd3" };
-const metric = { display: "grid", gap: 2, padding: "9px 10px", border: "1px solid #e4ebf5", background: "#fff", borderRadius: 8 };
-const metricLabel = { fontSize: 11, color: "#667085", fontWeight: 700 };
-const metricValue = { color: "#101828", fontSize: 19 };
-const metricDetail = { color: "#667085", fontSize: 11, whiteSpace: "nowrap" as const, overflow: "hidden", textOverflow: "ellipsis" };
-const groupList = { display: "grid", alignContent: "start", gap: 7, height: 148, overflowY: "auto" as const, paddingRight: 2 };
+const metric = { display: "grid", gap: 1, padding: "6px 8px", border: "1px solid #e4ebf5", background: "#fff", borderRadius: 7 };
+const metricLabel = { fontSize: 10, color: "#667085", fontWeight: 700 };
+const metricValue = { color: "#101828", fontSize: 16 };
+const metricDetail = { color: "#667085", fontSize: 10, whiteSpace: "nowrap" as const, overflow: "hidden", textOverflow: "ellipsis" };
+const groupList = { display: "grid", alignContent: "start", gap: 6, maxHeight: 168, overflowY: "auto" as const, paddingRight: 2 };
 const groupRow = { border: "1px solid #e4ebf5", borderRadius: 8, padding: "8px 9px", background: "#fff" };
 const groupRowHead = { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 };
 const groupTitle = { color: "#101828", fontSize: 12, fontWeight: 700, lineHeight: 1.4 };
 const groupStateBadge = { flexShrink: 0, borderRadius: 999, padding: "2px 6px", fontSize: 10, fontWeight: 700 };
 const groupMeta = { marginTop: 3, color: "#667085", fontSize: 10 };
 const groupSummary = { marginTop: 4, color: "#475467", fontSize: 11, lineHeight: 1.45, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as const, overflow: "hidden" };
-const groupEmpty = { height: 148, boxSizing: "border-box" as const, border: "1px dashed #d0d5dd", borderRadius: 8, padding: 12, color: "#667085", background: "#fff", fontSize: 11 };
+const groupEmpty = { boxSizing: "border-box" as const, border: "1px dashed #d0d5dd", borderRadius: 8, padding: 10, color: "#667085", background: "#fff", fontSize: 11 };
 const groupLoading = { color: "#667085", fontSize: 10, textAlign: "center" as const, padding: "2px 0" };
 const logBody = { flex: 1, minHeight: 0 };
 const errorText = { margin: "9px 0 0", color: "#b42318", fontSize: 12 };

@@ -23,6 +23,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Coroutine, TextIO
 
+import httpx
 from pydantic import ValidationError
 
 from app.discovery.plugin.artifact import ConnectorArtifact, load_connector_artifact
@@ -552,6 +553,18 @@ async def execute_connector(
             raise ConnectorProtocolError(
                 ConnectorErrorCode.TIMEOUT,
                 f"connector exceeded its {timeout_seconds:g} second wall-clock limit",
+            ) from exc
+        except httpx.TransportError as exc:
+            # Keep transient connectivity separate from connector logic. The
+            # Loop may retry this exact artifact once, but must not ask the
+            # Agent to rewrite a verified parser or selector.
+            raise ConnectorProtocolError(
+                ConnectorErrorCode.NETWORK_ERROR,
+                f"connector network request failed: {type(exc).__name__}: {exc}",
+                details={
+                    "failure_kind": "transport",
+                    "exception_type": type(exc).__name__,
+                },
             ) from exc
         except ConnectorProtocolError:
             raise

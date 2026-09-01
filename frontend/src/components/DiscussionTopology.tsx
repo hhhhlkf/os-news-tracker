@@ -22,6 +22,17 @@ export function DiscussionTopology({ discussion }: { discussion: DiscussionDetai
   const evidenceIds = useMemo(() => collectEvidenceIds(discussion), [discussion]);
   const latestIds = useMemo(() => new Set(discussion.snapshots[0]?.new_message_ids ?? []), [discussion.snapshots]);
   const selected = discussion.messages.find((message) => message.id === selectedId) ?? null;
+  useEffect(() => {
+    if (!expanded) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setExpanded(false);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [expanded]);
   if (!discussion.messages.length) return null;
   return <>
     <section style={section}>
@@ -99,7 +110,7 @@ function GraphCanvas({ messages, evidenceIds, latestIds, search, setSearch, lang
     return () => { observer.disconnect(); chart.dispose(); };
   }, [nodes, edges, compact, language, onSelect]);
 
-  return <div style={{ ...canvasFrame, height: compact ? 270 : "min(68vh, 680px)" }}>
+  return <div style={{ ...canvasFrame, height: compact ? 320 : "min(68vh, 680px)" }}>
     <div style={toolbar}><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索内容或参与者" style={searchInput} />{compact && <button type="button" onClick={onExpand} style={primaryToolButton}>全屏查看</button>}</div>
     <div ref={hostRef} style={graphHost} />
     {messages.length > visibleMessages.length && <div style={foldNotice}>缩略图已折叠 {messages.length - visibleMessages.length} 封邮件</div>}
@@ -192,7 +203,7 @@ const legendDot: CSSProperties = { display: "inline-block", width: 7, height: 7,
 const languageToggle: CSSProperties = { display: "inline-flex", overflow: "hidden", border: "1px solid #b9d4ff", borderRadius: 6, background: "#fff" };
 const languageButton: CSSProperties = { border: 0, padding: "4px 7px", background: "transparent", color: "#667085", fontSize: 10, cursor: "pointer" };
 const languageButtonActive: CSSProperties = { background: "#eff6ff", color: "#175cd3", fontWeight: 700 };
-const canvasFrame: CSSProperties = { position: "relative", border: "1px solid #d0d5dd", borderRadius: 9, background: "#fff", overflow: "hidden", minHeight: 180 };
+const canvasFrame: CSSProperties = { position: "relative", border: "1px solid #d0d5dd", borderRadius: 9, background: "#fff", overflow: "hidden", minHeight: 220 };
 const toolbar: CSSProperties = { position: "absolute", top: 8, left: 8, right: 8, zIndex: 1, display: "flex", justifyContent: "space-between", gap: 8, pointerEvents: "none" };
 const searchInput: CSSProperties = { width: 176, padding: "6px 8px", border: "1px solid #d0d5dd", borderRadius: 6, color: "#344054", background: "rgba(255,255,255,.94)", fontSize: 11, pointerEvents: "auto" };
 const primaryToolButton: CSSProperties = { border: "1px solid #b9d4ff", borderRadius: 6, padding: "6px 8px", background: "#eff6ff", color: "#175cd3", fontSize: 11, fontWeight: 700, cursor: "pointer", pointerEvents: "auto" };
@@ -202,7 +213,7 @@ const selectedCard: CSSProperties = { marginTop: 10, padding: "10px 11px", borde
 const fullSelectedCard: CSSProperties = { marginTop: 10 };
 const messageHeading: CSSProperties = { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 };
 const collapseButton: CSSProperties = { flexShrink: 0, border: "1px solid #b9d4ff", borderRadius: 6, padding: "5px 8px", background: "#fff", color: "#175cd3", fontSize: 11, fontWeight: 700, cursor: "pointer" };
-const messageBody: CSSProperties = { maxHeight: 300, overflow: "auto", color: "#475467", marginTop: 8, paddingTop: 8, borderTop: "1px solid #dbeafe", whiteSpace: "pre-wrap" };
+const messageBody: CSSProperties = { maxHeight: 420, overflow: "auto", color: "#475467", marginTop: 8, paddingTop: 8, borderTop: "1px solid #dbeafe", whiteSpace: "pre-wrap" };
 const githubLink: CSSProperties = { display: "inline-block", marginTop: 8, color: "#175cd3", fontSize: 11, fontWeight: 700 };
 const overlay: CSSProperties = { position: "fixed", inset: 0, zIndex: 90, padding: 22, background: "rgba(16,24,40,.56)", display: "flex", alignItems: "center", justifyContent: "center" };
 const modal: CSSProperties = { width: "min(1280px, 96vw)", maxHeight: "94vh", overflow: "auto", padding: 14, borderRadius: 12, background: "#fff", boxShadow: "0 24px 56px rgba(16,24,40,.32)" };

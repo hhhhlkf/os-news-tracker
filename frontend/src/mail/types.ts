@@ -12,6 +12,8 @@ export function mailProviderLabel(provider: MailProviderKind): string {
 
 export interface MailFilterSnapshot {
   q?: string | null;
+  keywords?: string[];
+  strict_title?: boolean;
   main_category?: string | null;
   info_type?: string | null;
   importance?: string | null;

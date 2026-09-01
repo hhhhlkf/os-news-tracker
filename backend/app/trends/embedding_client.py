@@ -14,7 +14,7 @@ import httpx
 from app.trends.embedding_config import get_trend_embedding_settings
 
 _UNREACHABLE_REMEDY = (
-    "确认 embedding-worker 服务已启动（docker compose up -d embedding-worker），"
+    "确认 embedding-worker 服务已启动（docker compose -f docker-compose.dev.yml up -d embedding-worker），"
     "或调整 TRENDS_EMBEDDING_WORKER_BASE_URL 指向正确的内网地址。"
 )
 

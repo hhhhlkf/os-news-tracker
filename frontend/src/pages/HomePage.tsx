@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchFacets, fetchItems, listDiscoveryMethods } from "../api/client";
 import { FacetSidebar } from "../components/FacetSidebar";
 import { EdgePageArrows } from "../components/EdgePageArrows";
-import { HomeFilterDrawer, HomeFilterTrigger } from "../components/HomeFilterDrawer";
-import { HomeModuleDeck, homeModuleIndex } from "../components/HomeModuleDeck";
+import { HomeFilterTrigger, HomeSideDrawers } from "../components/HomeFilterDrawer";
 import { ItemList } from "../components/ItemList";
 import { ItemDetail } from "../components/ItemDetail";
 import { MailTaskCenter } from "../components/MailTaskCenter";
@@ -18,7 +17,7 @@ import type { CrawlMethod } from "../types";
 import { clampInput, INPUT_LIMITS } from "../inputLimits";
 
 const PAGE_SIZE = 10;
-const ENTRY_CARD_MIN_HEIGHT = 196;
+const DRAWER_HANDOFF_MS = 300;
 
 const MORNING_STATUS_META: Record<string, { text: string; bg: string; color: string }> = {
   not_run: { text: "今日未执行", bg: "#f2f4f7", color: "#475467" },
@@ -170,13 +169,20 @@ interface TrendSelection {
 }
 
 export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolean }) {
+  const queryClient = useQueryClient();
   const [locationSearch, setLocationSearch] = useState(() => window.location.search);
-  const [filters, setFilters] = useState<Record<string, string>>({ q: "", sort_by: "last_activity_at", sort_dir: "desc" });
+  const [filters, setFilters] = useState<Record<string, string>>({ sort_by: "last_activity_at", sort_dir: "desc" });
+  const [keywords, setKeywords] = useState<string[]>([]);
+  const [keywordInput, setKeywordInput] = useState("");
+  const [strictTitle, setStrictTitle] = useState(false);
   const [mailOpen, setMailOpen] = useState(false);
   const [morningCrawlOpen, setMorningCrawlOpen] = useState(false);
   const [trendSelection, setTrendSelection] = useState<TrendSelection | null>(null);
-  const [moduleIndex, setModuleIndex] = useState(() => homeModuleIndex("news"));
   const [filterOpen, setFilterOpen] = useState(false);
+  const [subscribeOpen, setSubscribeOpen] = useState(false);
+  const [trendsOpen, setTrendsOpen] = useState(false);
+  const drawerTimerRef = useRef(0);
+  const keywordInputRef = useRef<HTMLInputElement>(null);
   const searchParams = useMemo(() => new URLSearchParams(locationSearch), [locationSearch]);
   const openId = parseItemId(searchParams.get("item"));
   const page = parsePage(searchParams.get("page"));
@@ -186,6 +192,55 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
     window.addEventListener("popstate", syncLocation);
     return () => window.removeEventListener("popstate", syncLocation);
   }, []);
+
+  useEffect(() => () => window.clearTimeout(drawerTimerRef.current), []);
+
+  const openFilterDrawer = () => {
+    window.clearTimeout(drawerTimerRef.current);
+    setSubscribeOpen(false);
+    setTrendsOpen(false);
+    setFilterOpen(true);
+  };
+
+  const openSubscribeDrawer = () => {
+    window.clearTimeout(drawerTimerRef.current);
+    setFilterOpen(false);
+    setTrendsOpen(false);
+    setSubscribeOpen(true);
+  };
+
+  const openTrendsDrawer = () => {
+    window.clearTimeout(drawerTimerRef.current);
+    setFilterOpen(false);
+    setSubscribeOpen(false);
+    setTrendsOpen(true);
+  };
+
+  const openFilterAfterSubscribeRetract = () => {
+    window.clearTimeout(drawerTimerRef.current);
+    setTrendsOpen(false);
+    if (subscribeOpen) {
+      setSubscribeOpen(false);
+      drawerTimerRef.current = window.setTimeout(() => setFilterOpen(true), DRAWER_HANDOFF_MS);
+      return;
+    }
+    setFilterOpen(true);
+  };
+
+  const closeFilterDrawer = () => {
+    window.clearTimeout(drawerTimerRef.current);
+    setFilterOpen(false);
+  };
+
+  const closeSubscribeDrawer = () => {
+    window.clearTimeout(drawerTimerRef.current);
+    setSubscribeOpen(false);
+  };
+
+  const closeTrendsDrawer = () => {
+    window.clearTimeout(drawerTimerRef.current);
+    setTrendsOpen(false);
+  };
 
   const updateLocationSearch = (update: (current: URLSearchParams) => URLSearchParams) => {
     const next = update(new URLSearchParams(window.location.search));
@@ -215,18 +270,43 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
     });
   };
 
+  useEffect(() => {
+    if (openId === null) return;
+    const previousOverflow = document.body.style.overflow;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpenId(null);
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [openId]);
+
   const setFilter = (key: string, value: string) => {
     setPage(1);
     setFilters((f) => ({ ...f, [key]: value }));
   };
 
-  // A source pill fills the search box for display only. Typing turns that text
-  // back into a real search word, so the exact trend filter is dropped first.
-  const setSearchQuery = (value: string) => {
+  const addKeyword = () => {
+    const value = keywordInput.trim();
+    if (!value) return;
     setPage(1);
     const hadTrendFilter = trendSelection !== null;
     setTrendSelection(null);
-    setFilters((f) => ({ ...f, q: value, ...(hadTrendFilter ? { item_ids: "" } : {}) }));
+    setKeywords((current) => current.some((keyword) => keyword.toLocaleLowerCase() === value.toLocaleLowerCase())
+      ? current
+      : [...current, value]);
+    setKeywordInput("");
+    if (hadTrendFilter) {
+      setFilters((current) => ({ ...current, item_ids: "" }));
+    }
+  };
+
+  const removeKeyword = (keyword: string) => {
+    setPage(1);
+    setKeywords((current) => current.filter((value) => value !== keyword));
   };
 
   const applyTrendFilter = (trend: { resultId: string; topic: string; itemIds: number[] }) => {
@@ -236,50 +316,40 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
       resultId: trend.resultId,
       itemId: null,
       label: trend.topic || "所选趋势",
-      restoreQuery: trendSelection?.restoreQuery ?? null,
+      restoreQuery: null,
     });
     setFilters((f) => ({ ...f, item_ids: trend.itemIds.join(",") }));
-    setModuleIndex(homeModuleIndex("news"));
   };
 
   const applyTrendSourceFilter = (source: { itemId: number; title: string }) => {
     setPage(1);
     setOpenId(null);
-    // The title only fills the search box; filtering stays on the exact item_id,
-    // so same-named news can never be matched by accident.
     setTrendSelection({
       resultId: null,
       itemId: source.itemId,
       label: source.title,
-      restoreQuery: trendSelection?.restoreQuery ?? filters.q ?? "",
+      restoreQuery: null,
     });
-    setFilters((f) => ({ ...f, item_ids: String(source.itemId), q: source.title }));
-    setModuleIndex(homeModuleIndex("news"));
+    setFilters((f) => ({ ...f, item_ids: String(source.itemId) }));
   };
 
   const clearTrendFilter = () => {
     setPage(1);
-    const restoreQuery = trendSelection?.restoreQuery ?? null;
-    setFilters((f) => ({ ...f, item_ids: "", ...(restoreQuery === null ? {} : { q: restoreQuery }) }));
+    setFilters((f) => ({ ...f, item_ids: "" }));
     setTrendSelection(null);
   };
 
-  // The title a source pill wrote into the search box is display text, never a
-  // query term: the exact item_id alone decides what the list shows.
-  const isSearchInjectedByTrend = trendSelection?.restoreQuery != null;
-  const effectiveFilters = useMemo(() => {
-    if (!isSearchInjectedByTrend) return filters;
-    const { q: _displayOnlyTitle, ...rest } = filters;
-    return rest;
-  }, [filters, isSearchInjectedByTrend]);
+  const effectiveFilters = filters;
 
   const params = useMemo(
     () => ({
       ...Object.fromEntries(Object.entries(effectiveFilters).filter(([, value]) => value)),
+      ...(keywords.length > 0 ? { keywords } : {}),
+      ...(strictTitle ? { strict_title: true } : {}),
       limit: PAGE_SIZE,
       offset: (page - 1) * PAGE_SIZE,
     }),
-    [effectiveFilters, page],
+    [effectiveFilters, keywords, page, strictTitle],
   );
   // The trend carousel's exact item filter is an ephemeral browse action, so it
   // stays out of the mail task center's filter snapshot and estimate.
@@ -288,10 +358,12 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
       ...Object.fromEntries(
         Object.entries(effectiveFilters).filter(([key, value]) => value && key !== "item_ids"),
       ),
+      ...(keywords.length > 0 ? { keywords } : {}),
+      ...(strictTitle ? { strict_title: true } : {}),
       limit: PAGE_SIZE,
       offset: (page - 1) * PAGE_SIZE,
     }),
-    [effectiveFilters, page],
+    [effectiveFilters, keywords, page, strictTitle],
   );
   const itemsQuery = useQuery({
     queryKey: ["items", params],
@@ -332,7 +404,10 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
     facetsFailed: facetsQuery.isError,
   });
 
-  const demoFilteredItems = useMemo(() => filterDemoItems(demoItems, effectiveFilters), [effectiveFilters]);
+  const demoFilteredItems = useMemo(
+    () => filterDemoItems(demoItems, { ...effectiveFilters, keywords, strict_title: strictTitle }),
+    [effectiveFilters, keywords, strictTitle],
+  );
   const demoList = useMemo(
     () => makeListResponse(demoFilteredItems, PAGE_SIZE, (page - 1) * PAGE_SIZE),
     [demoFilteredItems, page],
@@ -343,16 +418,21 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
     ? demoItems.find((item) => item.id === openId) ?? undefined
     : undefined;
   const selectedLiveItemId = mode === "live" ? openId ?? undefined : undefined;
+  const openListItem = (listData?.items ?? []).find((item) => item.id === openId);
+  const isDiscussionOpen = (selectedDemoItem ?? openListItem)?.item_kind === "discussion";
 
   const hasLiveEmptyState = mode === "live" && listData?.total === 0;
   const totalPages = Math.max(1, Math.ceil((listData?.total ?? 0) / PAGE_SIZE));
-  const activeFilterCount = countActiveFilters(effectiveFilters);
+  const activeFilterCount = countActiveFilters(effectiveFilters) + (keywords.length > 0 ? 1 : 0);
   const crawlMethods = crawlMethodsQuery.data ?? [];
   const activeCrawlMethods = useMemo(
     () => crawlMethods.filter((method) => method.status === "active"),
     [crawlMethods],
   );
-  const filterChips = summarizeActiveFilters(effectiveFilters, activeCrawlMethods);
+  const filterChips = [
+    ...summarizeActiveFilters(effectiveFilters, activeCrawlMethods),
+    ...(keywords.length > 0 ? [`关键词筛选${strictTitle ? "（仅标题）" : ""}：${keywords.join(" / ")}`] : []),
+  ];
   const templateCount = mailTemplatesQuery.data?.length ?? 0;
   const scheduleCount = mailSchedulesQuery.data?.length ?? 0;
   const enabledScheduleCount = (mailSchedulesQuery.data ?? []).filter((s) => s.enabled).length;
@@ -398,20 +478,75 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
       }}
     >
       <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-        <input
-          placeholder="搜索标题、摘要、分类…"
-          value={filters.q ?? ""}
-          maxLength={INPUT_LIMITS.searchQuery}
-          onChange={(e) => setSearchQuery(clampInput(e.target.value, INPUT_LIMITS.searchQuery))}
+        <div
+          role="search"
+          aria-label="关键词筛选条件"
+          onClick={() => keywordInputRef.current?.focus()}
           style={{
             flex: "1 1 420px",
             minWidth: 260,
-            padding: "12px 14px",
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: 6,
+            padding: "6px 8px",
             border: "1px solid #d0d5dd",
             borderRadius: 8,
-            fontSize: 14,
+            background: "#fff",
+            cursor: "text",
           }}
-        />
+        >
+          {keywords.map((keyword) => (
+            <button
+              key={keyword}
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                removeKeyword(keyword);
+              }}
+              title={`移除关键词：${keyword}`}
+              style={{
+                border: "1px solid #b2ddff",
+                background: "#eff8ff",
+                color: "#175cd3",
+                borderRadius: 999,
+                padding: "4px 8px",
+                cursor: "pointer",
+                fontSize: 12,
+                lineHeight: 1.2,
+              }}
+            >
+              {keyword} ×
+            </button>
+          ))}
+          <input
+            ref={keywordInputRef}
+            placeholder={keywords.length === 0 ? "输入关键词后按回车：搜索标题、正文和技术热点" : "继续输入后按回车"}
+            value={keywordInput}
+            maxLength={INPUT_LIMITS.searchQuery}
+            onChange={(e) => setKeywordInput(clampInput(e.target.value, INPUT_LIMITS.searchQuery))}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                addKeyword();
+                return;
+              }
+              if (event.key === "Backspace" && !keywordInput && keywords.length > 0) {
+                event.preventDefault();
+                removeKeyword(keywords[keywords.length - 1]);
+              }
+            }}
+            style={{
+              flex: "1 1 160px",
+              minWidth: 120,
+              border: "none",
+              outline: "none",
+              padding: "6px 6px",
+              fontSize: 14,
+              background: "transparent",
+            }}
+          />
+        </div>
         <select
           value={`${filters.sort_by ?? "published_at"}:${filters.sort_dir ?? "desc"}`}
           onChange={(e) => {
@@ -444,11 +579,28 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
           <option value="news">新闻</option>
           <option value="discussion">技术讨论</option>
         </select>
-        <HomeFilterTrigger activeCount={activeFilterCount} onClick={() => setFilterOpen(true)} />
+        <HomeFilterTrigger activeCount={activeFilterCount} onClick={openFilterDrawer} />
+        <button
+          type="button"
+          aria-pressed={strictTitle}
+          onClick={() => {
+            setPage(1);
+            setStrictTitle((current) => !current);
+            void queryClient.invalidateQueries({ queryKey: ["items"] });
+          }}
+          className="home-filter-trigger"
+          style={strictTitle ? { background: "#175cd3", borderColor: "#175cd3", color: "#fff" } : undefined}
+          title="开启后，关键词只匹配新闻标题"
+        >
+          严格筛选
+        </button>
         <button
           onClick={() => {
             setPage(1);
-            setFilters({ q: "", sort_by: "last_activity_at", sort_dir: "desc" });
+            setFilters({ sort_by: "last_activity_at", sort_dir: "desc" });
+            setKeywords([]);
+            setKeywordInput("");
+            setStrictTitle(false);
             setOpenId(null);
             setTrendSelection(null);
           }}
@@ -519,78 +671,38 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
   );
 
   const mailCard = (
-    <div
-      style={{
-        border: "1px solid #bfd7ff",
-        background: "linear-gradient(180deg,#f8fbff 0%,#ffffff 100%)",
-        borderRadius: 8,
-        padding: 28,
-        minHeight: ENTRY_CARD_MIN_HEIGHT + 160,
-        width: 560,
-        maxWidth: "100%",
-        boxSizing: "border-box",
-        display: "flex",
-        flexDirection: "column",
-      }}
-    >
-      <div style={{ fontSize: 21, fontWeight: 800, color: "#101828", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, letterSpacing: "0.01em" }}>
-        邮件任务中心
-        <span style={{ fontSize: 13, fontWeight: 700, borderRadius: 999, padding: "5px 11px", background: mailBadge.bg, color: mailBadge.color }}>
+    <div className="home-ops-card home-ops-card--mail">
+      <div className="home-ops-card__head">
+        <div className="home-ops-card__title">邮件任务中心</div>
+        <span className="home-ops-card__badge" style={{ background: mailBadge.bg, color: mailBadge.color }}>
           {mailBadge.text}
         </span>
       </div>
-
-      <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-        <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "14px 16px" }}>
-          <div style={{ fontSize: 36, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{templateCount}</div>
-          <div style={{ fontSize: 15, color: "#667085", marginTop: 6 }}>模板</div>
+      <div className="home-ops-card__stats">
+        <div className="home-ops-card__stat">
+          <div className="home-ops-card__stat-value">{templateCount}</div>
+          <div className="home-ops-card__stat-label">模板</div>
         </div>
-        <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "14px 16px" }}>
-          <div style={{ fontSize: 36, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{scheduleCount}</div>
-          <div style={{ fontSize: 15, color: "#667085", marginTop: 6 }}>已预定</div>
+        <div className="home-ops-card__stat">
+          <div className="home-ops-card__stat-value">{scheduleCount}</div>
+          <div className="home-ops-card__stat-label">已预定</div>
         </div>
       </div>
-
-      <div style={{ fontSize: 14, fontWeight: 700, color: "#98a2b3", marginBottom: 8 }}>当前筛选</div>
+      <div className="home-ops-card__kicker">当前筛选</div>
       {filterChips.length > 0 ? (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        <div className="home-ops-card__chips">
           {filterChips.map((chip) => (
-            <span
-              key={chip}
-              style={{
-                fontSize: 14,
-                color: "#344054",
-                background: "#eff6ff",
-                border: "1px solid #d3e3fb",
-                borderRadius: 6,
-                padding: "4px 8px",
-                wordBreak: "break-all",
-              }}
-            >
-              {chip}
-            </span>
+            <span key={chip} className="home-ops-card__chip">{chip}</span>
           ))}
         </div>
       ) : (
-        <div style={{ fontSize: 15, color: "#98a2b3" }}>全部条目（未设置筛选）</div>
+        <div className="home-ops-card__empty">全部条目（未设置筛选）</div>
       )}
-
       <button
+        className="home-ops-card__action home-ops-card__action--mail"
         onClick={() => {
           setMailOpen(true);
-          setFilterOpen(true);
-        }}
-        style={{
-          marginTop: "auto",
-          width: "100%",
-          border: "none",
-          borderRadius: 8,
-          padding: "14px 16px",
-          fontSize: 16,
-          fontWeight: 700,
-          color: "#fff",
-          background: "#175cd3",
-          cursor: "pointer",
+          openFilterAfterSubscribeRetract();
         }}
       >
         打开邮件任务中心
@@ -599,58 +711,35 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
   );
 
   const morningCard = hasSystemAccess ? (
-    <div
-      style={{
-        border: "1px solid #cbd9ea",
-        background: "linear-gradient(180deg,#f7faff 0%,#ffffff 100%)",
-        borderRadius: 8,
-        padding: 28,
-        minHeight: ENTRY_CARD_MIN_HEIGHT + 160,
-        width: 560,
-        maxWidth: "100%",
-        boxSizing: "border-box",
-        display: "flex",
-        flexDirection: "column",
-      }}
-    >
-      <div style={{ fontSize: 21, fontWeight: 800, color: "#101828", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, letterSpacing: "0.01em" }}>
-        系统定时抓取
-        <span style={{ fontSize: 13, fontWeight: 700, borderRadius: 999, padding: "5px 11px", background: morningStatusMeta.bg, color: morningStatusMeta.color }}>
+    <div className="home-ops-card home-ops-card--morning">
+      <div className="home-ops-card__head">
+        <div className="home-ops-card__title">系统定时抓取</div>
+        <span className="home-ops-card__badge" style={{ background: morningStatusMeta.bg, color: morningStatusMeta.color }}>
           {morningStatusMeta.text}
         </span>
       </div>
-
-      <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-        <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "14px 16px" }}>
-          <div style={{ fontSize: 36, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{morningDashboard?.active_method_count ?? 0}</div>
-          <div style={{ fontSize: 15, color: "#667085", marginTop: 6 }}>爬取方式</div>
+      <div className="home-ops-card__stats">
+        <div className="home-ops-card__stat">
+          <div className="home-ops-card__stat-value">{morningDashboard?.active_method_count ?? 0}</div>
+          <div className="home-ops-card__stat-label">爬取方式</div>
         </div>
-        <div style={{ flex: 1, background: "#fff", border: "1px solid #e4ebf5", borderRadius: 8, padding: "14px 16px" }}>
-          <div style={{ fontSize: 36, fontWeight: 800, color: "#101828", lineHeight: 1.1 }}>{morningDashboard?.today_run?.stored_count ?? 0}</div>
-          <div style={{ fontSize: 15, color: "#667085", marginTop: 6 }}>今日入库</div>
+        <div className="home-ops-card__stat">
+          <div className="home-ops-card__stat-value">{morningDashboard?.today_run?.stored_count ?? 0}</div>
+          <div className="home-ops-card__stat-label">今日入库</div>
         </div>
       </div>
-
-      <div style={{ fontSize: 14, fontWeight: 700, color: "#98a2b3", marginBottom: 8 }}>下次执行</div>
-      <div style={{ fontSize: 15, color: "#344054" }}>
+      <div className="home-ops-card__kicker">下次执行</div>
+      <div className="home-ops-card__empty" style={{ color: "#344054" }}>
         {morningDashboard?.config.next_run_at
           ? `${morningDashboard.config.next_run_at.split("T")[0]} ${morningDashboard.config.next_run_at.split("T")[1]?.slice(0, 5) ?? ""}（北京时间）`
           : "未排程"}
       </div>
-
       <button
-        onClick={() => setMorningCrawlOpen(true)}
-        style={{
-          marginTop: "auto",
-          width: "100%",
-          border: "none",
-          borderRadius: 8,
-          padding: "14px 16px",
-          fontSize: 16,
-          fontWeight: 700,
-          color: "#fff",
-          background: "#0e7090",
-          cursor: "pointer",
+        className="home-ops-card__action home-ops-card__action--morning"
+        onClick={() => {
+          closeSubscribeDrawer();
+          closeTrendsDrawer();
+          setMorningCrawlOpen(true);
         }}
       >
         打开系统定时抓取
@@ -658,59 +747,49 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
     </div>
   ) : null;
 
-  const renderTitleCard = (opts?: { compact?: boolean }) => {
-    const compact = Boolean(opts?.compact);
-    return (
-    <header className={`home-title-card${compact ? " home-title-card--compact" : ""}`}>
-      <div style={{ fontSize: compact ? 11 : 13, color: "#98a2b3", marginBottom: compact ? 6 : 10 }}>OS News Tracker</div>
+  const titleCard = (
+    <header className="home-title-card">
+      <div style={{ fontSize: 13, color: "#98a2b3", marginBottom: 10 }}>OS News Tracker</div>
       <div
         style={{
           display: "flex",
           justifyContent: "space-between",
-          gap: compact ? 10 : 16,
-          alignItems: compact ? "center" : "flex-end",
+          gap: 16,
+          alignItems: "flex-end",
           flexWrap: "wrap",
         }}
       >
-        <div style={{ maxWidth: compact ? "100%" : 720, minWidth: 0, flex: compact ? "1 1 180px" : undefined }}>
-          <h1 style={{ margin: 0, fontSize: compact ? 22 : 32, lineHeight: 1.2 }}>技术新闻追踪</h1>
-          <p style={{ marginTop: compact ? 4 : 10, marginBottom: 0, color: "#d0d5dd", fontSize: compact ? 12 : undefined, lineHeight: compact ? 1.45 : undefined }}>
+        <div style={{ maxWidth: 720, minWidth: 0 }}>
+          <h1 style={{ margin: 0, fontSize: 32, lineHeight: 1.2 }}>技术新闻追踪</h1>
+          <p style={{ marginTop: 10, marginBottom: 0, color: "#d0d5dd" }}>
             汇总 OS、兼容性、安全与内部 AI 相关动态，支持搜索、筛选与详情查看。
           </p>
         </div>
-        <div style={{ display: "flex", gap: compact ? 6 : 12, flexWrap: compact ? "nowrap" : "wrap" }}>
-          <div style={{ minWidth: compact ? 72 : 140, background: "#182230", borderRadius: 8, padding: compact ? "8px 10px" : 14 }}>
-            <div style={{ fontSize: compact ? 10 : 12, color: "#98a2b3", marginBottom: compact ? 3 : 6 }}>当前数据源</div>
-            <div style={{ fontSize: compact ? 16 : 24, fontWeight: 700 }}>{mode === "demo" ? "演示" : "实时"}</div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ minWidth: 140, background: "#182230", borderRadius: 8, padding: 14 }}>
+            <div style={{ fontSize: 12, color: "#98a2b3", marginBottom: 6 }}>当前数据源</div>
+            <div style={{ fontSize: 24, fontWeight: 700 }}>{mode === "demo" ? "演示" : "实时"}</div>
           </div>
-          <div style={{ minWidth: compact ? 72 : 140, background: "#182230", borderRadius: 8, padding: compact ? "8px 10px" : 14 }}>
-            <div style={{ fontSize: compact ? 10 : 12, color: "#98a2b3", marginBottom: compact ? 3 : 6 }}>当前条目数</div>
-            <div style={{ fontSize: compact ? 16 : 24, fontWeight: 700 }}>{listData?.total ?? 0}</div>
+          <div style={{ minWidth: 140, background: "#182230", borderRadius: 8, padding: 14 }}>
+            <div style={{ fontSize: 12, color: "#98a2b3", marginBottom: 6 }}>当前条目数</div>
+            <div style={{ fontSize: 24, fontWeight: 700 }}>{listData?.total ?? 0}</div>
           </div>
-          <div style={{ minWidth: compact ? 72 : 140, background: "#182230", borderRadius: 8, padding: compact ? "8px 10px" : 14 }}>
-            <div style={{ fontSize: compact ? 10 : 12, color: "#98a2b3", marginBottom: compact ? 3 : 6 }}>激活筛选</div>
-            <div style={{ fontSize: compact ? 16 : 24, fontWeight: 700 }}>{activeFilterCount}</div>
+          <div style={{ minWidth: 140, background: "#182230", borderRadius: 8, padding: 14 }}>
+            <div style={{ fontSize: 12, color: "#98a2b3", marginBottom: 6 }}>激活筛选</div>
+            <div style={{ fontSize: 24, fontWeight: 700 }}>{activeFilterCount}</div>
           </div>
         </div>
       </div>
     </header>
-    );
-  };
+  );
 
   return (
     <div className="home-shell">
       <div className="home-deck-host">
-        <HomeModuleDeck
-          index={moduleIndex}
-          onIndexChange={(next) => {
-            setModuleIndex(next);
-            setFilterOpen(false);
-          }}
-          locked={openId !== null || mailOpen || morningCrawlOpen || filterOpen}
-        >
+        <div className="home-news-stage">
           <div className="home-module__frame home-module__frame--news">
             <div className="home-module__stack">
-              {renderTitleCard()}
+              {titleCard}
               {searchToolbar}
               {hasLiveEmptyState && (
                 <div
@@ -747,76 +826,49 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
               </div>
             </div>
           </div>
+        </div>
 
-          <div className="home-module__frame">
-            <div className="home-module__stack">
-              {renderTitleCard()}
-              {mode === "demo" && (
-                <div
-                  style={{
-                    border: "1px solid #bfd7ff",
-                    background: "#eff6ff",
-                    color: "#175cd3",
-                    borderRadius: 8,
-                    padding: "12px 14px",
-                  }}
-                >
-                  当前未连接到后端 API，页面自动切换为演示数据，方便先检查交互和布局。
-                </div>
-              )}
-              <TrendCarousel
-                onSelectTrend={applyTrendFilter}
-                onSelectSource={applyTrendSourceFilter}
-                activeResultId={trendSelection?.resultId ?? null}
-                activeItemId={trendSelection?.itemId ?? null}
-              />
-            </div>
-          </div>
-
-          <div className="home-module__frame" style={{ position: "relative" }}>
-            <div className={`home-module__stack home-module__stack--subscribe${hasSystemAccess ? "" : " is-single-card"}`}>
-              {renderTitleCard({ compact: !hasSystemAccess })}
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "center",
-                  alignItems: "stretch",
-                  gap: 20,
-                  flexWrap: "wrap",
-                  width: "100%",
-                }}
-              >
-                {mailCard}
-                {morningCard}
-              </div>
-            </div>
-          </div>
-        </HomeModuleDeck>
-
-        <HomeFilterDrawer
-          open={filterOpen}
-          quiet={mailOpen}
-          activeCount={activeFilterCount}
-          onOpen={() => setFilterOpen(true)}
-          onClose={() => setFilterOpen(false)}
-        >
-          {facetSidebar}
-        </HomeFilterDrawer>
+        <HomeSideDrawers
+          filterOpen={filterOpen}
+          subscribeOpen={subscribeOpen}
+          trendsOpen={trendsOpen}
+          filterActiveCount={activeFilterCount}
+          trendsActiveCount={trendSelection ? 1 : 0}
+          suppressOutsideClose={mailOpen || morningCrawlOpen}
+          onOpenFilter={openFilterDrawer}
+          onCloseFilter={closeFilterDrawer}
+          onOpenSubscribe={openSubscribeDrawer}
+          onCloseSubscribe={closeSubscribeDrawer}
+          onOpenTrends={openTrendsDrawer}
+          onCloseTrends={closeTrendsDrawer}
+          filter={facetSidebar}
+          subscribe={(
+            <>
+              {mailCard}
+              {morningCard}
+            </>
+          )}
+          trends={(
+            <TrendCarousel
+              onSelectTrend={applyTrendFilter}
+              onSelectSource={applyTrendSourceFilter}
+              activeResultId={trendSelection?.resultId ?? null}
+              activeItemId={trendSelection?.itemId ?? null}
+            />
+          )}
+        />
       </div>
 
-      <EdgePageArrows page={page} totalPages={totalPages} onPageChange={setPage} hidden={openId !== null || moduleIndex !== homeModuleIndex("news")} />
+      <EdgePageArrows page={page} totalPages={totalPages} onPageChange={setPage} hidden={openId !== null} />
 
       {openId !== null && (
-        <div onClick={() => setOpenId(null)} style={{
-          position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.42)",
-          display: "flex", justifyContent: "flex-end", zIndex: 55,
-        }}>
-          <div onClick={(e) => e.stopPropagation()} style={{
-            width: 620, maxWidth: "92vw", background: "#fff",
-            height: "100%", overflowY: "auto", boxShadow: "-24px 0 48px rgba(16, 24, 40, 0.16)",
-          }}>
-            <ItemDetail id={selectedLiveItemId} item={selectedDemoItem} />
-          </div>
+        <div className="item-reader-overlay" onClick={() => setOpenId(null)}>
+          <ItemDetail
+            id={selectedLiveItemId}
+            item={selectedDemoItem}
+            wide={isDiscussionOpen}
+            onClose={() => setOpenId(null)}
+          />
         </div>
       )}
 
@@ -824,7 +876,7 @@ export function HomePage({ hasSystemAccess = false }: { hasSystemAccess?: boolea
         open={mailOpen}
         onClose={() => {
           setMailOpen(false);
-          setFilterOpen(false);
+          closeFilterDrawer();
         }}
         homeFilters={mailFilters}
       />

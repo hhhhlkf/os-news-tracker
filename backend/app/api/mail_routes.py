@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, require_system_access
+from app.api.deps import get_db
 from app.mail.service import (
     MailScheduleNotFoundError,
     MailService,
@@ -257,7 +257,6 @@ def send_mail_immediate(
 def preview_mail_trend_distribution(
     request: MailTrendPreviewRequest,
     db: Session = Depends(get_db),
-    _access: dict = Depends(require_system_access),
 ) -> MailPreviewResponse:
     try:
         return MailService(db).preview_trend_distribution(request)
@@ -271,7 +270,6 @@ def preview_mail_trend_distribution(
 def send_mail_trend_distribution(
     request: MailTrendPreviewRequest,
     db: Session = Depends(get_db),
-    _access: dict = Depends(require_system_access),
 ) -> MailImmediateSendResponse:
     try:
         return MailService(db).send_trend_distribution(request)

@@ -1,4 +1,4 @@
-# Discovery 单 Agent Loop 与本地插件重构计划
+# Discovery OpenHands 单 Agent Loop 与本地插件重构计划
 
 ## 1. 目标与范围
 
@@ -27,18 +27,33 @@
 
 ## 2. 核心架构决策
 
-采用一个项目内自建的 **Single Agent Loop Engine**，不采用 Agent Graph、Graph Engineering 或 LangGraph 状态图。
+采用项目内 **WebsiteLoopEngine 宿主控制层 + OpenHands Software Agent SDK 1.43.1**，不采用 Agent Graph、Graph Engineering、LangGraph 状态图或多 Agent handoff。OpenHands 替换普通网站旧的固定动作 Explore 和 JSON 源码 Build 内核，但不接管产品状态机、执行或验收。
 
 ```text
 主程序 OS News Tracker
-├── Discovery Loop Engine（LLM、状态、RAG、调度）
+├── WebsiteLoopEngine（阶段、预算、状态、RAG、调度与裁决）
+├── OpenHands Agent Runtime（Python 3.12，Explore + Build + Repair）
 ├── Sandbox Runtime（Docker + gVisor/runsc）
 ├── Connector Registry（插件版本与 Manifest）
 ├── Crawl Runtime（固定镜像中的通用 Runner）
 └── 现有审核、抓取、Ingester 与新闻 Pipeline
 ```
 
-Loop Engine 位于主程序中。LLM 调用、RAG 检索、状态持久化和审核编排都在主程序完成；Agent 的 Bash、浏览器和文件操作只能发生在 gVisor 容器内。
+Loop Engine 位于主程序中。RAG 检索、状态持久化、取消、检查点和审核编排都在主程序完成。OpenHands 的 `Conversation`、Terminal、FileEditor、Browser 以及 LLM tool loop 位于一次保留的 gVisor 容器内，直接编辑 `/workspace/crawler.py` 与 `/workspace/manifest-draft.json`；Explore、首次 Build 和后续 Repair 复用同一会话。禁止使用 OpenHands `DockerWorkspace`，也禁止 Agent 自行创建普通 Docker 容器。
+
+Agent stdio 程序、可信 relay/proxy 程序与共享 egress policy 模块必须在构建时 COPY 进入不可变 OpenHands Runtime 镜像，安全关键字节由镜像 digest 覆盖。Python 3.12 依赖使用独立 fully-resolved `--require-hashes` lock，镜像同时保存 lock hash 与最终 Python 安装清单。运行时只创建并挂载每次运行的 allowlist 配置卷与短期 secret 卷，禁止由 backend 动态注入 Python 执行源码。
+
+主程序使用独立且不可变的 `openhands-agent-runtime:1.43.1`（Python 3.12，`openhands-sdk==openhands-tools==openhands-agent-server==1.43.1`）。后端继续使用 Python 3.11+，正式 connector Execute 继续使用独立 `crawler-runtime`。两个 Runtime 不混装依赖。
+
+OpenHands SDK/Chromium 会话使用独立的 `discovery_agent_sandbox_memory`（默认 `1g`）作为 Agent gVisor 容器上限；正式 connector Execute 继续使用 `discovery_sandbox_memory`（默认 `512m`），两者不得因 Agent 峰值需求而合并放宽。可信 relay/proxy 仍使用宿主固定的较小基础设施上限。Agent 协议 stdout 意外 EOF 时，宿主从 Docker process/inspect 生成有界且脱敏的 `exit_code`、`oom_killed` 证据，不接受 Agent 自报退出原因。
+
+真实 LLM provider key 不进入 gVisor。每次运行由宿主生成短期随机 relay 凭证和非秘密 relay session identity；受信 egress-proxy 内的 LLM relay 才读取 provider key，并且只连接配置的精确 scheme/hostname/port 和固定 `/v1/chat/completions` 路径，使用显式不跟随 redirect 的传输，provider 3xx 一律 fail closed，绝不向其他 URL 重发 Authorization。relay 限制并发、请求总数、请求体和响应体，并从 provider response usage 记录可信累计 token；宿主按 relay sequence 增量读取，exact 通过 `(run_id, trusted provenance, relay_session_id, sequence)` 数据库唯一键原子写入 `LlmUsageEvent` 并同步增加 run usage，冲突即已确认且不会重复增加 UsageScope；同 run 的新 Agent session 使用新 identity，不与旧 sequence 冲突。unknown 也以同一唯一键写入零 token 的可信 durable audit marker 后才确认，不作估算。外部事务的提交/回滚始终由调用者所有，usage scope 每次从加锁的 run authoritative total 同步。每条成功、取消或失败终态路径都先 CAS 取得带 expiry 的 durable host claim 并持续心跳续租，再依次停止 Agent 和 relay、inspect 确认二者静止且不会产生新 usage（此时保留 relay 容器日志），提交全部 usage 与 `usage_drained` 阶段，删除资源并提交 `resources_removed`，最后才 Package 或写终态 run；watchdog/recovery 仅在 claim 过期后接管。acquire 只认空 owner 或数据库 wall clock 已过期的 lease，并生成不可复用随机 owner；renew 只认同 owner、未过期且 unfinished 的 run。PostgreSQL 使用 transaction-volatile `clock_timestamp()`，SQLite 检查使用兼容 wall-clock 表达式；lease 写入和过期比较始终来自同一数据库时钟。claim owner 同时作为 fencing token：heartbeat 失败会设置跨线程 lost 状态且终态线程等待 heartbeat 完整退出；Package 在 staging、方法写入、制品发布和终态 UPDATE 前检查，持锁时按数据库实时 wall clock 再续租，发布后再用 owner+未过期 lease 限定最终 UPDATE，旧 owner 不能 completed 或覆盖新 owner，迟到 renew 也不能在 terminal clear 后写回 claim。Package 补偿默认未确认：包括 staging 未返回句柄、committed probe、Session 创建/关闭或任一清理异常都保持 durable `finalization_pending`；只有已发布目录、staging 和 packaging DB row 的清理事务完整 commit 后才释放原 owner并安全写 failed，恢复器拒绝为补偿未确认的运行提前终态。失败、取消和 cleanup-degraded 的唯一终态事件、failed/cancelled run 与 claim 清理在同一事务提交。终态 checkpoint 暂时失败时持久化 `finalization_pending` 并由 worker/watchdog/startup recovery 幂等重试；Package pending 另存经宿主验证的相对制品路径、Manifest identity/checksum/signature/runtime、确定性评价与封装参数，checkpoint 损坏时只有重新验证这些字段和不可变 trial 后才能直接进入 Package，绝不退回 Explore。终态之后不再产生 usage side effect。checkpoint/final usage 只投影已确认的精确计量。流式末帧没有 usage 时只审计 unknown，不估算 token，也不接受 Agent 自报 usage。
+
+OpenHands 会话清理是可重试状态机：先停止或隔离 Agent，再停止或隔离 relay，但保留 relay 容器及其日志；宿主随后通过 inspect 确认二者均已停止或不存在，从而证明不会再产生新的 usage。只有达到这一静止点，宿主才读取完整 trusted relay logs，并按 sequence 原子、幂等持久化所有 exact/unknown usage；`docker logs` 非零、超时或 OSError、exact usage 数据库提交失败、unknown 审计失败都会保持未确认。获得 `fully_drained_and_acked=true` 后才能删除 Agent/relay 容器及日志，并继续独立清理网络、配置卷和 secret 卷。这个“先静止、后 drain、最后删除”的顺序为 usage 日志建立封闭快照，消除了 drain 期间仍有 in-flight provider response 追加 usage、从而造成终态漏计的竞态。只有 inspect、全量 ack 和其余资源清理都成功后，才标记 closed、移除 active 记录并恰好释放一次容量 lease。任何 kill/rm/inspect/日志读取/本地进程清理不确定性都保留 session 引用、active run 和容量。主 Loop 连续重试仍无法确认时，把不含 secret/relay token 的 job、relay session identity、agent/proxy container、network、volume 和已确认 usage sequence 同时写入 checkpoint 与 run trace fallback，持久化脱敏 `openhands_cleanup_pending`/`openhands_cleanup_degraded` 事件并保持 run 非终态。受监管后台 worker 与启动/定时 recovery watchdog 都能接管；重启恢复同样先停止 Agent、再停止 relay，inspect 确认静止并保留 relay 容器日志，随后幂等提交剩余可信 usage，最后删除资源、刷新 checkpoint 并以 cleanup-degraded failed 收敛。checkpoint 缺失/损坏时使用 run trace fallback。未确认停止期间禁止写 completed、cancelled、普通 failed 或进入 Package；线程启动失败由当前宿主同步接管或后续 watchdog 恢复。
+
+初始网络 allowlist 只包含用户入口 URL 的精确 hostname，不默认信任 `www`/非 `www` 别名。OpenHands Browser 的成功观察通过绑定当前 turn request ID 的逐事件协议，只提出结构化 URL/href/link、Markdown link target 与导航/redirect hostname 候选；失败或拒绝 observation 不提出候选。候选 stdout 不是授权事实：镜像内固定的可信 proxy policy 子命令必须独立对当前已允许 source URL 做公共地址固定解析与有界 GET，确认候选确实出现在 HTTP `Location`、HTML `href/src/action` 或结构化 JSON URL 字段后才原子热更新 allowlist。Agent 请求一个被拒绝的 hostname 本身永远不是扩权证据；无法独立复查的动态 JS network 候选在本阶段保守拒绝。
+
+自动 Repair 的初始多域 allowlist 只能来自已审核 artifact manifest；checkpoint Resume 只能从 checksum/manifest 均重新验证通过的 trial artifact 恢复。普通手工 Discovery 无论 Agent 草稿或历史事件包含什么域，都只从精确 entry hostname 启动。
 
 这不是简单 ReAct：循环边界、阶段、状态、轮次、时间预算、工具权限、确定性验收、检查点和发布门槛全部由程序控制，模型只负责需要判断与编写代码的部分。
 
@@ -49,19 +64,20 @@ Loop Engine 位于主程序中。LLM 调用、RAG 检索、状态持久化和审
 | 阶段 | 责任主体 | 职责 |
 |---|---|---|
 | Context | Loop Engine + Agent | 识别网站/微信类型，读取目标、约束和 RAG 经验 |
-| Explore | Agent | 使用 HTTP、浏览器和 Bash 探查列表、分页、详情页、字段与时间格式 |
-| Build | Agent | 生成或修改 `crawler.py`、`manifest.json`，声明允许域名和 Runtime 版本 |
+| Explore | OpenHands Agent | 在保留的 gVisor workspace 中使用 Terminal、FileEditor、Browser 探查列表、分页、详情页、字段与时间格式 |
+| Build | OpenHands Agent | 直接生成或修改 `/workspace/crawler.py`、`manifest-draft.json` |
 | Execute | Sandbox Runtime | 在 gVisor 中真实执行插件，不接受 Agent 自报的执行结果 |
 | Evaluate | 确定性校验器 | 校验 JSON 契约、数量、字段、正文、去重、URL 可访问性和分页 |
-| Repair | Agent | 只根据真实错误、工具证据和校验结果修改插件 |
+| Repair | OpenHands Agent | 在同一会话中接收宿主真实 Execute/Evaluate 反馈并修改 workspace 文件 |
 | Package | Loop Engine | 固化制品版本、校验和、依赖和审计证据，生成待审核方式 |
 | Publish | 现有审核流程 | 人工批准后启用，未批准制品不得参加正式抓取 |
 
 硬限制：
 
-- 单次 Discovery 最多 5 分钟。
-- 最多 5 轮“编写/执行/修复”。
-- 排队时间不计入 5 分钟，从获得沙箱容量后开始计时。
+- 单次 Discovery 共享执行预算最多 30 分钟。
+- Repair 次数由宿主做有界控制，模型 finish 只表示提交候选，绝不表示验收成功。
+- 沙箱容量排队时间不计入 30 分钟，从获得容量后开始/恢复计时。
+- OpenHands 保留会话全局最多占用 `total_capacity - 1` 个槽位；总容量小于 2 时启动 fail closed，确保宿主 Execute 始终保留一个非 Agent 槽位，正式/手动任务优先级不变。
 - 超限后保留最近检查点和诊断，不继续无限尝试。
 
 ## 4. RAG：仅用于探查经验复用
@@ -183,6 +199,7 @@ async def crawl(request, context) -> dict:
 - stdin：主程序传入抓取请求 JSON。
 - stdout：只能输出一份最终结果 JSON。
 - stderr：运行日志，实时转成结构化事件。
+- OpenHands callback 为每个工具开始、完成和错误输出独立 stdio frame；只包含脱敏 action 摘要、参数/结果摘要和域 proposal，不包含 thought、reasoning、原始正文或完整命令。该 stdout 永远标记 `provenance=agent_untrusted`，request ID 只用于 turn 关联而不代表真实性；宿主收到 frame 即持久化审计事件并刷新最新 checkpoint。域授权只认可信 proxy 的独立复查，token usage 只认可信 relay 对 provider response 的计量。
 - 退出码：区分成功、插件错误、超时、取消和 Runtime 错误。
 
 正式执行流程：
@@ -209,7 +226,7 @@ async def crawl(request, context) -> dict:
 
 使用本机 Docker + Google gVisor `runsc`。当前服务器没有 `/dev/kvm`，使用 `systrap` 平台；本轮不引入 Cube 或独立 KVM 节点。
 
-Discovery 与正式抓取使用同一个版本化 Runtime 镜像。每个任务创建临时容器，任务结束立即销毁，不为每个网站常驻进程。
+Discovery Agent 与正式抓取使用两个独立版本化 Runtime 镜像。一次 Discovery 保留一个临时 OpenHands gVisor workspace 到首次 Build 及全部 Repair 结束；每次正式 Execute 仍创建独立的 crawler-runtime gVisor 容器。任务结束后全部销毁，不为网站保留常驻进程。
 
 全局规则：
 
@@ -288,7 +305,7 @@ Agent 生成的代码不能以“运行未报错”作为通过条件。普通�
 正式插件连续 3 次抓取失败后：
 
 1. 自动创建并启动一次修复任务。
-2. 同样遵守 5 分钟、5 轮和沙箱限制。
+2. 同样遵守 30 分钟共享预算、宿主 Repair 上限和沙箱限制。
 3. 成功时生成新版本并进入待审核。
 4. 失败时保存诊断，停止自动重试。
 5. 任何修复版本都不得自动替换生产版本。
@@ -378,7 +395,7 @@ Agent 生成的代码不能以“运行未报错”作为通过条件。普通�
 ```text
 [准备上下文 / RAG]
           ↓
-┌──────── 第 N / 5 轮 ────────┐
+┌────── 第 N 轮（宿主有界）──────┐
 │ 探查 → 编写 → 沙箱执行 → 校验 │
 │   ↑          失败 → 修复 ───┘ │
 └───────────────────────────────┘
@@ -420,7 +437,7 @@ Agent 生成的代码不能以“运行未报错”作为通过条件。普通�
 
 | 范围 | 处理方式 |
 |---|---|
-| Website Explorer、Validator、DSL Writer、Auditor、LangGraph | 替换为 Single Agent Loop Engine |
+| 普通网站固定动作 Explorer、JSON 源码 Build、Validator、DSL Writer、Auditor、LangGraph | 固定动作路径冻结且不再被新流程调用；替换为 WebsiteLoopEngine + OpenHands SDK 单 Agent 会话 |
 | 网站/微信新 DSL 生成与解释执行 | 替换为 Python 插件 + gVisor Runtime |
 | 网站/微信旧 DSL 制品与解释逻辑 | 仅迁移回滚期临时保留，最终删除 |
 | Discovery HTTP 路径与原有返回字段 | 保留外部契约，内部实现替换 |
@@ -449,7 +466,7 @@ Agent 生成的代码不能以“运行未报错”作为通过条件。普通�
 1. 定义插件、Manifest、Runner、统一错误码和 stdout/stderr 契约。
 2. 建立 gVisor `SandboxRuntime`、固定 Runtime 镜像、网络策略和全局容量队列。
 3. 完成数据库迁移、检查点、事件流和恢复机制。
-4. 实现轻量 RAG 与 Single Agent Loop Engine，替换普通网站探查。
+4. 实现轻量 RAG 与 WebsiteLoopEngine，并以 OpenHands SDK 的保留式 gVisor 会话替换普通网站 Explore + Build + Repair。
 5. 实现共享无登录搜狗微信采集器，保留内部论坛接口。
 6. 接入现有方法审计、质量审计、待审核和版本制品管理。
 7. 将手动抓取与 `morning_crawl` 收敛到统一插件执行入口。

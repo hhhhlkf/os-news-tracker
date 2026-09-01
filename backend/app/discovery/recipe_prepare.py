@@ -23,7 +23,13 @@ _RELATIVE_RANGE_TO_DELTA = {
 }
 
 
-def apply_fetch_limits(items: list[dict], request: ManualNewsRunRequest | None) -> list[dict]:
+def apply_fetch_limits(
+    items: list[dict],
+    request: ManualNewsRunRequest | None,
+    *,
+    time_semantics: str = "publication",
+    host_observed_at: str | None = None,
+) -> list[dict]:
     """按手动抓取请求的时间窗口与条数上限过滤并裁剪结果。
 
     功能：当 request 为空时原样返回；否则按相对（24h/7d/30d）或绝对时间窗过滤掉过期条目，按时间倒序后取前 target_count 条。
@@ -36,6 +42,25 @@ def apply_fetch_limits(items: list[dict], request: ManualNewsRunRequest | None) 
     """
     if request is None:
         return items
+
+    if time_semantics == "snapshot":
+        observed_at = parse_published_at(host_observed_at)
+        if observed_at is None:
+            raise ValueError("snapshot fetch filtering requires a host-attested observation time")
+        if request.time_mode == "relative":
+            lower_bound = datetime.now(timezone.utc) - _RELATIVE_RANGE_TO_DELTA[request.relative_range]
+            if observed_at < lower_bound:
+                return []
+        else:
+            start_at = _as_utc(request.start_at)
+            end_at = _as_utc(request.end_at)
+            if observed_at < start_at or observed_at > end_at:
+                return []
+        # Ranking order is the source's semantics.  Do not invent a per-item
+        # publication order from the shared snapshot observation time.
+        return items[: request.target_count]
+    if time_semantics != "publication":
+        raise ValueError("unsupported connector time semantics")
 
     now = datetime.now(timezone.utc)
     filtered: list[tuple[datetime, dict]] = []
