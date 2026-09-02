@@ -6,18 +6,20 @@ A group-based OS news intelligence platform that collects technical news from mu
 
 **Two data streams:**
 
-1. **News stream** — RSS + page monitoring + keyword search + AI agent crawl → LLM structured summary (category, sub-tags, entities, summary)
+1. **News stream** — RSS + page monitoring + keyword search + Discovery connectors → LLM structured summary (category, sub-tags, entities, summary)
 2. **Structured facts stream** — Security advisories/CVE, lifecycle/EOL, image releases → parsed directly into DB, no LLM (adapters planned, not yet implemented)
 
 **Pipeline:** `fetch → normalize → [relevance-filter] → dedup → enrich → store`
 
-**V2 additions (in progress):**
+**Active platform capabilities:**
 - User system (JWT auth, subscriber/system_admin roles)
 - Group subscription (group_admin manages sources; subscribers share crawl results)
-- Agent crawl engine (Handoff Chain: PlanAgent → CrawlDAG → QualityWorkerPool → SummaryWorkerPool)
+- Discovery is being migrated to a Single Agent Loop that produces reviewed versioned connectors; the legacy LangGraph/DSL implementation remains migration-only.
 - Personalized scoring (user-defined Scoring Criteria JSONB → fast keyword score + optional LLM precision)
 - Digest / trend analysis (DigestAgent multi-step chain → hotspots + emerging topics)
-- Real-time log panel (SSE + ring buffer, all backend processes)
+- Real-time discovery logs are being migrated from polling/ring-buffer state to persisted authenticated SSE events.
+
+`backend/app/agent/` and `backend/app/fetchers/agent_crawl.py` are deprecated and frozen. They are not an active Discovery path and must not be reused.
 
 ## Tech Stack
 
@@ -203,6 +205,34 @@ npx vitest run
 # Type-check + build
 npm run build
 ```
+
+## Deployment Environments
+
+Never run a bare `docker compose` command. Use `docker compose -f docker-compose.dev.yml ...` for development and `docker compose -p <release-project> -f docker-compose.production.yml ...` for formal releases.
+
+### Development
+
+- Worktree: `/data/workspace/os-news-tracker-dev`.
+- Compose services: PostgreSQL 16 (`db`), reload-enabled FastAPI (`backend`), and Vite (`frontend`). Backend maps host `8000`; frontend maps host `5174` to container `5173`.
+- Application source is bind-mounted. All schedulers are forced to `0`; development runs must not process scheduled work.
+- This Compose project declares external volume `os-news-tracker_pgdata`. Environment identity is determined by project + working directory, not a guessed volume name.
+
+After changing backend `.env` settings, recreate the backend; after changing frontend build/runtime settings, recreate the frontend:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --force-recreate backend
+docker compose -f docker-compose.dev.yml up -d --force-recreate frontend
+```
+
+### Formal release
+
+- The currently running formal stack is launched from `/data/workspace/os-news-tracker` with a release-specific project name and exposes only Nginx on host port `80`; `backend-prod` has no host port.
+- Production is image-based and has no source hot reload. It joins external network `os-news-tracker_default` and currently resolves database host `db` there. Its live database is therefore managed separately from the development stack.
+- Production shares approved connector artifacts, Nginx configuration, and WeChat/attestation/checkpoint volumes. Do not remove or replace these as part of an application release.
+- Commit and push first; build only from a clean exact-commit worktree. Always set absolute `PRODUCTION_WORKTREE`; the Compose default is a historical fallback, not the release selector.
+- Confirm Discovery/manual fetch idle before handover. Stop but retain the old pair, start and health-check the new pair, then retain only the new running pair and immediately previous stopped pair.
+
+The authoritative commands and rollback/data-safety details are in `docs/deployment/deployment-runbook.md`.
 
 ## Development Workflow
 

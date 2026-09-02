@@ -1,18 +1,20 @@
 # OS News Tracker
 
-OS News Tracker 是面向操作系统、Linux 发行版、开源基础设施和相关 AI 工具链的技术新闻情报平台。系统从 RSS、页面列表、JSON API、搜索结果、微信公众号、站点发现 DSL 和 Agent Crawl 等来源采集候选内容，经标准化、去重、LLM 富化后入库，并在前端提供新闻流、站点发现、邮件任务中心和系统晨抓能力。
+OS News Tracker 是面向操作系统、Linux 发行版、开源基础设施和相关 AI 工具链的技术新闻情报平台。系统从 RSS、页面监控、搜索和经审核的 Discovery connector 等来源采集候选内容，经标准化、去重、LLM 富化后入库，并提供群组订阅、个性化评分、站点发现、邮件和摘要能力。
 
 当前项目已经从早期的单一新闻抓取工具演进为一个多模块系统。本文档以当前代码为准，覆盖技术细节、文件组织、系统功能和部署方式。
+
+开发环境与正式环境的部署、配置重载、发布、回滚和数据安全边界，请直接查看 [部署运行手册](docs/deployment/deployment-runbook.md)。
 
 ## 当前能力边界
 
 - 新闻流：浏览、搜索、分面筛选、时间筛选、详情查看、推荐理由生成。
-- 站点发现：输入站点或多源入口，生成可复用的 CrawlMethod DSL，支持待审核、质量审计、手动运行、取消和日志查看。
-- 爬取方式库：管理 discovery methods，按统一抓取限制执行，并把结果送入标准新闻流水线。
+- 站点发现：普通网站和微信公众号正在从旧 LangGraph/DSL 迁移到单进程 Single Agent Loop；普通网站产出一个版本化 Python connector，微信公众号使用共享匿名 Sogou connector 和按账号配置。新 connector 必须审核后才可正式运行。
+- Connector 执行：正式执行通过临时 Docker + gVisor (`runsc`) 沙箱，输出 `{items, stats}` 后进入标准新闻流水线。正式执行不调用 Agent、RAG 或 LLM。
 - 邮件任务中心：基于当前筛选生成 HTML 预览、立即发送、保存模板、创建定时邮件任务，支持 TOF4 API 和 SMTP。
 - 系统晨抓：按配置定时批量运行 active discovery methods，并记录每个方法的执行结果。
 - 管理权限：前端使用单密码登录解锁管理功能，后端对敏感接口做权限校验。
-- Agent Crawl：`backend/app/agent/` 和 `backend/app/fetchers/agent_crawl.py` 仍保留，但按项目约定视为冻结模块，非明确需求不修改。
+- Agent Crawl：`backend/app/agent/` 和 `backend/app/fetchers/agent_crawl.py` 已废弃并冻结，不是当前 Discovery 产品路径，禁止复用。
 
 已删除的旧功能：独立“新闻处理控制”模块和 `/news-run*` 手动新闻运行接口已经移除。运行日志统一使用 `/run-logs`。
 
@@ -24,7 +26,7 @@ OS News Tracker 是面向操作系统、Linux 发行版、开源基础设施和�
 | 数据契约 | Pydantic v2, pydantic-settings |
 | 抓取与解析 | feedparser, httpx, Scrapling, Playwright |
 | LLM | OpenAI-compatible chat completions client |
-| 智能发现 | LangGraph, langchain-core, langchain-openai |
+| 智能发现 | Single Agent Loop + versioned connectors；旧 LangGraph/DSL 仅作迁移兼容 |
 | 前端 | React 19, Vite 8, TypeScript 6, TanStack Query, react-router-dom |
 | 邮件 | TOF4 HTTP API, SMTP |
 | 测试 | pytest, pytest-asyncio, respx, vitest |
@@ -52,32 +54,22 @@ Source/Fetcher
 - `backend/app/processing/`：标准化、去重、相关性过滤、LLM 富化、推荐理由。
 - `backend/app/repository.py`：幂等写入与关联表维护。
 
-### 站点发现与 CrawlMethod 流程
+### 站点发现与 Connector 流程
 
 ```text
-用户输入站点/多源入口
-  -> discovery graph / multi graph
-  -> 生成 DSL recipe
-  -> auditor 审计
+用户输入站点或公众号
+  -> Context → Explore → Build
+  -> gVisor 证据执行 → deterministic Evaluate/Repair
   -> pending review
-  -> 审核通过后进入 CrawlMethod 库
-  -> 手动运行或晨抓运行
-  -> discovery runner
-  -> 标准新闻流水线入库
+  -> 审核通过后发布 connector
+  -> 手动运行或晨抓运行（gVisor）
+  -> CrawlOutputIngester → 标准新闻流水线入库
 ```
 
 核心模块：
 
-- `backend/app/discovery/graph.py`：单站点发现图。
-- `backend/app/discovery/multi_graph.py`：多源发现入口。
-- `backend/app/discovery/dsl.py`：受限 DSL 结构与校验。
-- `backend/app/discovery/interpreter.py`：DSL 解释执行。
-- `backend/app/discovery/multi_dsl.py`、`multi_interpreter.py`：多源 DSL 支持。
-- `backend/app/discovery/runner.py`：运行已入库 CrawlMethod 并接入标准 pipeline。
-- `backend/app/discovery/recipe_prepare.py`：抓取限制、微信跳过键、微信补抓 action 准备。
-- `backend/app/discovery/wechat_tools.py`：微信公众号搜索/历史/正文补抓。
-- `backend/app/discovery/review.py`：待审核方式审批、删除、邮件提醒。
-- `backend/app/discovery/quality_audit.py`：信息质量、信息密度、综合评分与等级。
+- `backend/app/discovery/`：Discovery 控制器、connector 生命周期、审核、运行和 Pipeline handoff。旧 `website_workflow.py`、`graph.py` 等属于迁移中的遗留实现，不应扩展。
+- Approved target architecture: [`docs/superpowers/plans/2026-08-19-discovery-local-plugin-refactor.md`](docs/superpowers/plans/2026-08-19-discovery-local-plugin-refactor.md)。
 
 ## 主要系统功能
 
@@ -393,17 +385,17 @@ SYSTEM_ACCESS_PASSWORD=admin
 | `ENABLE_TREND_SCHEDULER` | `0` | 趋势评估定时调度。 |
 | `TRENDS_EMBEDDING_WORKER_BASE_URL` | 空 | 趋势 embedding worker 地址；Compose 内一般为 `http://embedding-worker:8100`。 |
 
-开发 Compose（`docker-compose.dev.yml`）默认：
+开发 Compose（`docker-compose.dev.yml`）强制：
 
 - `ENABLE_SCHEDULER=0`
-- `ENABLE_MAIL_SCHEDULER=1`
-- `ENABLE_MORNING_CRAWL_SCHEDULER=1`
-- `ENABLE_TREND_SCHEDULER=1`
+- `ENABLE_MAIL_SCHEDULER=0`
+- `ENABLE_MORNING_CRAWL_SCHEDULER=0`
+- `ENABLE_TREND_SCHEDULER=0`
 - `RUN_STARTUP_BACKFILL=0`
 
-正式 Compose（`docker-compose.production.yml`）默认：
+正式 Compose（`docker-compose.production.yml`）强制：
 
-- `ENABLE_SCHEDULER` 未强制写入，沿用 `entry.py` 默认 `1`
+- `ENABLE_SCHEDULER=1`
 - `ENABLE_MAIL_SCHEDULER=1`
 - `ENABLE_MORNING_CRAWL_SCHEDULER=1`
 - `ENABLE_TREND_SCHEDULER=1`
@@ -427,7 +419,7 @@ docker compose -p "$PRODUCTION_COMPOSE_PROJECT" -f docker-compose.production.yml
 
 ### 开发部署
 
-开发环境使用 `docker-compose.dev.yml`，其数据卷为 `pgdata_dev`（默认 Compose 项目名下通常显示为 `os-news-tracker_pgdata_dev`）。源码会挂载进容器，适用于本地开发和调试：
+开发环境使用 `docker-compose.dev.yml`。目前 `/data/workspace/os-news-tracker-dev` 的 Compose project 是 `os-news-tracker-dev`，声明的外部数据库卷为 `os-news-tracker_pgdata`；不要把它与其他 checkout 或 Compose project 的卷混为一谈。源码会挂载进容器，适用于本地开发和调试：
 
 - backend：`uvicorn app.entry:app --reload`，端口 `8000`。
 - frontend：容器内 `vite --host 0.0.0.0 --port 5173`，宿主机端口 `5174`。
@@ -459,21 +451,28 @@ docker compose -f docker-compose.dev.yml logs -f backend
 docker compose -f docker-compose.dev.yml down
 ```
 
-不要在需要保留数据时使用 `down -v`；它会删除 `pgdata_dev`，包括全部开发数据。
+不要在需要保留数据时使用 `down -v`；虽然外部数据库卷不会由 Compose 删除，其他命名卷仍可能被删除。数据库卷和 connector/attestation/checkpoint 数据都不应靠 `down -v` 管理。
 
 ### 正式环境部署
 
-正式环境仅使用 `docker-compose.production.yml`：它运行不可变的 `backend-prod` 和 `frontend-prod`，不挂载源码、不开启热重载，也不会创建数据库。当前正式服务与开发服务共用开发数据库卷 `os-news-tracker_pgdata_dev`；因此禁止以“开发库导入正式库”的方式复制数据。
+正式环境仅使用 `docker-compose.production.yml`，并从生产操作 checkout `/data/workspace/os-news-tracker` 执行。它运行镜像化的 `backend-prod` 和 `frontend-prod`，不开启应用源码热重载，也不会创建数据库；当前正式后端通过外部网络 `os-news-tracker_default` 访问其中的 `db` 服务，前端仅暴露主机 `80` 端口。
+
+生产容器仍会挂载 connector 制品目录、Nginx 配置、WeChat 浏览器数据、attestation key 和 checkpoint volume。这些是受控运行数据，发布时必须保留。不要根据名称猜测开发/正式数据库是否相同；先核对 Compose project、`DATABASE_URL` 的主机和真实容器挂载。
 
 先设置当前发布栈的 Compose 项目名，再执行显式命令：
 
 ```bash
-export PRODUCTION_COMPOSE_PROJECT=os-news-tracker-prod-9bcf24a
-docker compose -p "$PRODUCTION_COMPOSE_PROJECT" -f docker-compose.production.yml up -d --build
-docker compose -p "$PRODUCTION_COMPOSE_PROJECT" -f docker-compose.production.yml ps
+git fetch --all --prune
+release_sha="$(git rev-parse --verify '<commit>^{commit}')"
+release_short="${release_sha:0:7}"
+release_tree="$(pwd)/.worktrees/release-${release_short}"
+git worktree add --detach "$release_tree" "$release_sha"
+export PRODUCTION_WORKTREE="$release_tree"
+export PRODUCTION_COMPOSE_PROJECT="os-news-tracker-prod-${release_short}"
+docker compose -p "$PRODUCTION_COMPOSE_PROJECT" -f docker-compose.production.yml build
 ```
 
-正式发布必须从干净的发布 worktree 构建；详细发布顺序以 `AGENTS.md` 的“Production Release”为准。不要运行未指定 `-f` 的 `docker compose` 命令。
+上面的代码块只构建镜像，不能启动或覆盖仍在运行的正式 pair。先确认 Discovery/手动抓取空闲，停止但保留旧 pair，再执行 `up -d` 启动新 pair 并完成首页与 API 健康检查；成功后只保留新运行 pair 和紧邻的旧停止 pair。`docker-compose.production.yml` 中的默认 `production-b4b067c` 是历史 fallback，不能用作当前发布版本选择。完整步骤见 [`docs/deployment/deployment-runbook.md`](docs/deployment/deployment-runbook.md)。不要运行未指定 `-f` 的 `docker compose` 命令。
 
 ### 本地非 Docker 开发
 
